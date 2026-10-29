@@ -275,11 +275,10 @@ export function install(rt) {
   }
 
   // The backend's own entry points leave Bot Sessions alone, earlier parts and group
-  // records included: automatic pressure and overflow compaction do nothing, and
-  // /compact and explicit ranges are refused. Only DS Bot condenses a Bot Session,
-  // when the steward says so, and then the summary is DS Bot's checkpoint. Each preset
-  // mount has its own compaction backend. Every other Session, subagents included, is
-  // as it was.
+  // records included: automatic pressure and overflow compaction do nothing, and an
+  // explicit range is refused. /compact is the user's request to make room now, so it
+  // runs the same checkpoint condensation the steward uses. Each preset mount has its
+  // own compaction backend. Every other Session, subagents included, is as it was.
   const adoptedEngines = new Set()
   // Sessions DS Bot itself is condensing right now.
   const condensing = new Set()
@@ -313,8 +312,19 @@ export function install(rt) {
       return original.compactIfNeeded.call(this, target, trigger, signal)
     }
     engine.compactNow = function compactNowOutsideBots(target, signal, commandId) {
-      if (ownedByBot(target)) return refuseCompaction()
-      return original.compactNow.call(this, target, signal, commandId)
+      if (!ownedByBot(target)) return original.compactNow.call(this, target, signal, commandId)
+      // Mark the Session first so the checkpoint summarizer runs, and so this call
+      // does not refuse itself. The user's signal and command stay attached.
+      const sessionId = target.session.id
+      condensing.add(sessionId)
+      let pending
+      try {
+        pending = original.compactNow.call(this, target, signal, commandId)
+      } catch (error) {
+        condensing.delete(sessionId)
+        throw error
+      }
+      return Promise.resolve(pending).finally(() => { condensing.delete(sessionId) })
     }
     engine.compactRegion = function compactRegionOutsideBots(start, end, target, signal) {
       if (ownedByBot(target)) return refuseCompaction()

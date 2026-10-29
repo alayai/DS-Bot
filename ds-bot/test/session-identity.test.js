@@ -44,7 +44,7 @@ async function drain(stream) {
 function start() {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-session-identity-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
-  const bench = { tokens: 0, compacted: 0, respond: () => '', requests: [] }
+  const bench = { tokens: 0, compacted: 0, manual: [], respond: () => '', requests: [] }
   const compaction = {
     summarize() {},
     async compactIfNeeded() {
@@ -52,7 +52,10 @@ function start() {
       bench.tokens = 100
       return {}
     },
-    async compactNow() {},
+    async compactNow(target, _signal, commandId) {
+      bench.manual.push({ id: target.session.id, commandId })
+      return { ok: true }
+    },
     async compactRegion() {},
   }
   const ctx = fakeContext({ services: { compaction, tokenMeter: { measure: () => ({ totalTokens: bench.tokens }) } } })
@@ -123,6 +126,24 @@ for (const sessionId of ['b2', 'g3']) {
     assert.deepEqual(bench.requests.map(request => [request.sessionId, request.purpose]), [[sessionId, 'compaction']])
   })
 }
+
+test('an explicit /compact on a Bot session condenses it instead of refusing', async (t) => {
+  const { ctx, rt, bench, stop } = start()
+  t.after(stop)
+  await rt.load()
+  const signal = new AbortController().signal
+  const bot = { id: 'b2', session: { id: 'b2' } }
+  ctx.emit('agent/created', { agent: bot })
+  const result = await ctx.get('compaction').compactNow(bot, signal, 'cmd-1')
+  await assert.rejects(ctx.get('compaction').compactRegion(1, 2, bot, signal), /makes room on its own/)
+  const plain = { id: 'plain', session: { id: 'plain' } }
+  await ctx.get('compaction').compactNow(plain, signal, 'cmd-2')
+  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(bench.manual, [
+    { id: 'b2', commandId: 'cmd-1' },
+    { id: 'plain', commandId: 'cmd-2' },
+  ])
+})
 
 test('an image in a Bot chat is read for that chat, and the chat gets the reading', async (t) => {
   const { ctx, bench, stop } = start()
