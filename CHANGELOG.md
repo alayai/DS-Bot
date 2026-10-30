@@ -4,6 +4,12 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-29
+
+### Fixed
+
+- `/compact` in a Bot conversation condenses that conversation with the same checkpoint the steward uses, instead of being refused.
+
 ## [0.2.3] - 2026-10-27
 
 ### Added

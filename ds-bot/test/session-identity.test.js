@@ -61,6 +61,11 @@ function start() {
   const ctx = fakeContext({ services: { compaction, tokenMeter: { measure: () => ({ totalTokens: bench.tokens }) } } })
   async function* route(options) {
     bench.requests.push(options)
+    const failure = typeof bench.failure === 'function' ? bench.failure(options) : bench.failure
+    if (failure) {
+      yield { type: 'finish', reason: { kind: 'error', failure } }
+      return
+    }
     if (options.sessionId === undefined) {
       yield { type: 'finish', reason: { kind: 'error', failure: { message: MISSING } } }
       return
@@ -143,6 +148,56 @@ test('an explicit /compact on a Bot session condenses it instead of refusing', a
     { id: 'b2', commandId: 'cmd-1' },
     { id: 'plain', commandId: 'cmd-2' },
   ])
+})
+
+test('a checkpoint retries a gateway 503 and then keeps the summary', async (t) => {
+  const { ctx, rt, bench, stop } = start()
+  t.after(stop)
+  await rt.load()
+  let left = 2
+  bench.failure = () => {
+    if (left === 0) return undefined
+    left -= 1
+    return { message: '<html><head><title>503 Service Temporarily Unavailable</title></head><body><center>nginx/1.28.3</center></body></html>' }
+  }
+  bench.respond = () => '尺寸已改完，下一步关联文档。'
+  const agent = {
+    id: 'b2',
+    session: {
+      id: 'b2',
+      seq: 2,
+      requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4', maxTokens: 128000 } }),
+      deriveMessages: () => [],
+      toolHistory: () => [],
+    },
+  }
+  ctx.emit('agent/created', { agent })
+  const result = await ctx.get('compaction').summarize({ messages: [{ role: 'user', content: [{ type: 'text', text: '继续' }] }] }, agent, new AbortController().signal)
+  assert.equal(bench.requests.length, 3)
+  assert.match(result.summary[0].text, /\[Checkpoint 1\][\s\S]*尺寸已改完/)
+})
+
+test('a checkpoint does not retry a request the provider rejected', async (t) => {
+  const { ctx, rt, bench, stop } = start()
+  t.after(stop)
+  await rt.load()
+  bench.failure = { code: 'INVALID_REQUEST', message: 'bad request' }
+  const agent = {
+    id: 'b2',
+    session: {
+      id: 'b2',
+      seq: 2,
+      requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4', maxTokens: 128000 } }),
+      deriveMessages: () => [],
+      toolHistory: () => [],
+    },
+  }
+  ctx.emit('agent/created', { agent })
+  await assert.rejects(
+    ctx.get('compaction').summarize({ messages: [{ role: 'user', content: [{ type: 'text', text: '继续' }] }] }, agent, new AbortController().signal),
+    /bad request/,
+  )
+  assert.equal(bench.requests.length, 1)
 })
 
 test('an image in a Bot chat is read for that chat, and the chat gets the reading', async (t) => {

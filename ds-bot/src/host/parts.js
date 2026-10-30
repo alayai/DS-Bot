@@ -530,6 +530,31 @@ export function install(rt) {
     return { kept: kept.reverse(), more }
   }
 
+  // A gateway 502/503/504 is the same transient failure a normal turn retries. The
+  // checkpoint goes through llm.stream directly, so it does not get that retry.
+  const CHECKPOINT_ATTEMPTS = 5
+  const TRANSIENT_CHECKPOINT = /\b50[234]\b|temporarily unavailable|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network/i
+  const transientCheckpoint = failure => !failure.aborted && (
+    ['SERVER', 'TIMEOUT', 'TRANSPORT', 'RATE_LIMIT'].includes(failure.code)
+    || [502, 503, 504].includes(failure.status)
+    || TRANSIENT_CHECKPOINT.test(failure.message ?? '')
+  )
+  const wait = (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error('aborted'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason ?? new Error('aborted'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+
   // DS Bot's summary for a Bot Session, in place of the backend's. Like the backend's
   // own, it is one request on the conversation's own prefix, so the provider serves
   // that from cache.
@@ -543,8 +568,7 @@ export function install(rt) {
     const head = input.messages
     const tail = checkpointTail(head, session.deriveMessages())
     const prompt = tail.length === 0 ? CHECKPOINT_PROMPT : `${CHECKPOINT_PROMPT}\n\n${checkpointTailNote(tail)}`
-    const assembler = new BlockAssembler()
-    for await (const chunk of ctx.llm.stream({
+    const request = {
       provider: route.provider,
       model: route.model,
       ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
@@ -555,9 +579,37 @@ export function install(rt) {
       sessionId: session.id,
       purpose: 'compaction',
       signal,
-    })) assembler.push(chunk)
+    }
+    let assembler
+    for (let attempt = 1; attempt <= CHECKPOINT_ATTEMPTS; attempt += 1) {
+      assembler = new BlockAssembler()
+      let thrown
+      try {
+        for await (const chunk of ctx.llm.stream(request)) assembler.push(chunk)
+      } catch (error) {
+        thrown = error
+      }
+      const finish = assembler.finish
+      if (thrown === undefined && finish.kind !== 'error' && finish.kind !== 'aborted') break
+      const failure = thrown === undefined
+        ? {
+          message: finish.failure?.message ?? finish.kind,
+          code: finish.failure?.code,
+          status: finish.failure?.status,
+          aborted: finish.kind === 'aborted' || signal?.aborted === true,
+        }
+        : {
+          message: thrown instanceof Error ? thrown.message : String(thrown),
+          code: thrown?.code,
+          status: thrown?.status,
+          aborted: signal?.aborted === true,
+        }
+      if (failure.aborted) throw (thrown ?? new Error(failure.message))
+      if (!transientCheckpoint(failure) || attempt === CHECKPOINT_ATTEMPTS) throw (thrown ?? new Error(failure.message))
+      rt.warn('ds-bot: checkpoint attempt %d of %d for %s failed; retrying: %s', attempt, CHECKPOINT_ATTEMPTS, session.id, failure.message.replace(/\s+/g, ' ').slice(0, 180))
+      await wait(500 * 2 ** (attempt - 1), signal)
+    }
     const finish = assembler.finish
-    if (finish.kind === 'error' || finish.kind === 'aborted') throw new Error(finish.failure?.message ?? finish.kind)
     if (finish.kind === 'max-tokens') throw new Error('the checkpoint was cut off at the output limit')
     const rawOutput = assembler.blocks()
     const summary = rawOutput.filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
