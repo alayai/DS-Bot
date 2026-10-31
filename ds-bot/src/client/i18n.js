@@ -5,6 +5,13 @@
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  "Container engine": "容器引擎",
+  "Podman (experimental)": "Podman（实验性）",
+  "Preparing the Podman machine": "正在准备 Podman 虚机",
+  "Podman is ready on the DSH host.": "DSH 所在机器的 Podman 已就绪。",
+  "Podman installation guide": "Podman 安装指南",
+  "Install Podman, then prepare its machine. If Windows requests a restart, reopen DSH and retry. The desktop engine runs on the DSH host.": "安装 Podman 后准备其虚机。如果 Windows 要求重启，请重新打开 DSH 并重试。桌面引擎运行在 DSH 所在机器上。",
+  "Prepare Podman machine and desktop": "准备 Podman 虚机和桌面",
   "Checking the desktop environment": "正在检查桌面运行环境",
   "Preparing the desktop image": "正在准备桌面镜像",
   "Verifying the desktop image": "正在验证桌面镜像",

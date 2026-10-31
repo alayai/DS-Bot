@@ -8,21 +8,37 @@ Tested with dsh `0.2.1-rc.4` (Web) and `0.2.0-rc.2` (Web and Desktop).
 
 ## Experimental private desktop (CUA)
 
-Installing or enabling the plugin does **not** enable the Computer runtime.
-In CUA builds, open a Bot's details or settings and choose **Private desktop**.
-If the runtime is disabled, this opens setup guidance instead of a live desktop.
-The plugin-management page's enable switch controls the plugin, not CUA.
+CUA builds include the Broker and a **Prepare and start** flow in each Bot's
+**Private desktop** panel. On Windows x64, install and start Docker Desktop with
+Linux containers; on Linux x64, start a local Docker Engine. Setup checks the
+engine, downloads/builds the pinned image, saves its connection, creates the
+Bot's desktop and waits for a real screenshot. No source checkout, separate
+Linux Node, Broker path or image ID is needed for this flow.
 
-The development runtime requires a prepared Linux desktop image and an external
-Broker. Windows uses WSL2, Docker Linux containers and Linux Node.js 22+.
-Enable `computer.enabled` and configure `computer.broker` in the DSH profile,
-then restart DSH. Preserve the other Bot settings when applying a profile patch.
-The plugin npm package does not include the Docker image or the external Broker.
-See `computer-runtime/README.md` in the source checkout for the complete setup.
+Preparation runs on the **DSH host**, including when you open DSH Web remotely.
+You can close the panel and return to its progress, cancel preparation, or retry
+an interrupted task. Downloaded layers are reusable. System prerequisites such
+as virtualization, Docker installation and a Windows restart remain guided
+manual steps. **Podman (experimental)** can be selected before first preparation.
+On Windows, its separate **Prepare Podman machine and desktop** button creates or
+starts a dedicated rootful `ds-bot` machine; install Podman first. Linux Podman
+requires a local rootful socket service and cgroup v2. The selected engine is locked
+after preparation starts, so existing desktops cannot silently move between stores.
+Real Podman acceptance and automatic system installation remain unfinished.
 
-`start-cua.ps1` launches the source desktop app with isolated test data and an
-explicit CUA configuration. It does not change an already running DSH install.
-Desktops currently run offline; other Bot tools retain their existing permissions.
+The plugin can use a released OCI image only when its package lock includes an
+approved immutable digest. The current lock has none and continues to build the
+fixed recipe locally. The candidate release workflow does not publish by default.
+
+Installing the plugin alone does not start or download anything. An explicit
+`computer.enabled: false` in the DSH profile disables preparation. Existing
+explicit Broker/WSL configurations continue to work and are never migrated to
+a different engine automatically. Desktops initially allow observation only;
+select **Observe and operate** to enable Bot input and optionally choose YOLO.
+Running desktops are offline; other Bot tools retain their existing permissions.
+
+`start-cua.ps1` remains available for the separate source-app WSL test setup.
+See the included `computer-runtime/README.md` for configuration and limitations.
 
 ## Features
 

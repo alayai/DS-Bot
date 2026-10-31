@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
 
 export class McpClient {
-  constructor(command, args) {
-    this.child = spawn(command, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+  constructor(command, args, options = {}) {
+    this.child = spawn(command, args, { ...options, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
     this.pending = new Map()
     this.sequence = 0
     let buffer = ''

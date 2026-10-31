@@ -6,18 +6,26 @@ import { createBrokerProvider } from './computer/providers/broker.js'
 import { createComputerSetup } from './computer/setup.js'
 
 export function install(rt) {
-  let computer, provider
+  let computer
   const activate = broker => {
     if (computer) return
     // Test providers are in-process injections, never serialized settings.
-    provider = rt.config.computerProvider ?? createBrokerProvider(broker)
+    const provider = rt.config.computerProvider ?? createBrokerProvider(broker)
     computer = createComputerService(rt, provider)
     rt.computer = computer
+    installTools(rt, provider, computer)
   }
   const setup = createComputerSetup(rt, activate, rt.config.computerSetupOptions)
   rt.computerSetup = setup
+  rt.ctx.effect(() => {
+    void setup.restore().catch(() => {})
+    return async () => { await setup.dispose(); await computer?.dispose() }
+  }, 'ds-bot: computers')
   if (rt.config.computer?.enabled === true) activate(rt.config.computer.broker)
-  const maxActions = provider?.maxActions ?? 1
+}
+
+function installTools(rt, provider, computer) {
+  const maxActions = provider.maxActions ?? 8
   const names = new Set(TOOL_NAMES)
   const actionParameters = {
     observationId: { type: 'string', required: true, description: 'The observation returned in this Session.' },
@@ -26,7 +34,7 @@ export function install(rt) {
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: provider?.actions ?? ['click', 'text', 'key', 'scroll'], required: true },
+          type: { type: 'string', enum: provider.actions ?? ['click', 'text', 'key', 'scroll'], required: true },
           x: { type: 'integer' }, y: { type: 'integer' },
           button: { type: 'string', enum: ['left', 'right', 'middle'] },
           text: { type: 'string', description: 'Between one and 4000 characters.' },
@@ -63,7 +71,6 @@ export function install(rt) {
   const installed = new WeakSet()
   async function scope(agent) {
     await rt.load()
-    await setup.restore().catch(() => {})
     if (!computer || !agent || installed.has(agent) || !rt.isBotSession(agent.session?.id ?? agent.id)) return
     if (typeof agent.ctx?.tools?.register !== 'function') throw refused('scope-unavailable', 'DSH scoped tools are unavailable.')
     for (const definition of definitions) agent.ctx.tools.register(definition)
@@ -94,6 +101,6 @@ export function install(rt) {
   rt.ctx.effect(() => {
     const timer = setInterval(() => { void computer?.reapIdle().catch(() => rt.warn('ds-bot: idle desktop shutdown failed')) }, 30_000)
     timer.unref?.()
-    return async () => { clearInterval(timer); await setup.dispose(); await computer?.dispose() }
-  }, 'ds-bot: computers')
+    return () => clearInterval(timer)
+  }, 'ds-bot: computer idle')
 }

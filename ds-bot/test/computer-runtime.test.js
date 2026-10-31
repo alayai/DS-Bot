@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bundleRuntime, verifyBundle, checkRuntime, inventoryImage } from '../../computer-runtime/runtime.mjs'
+import { bundleRuntime, verifyBundle, checkRuntime, inventoryImage, publishedImage, runtimeText } from '../../computer-runtime/runtime.mjs'
+import { verifyComputerRuntime } from '../src/host/computer/runtime-bundle.js'
 
 test('standalone runtime bundle verifies its inventory and refuses overwrites or modified payloads', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'cua-bundle-'))
@@ -11,9 +12,11 @@ test('standalone runtime bundle verifies its inventory and refuses overwrites or
   const output = join(dir, 'runtime')
   await bundleRuntime(output)
   assert.equal((await verifyBundle(output)).verified, true)
+  assert.ok(verifyComputerRuntime(output).entrypoint.endsWith('broker/main.mjs'))
   await assert.rejects(bundleRuntime(output), { code: 'EEXIST' })
   await writeFile(join(output, 'broker/files.py'), 'tampered')
   await assert.rejects(verifyBundle(output), /integrity/)
+  assert.throws(() => verifyComputerRuntime(output), /integrity/)
   const manifest = JSON.parse(await readFile(join(output, 'manifest.json')))
   manifest.files['../escape'] = 'a'.repeat(64)
   await writeFile(join(output, 'manifest.json'), JSON.stringify(manifest))
@@ -70,4 +73,22 @@ test('guest inventory uses an offline bounded container and cleans it after malf
   assert.ok(run.includes('--read-only'))
   assert.ok(!run.includes('--mount'))
   assert.deepEqual(calls.at(-1), ['rm', '-f', run[run.indexOf('--name') + 1]])
+})
+
+
+test('published desktop images require immutable registry digests and retain local-build fallback', () => {
+  assert.equal(publishedImage({}), null)
+  const reference = `ghcr.io/owner/project/cua-desktop@sha256:${'a'.repeat(64)}`
+  assert.equal(publishedImage({ publishedImage: reference }), reference)
+  for (const published of ['ghcr.io/owner/image:latest', 'https://remote/image', 'docker.io/owner/image@sha256:' + 'a'.repeat(64), '', null]) {
+    assert.throws(() => publishedImage({ publishedImage: published }), /digest-pinned/)
+  }
+})
+
+
+test('runtime payload text and recipe keys are independent of Windows checkout line endings', () => {
+  const linux = Buffer.from('FROM pinned@sha256:fixture\nUSER 1000:1000\n')
+  const windows = Buffer.from('FROM pinned@sha256:fixture\r\nUSER 1000:1000\r\n')
+  assert.deepEqual(runtimeText(windows), linux)
+  assert.deepEqual(runtimeText(linux), linux)
 })

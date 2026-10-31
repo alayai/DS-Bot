@@ -42,6 +42,13 @@ module.exports = __toCommonJS(index_exports);
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Container engine": "容器引擎",
+  "Podman (experimental)": "Podman（实验性）",
+  "Preparing the Podman machine": "正在准备 Podman 虚机",
+  "Podman is ready on the DSH host.": "DSH 所在机器的 Podman 已就绪。",
+  "Podman installation guide": "Podman 安装指南",
+  "Install Podman, then prepare its machine. If Windows requests a restart, reopen DSH and retry. The desktop engine runs on the DSH host.": "安装 Podman 后准备其虚机。如果 Windows 要求重启，请重新打开 DSH 并重试。桌面引擎运行在 DSH 所在机器上。",
+  "Prepare Podman machine and desktop": "准备 Podman 虚机和桌面",
   "Checking the desktop environment": "正在检查桌面运行环境",
   "Preparing the desktop image": "正在准备桌面镜像",
   "Verifying the desktop image": "正在验证桌面镜像",
@@ -17817,6 +17824,7 @@ var KEYS = ["Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDo
 var PHASE = { ready: "Running", stopped: "Stopped", starting: "Starting", error: "Needs recovery", unavailable: "Unavailable" };
 var SETUP_PHASE = {
   checking: "Checking the desktop environment",
+  "preparing-runtime": "Preparing the Podman machine",
   "preparing-image": "Preparing the desktop image",
   "verifying-image": "Verifying the desktop image",
   configuring: "Saving desktop settings",
@@ -17833,14 +17841,15 @@ function ComputerSetup({ bot, actions, leaving } = {}) {
   const [error, setError] = (0, import_react48.useState)("");
   const [busy, setBusy] = (0, import_react48.useState)(false);
   const [showDesktop, setShowDesktop] = (0, import_react48.useState)(false);
+  const [engineKind, setEngineKind] = (0, import_react48.useState)(null);
   const session = (0, import_react48.useRef)({ mounted: false, pending: false });
-  const ready = state?.enabled && state?.job?.phase === "ready" && !state?.busy;
+  const ready = Boolean(state?.enabled && state?.job?.phase === "ready" && !state?.busy);
   async function request(method, args = {}) {
     if (!actions || leaving || session.current.pending) return;
     session.current.pending = true;
     if (method !== "setup-state") setBusy(true);
     try {
-      const value = await actions.computerCall(method, { botId: bot.id, ...args });
+      const value = await actions.computerCall(method, { botId: bot.id, ...engineKind ? { engineKind } : {}, ...args });
       if (session.current.mounted) {
         setState(value);
         setError("");
@@ -17865,7 +17874,7 @@ function ComputerSetup({ bot, actions, leaving } = {}) {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [bot?.id, leaving, ready, showDesktop]);
+  }, [bot?.id, leaving, ready, showDesktop, engineKind]);
   if (showDesktop || ready) return (0, import_react48.createElement)(ComputerView, { bot, actions, leaving });
   const job = state?.job;
   const preparing = busy || state?.busy;
@@ -17876,18 +17885,26 @@ function ComputerSetup({ bot, actions, leaving } = {}) {
     (0, import_react48.createElement)("div", { className: "bt-computer-head" }, (0, import_react48.createElement)("strong", null, t("Private desktop")), (0, import_react48.createElement)("span", { className: "bt-chip" }, t("Not configured"))),
     (0, import_react48.createElement)("p", null, t("Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.")),
     (0, import_react48.createElement)("p", { className: "bt-muted" }, t("Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop has no internet access.")),
+    (0, import_react48.createElement)("label", null, t("Container engine"), " ", (0, import_react48.createElement)("select", {
+      value: state?.engine ?? engineKind ?? state?.environment?.engine ?? "docker",
+      disabled: preparing || blocked || Boolean(state?.engine) || leaving,
+      onChange: (event) => {
+        setEngineKind(event.target.value);
+        setState(null);
+      }
+    }, (0, import_react48.createElement)("option", { value: "docker" }, "Docker"), (0, import_react48.createElement)("option", { value: "podman" }, t("Podman (experimental)")))),
     blocked ? (0, import_react48.createElement)("p", { className: "bt-error" }, t(state.disabled ? "Private desktops are disabled by the DSH profile." : "This profile already has an explicit desktop runtime. Use its desktop controls.")) : null,
     !state ? (0, import_react48.createElement)("p", { role: "status", className: "bt-muted" }, t("Checking the desktop environment")) : null,
     state?.environment ? (0, import_react48.createElement)(
       "p",
       { className: state.environment.ready ? "bt-muted" : "bt-error" },
-      t(state.environment.ready ? "Docker is ready on the DSH host." : state.environment.error)
+      t(state.environment.ready ? state.environment.engine === "podman" ? "Podman is ready on the DSH host." : "Docker is ready on the DSH host." : state.environment.error)
     ) : null,
     state?.environment?.ready === false ? (0, import_react48.createElement)(
       "div",
       { className: "bt-computer-help" },
-      (0, import_react48.createElement)("a", { href: "https://docs.docker.com/desktop/setup/install/", target: "_blank", rel: "noreferrer" }, t("Docker installation guide")),
-      (0, import_react48.createElement)("p", null, t("Install and start Docker with Linux containers, then check again. If Windows requests a restart, reopen DSH afterward."))
+      (0, import_react48.createElement)("a", { href: state.environment.engine === "podman" ? "https://podman-desktop.io/docs/installation" : "https://docs.docker.com/desktop/setup/install/", target: "_blank", rel: "noreferrer" }, t(state.environment.engine === "podman" ? "Podman installation guide" : "Docker installation guide")),
+      (0, import_react48.createElement)("p", null, t(state.environment.engine === "podman" ? "Install Podman, then prepare its machine. If Windows requests a restart, reopen DSH and retry. The desktop engine runs on the DSH host." : "Install and start Docker with Linux containers, then check again. If Windows requests a restart, reopen DSH afterward."))
     ) : null,
     job ? (0, import_react48.createElement)("p", { role: "status", "aria-live": "polite" }, t(SETUP_PHASE[job.phase] ?? "Checking the desktop environment")) : null,
     job?.error ? (0, import_react48.createElement)("p", { className: "bt-error" }, t(job.error)) : null,
@@ -17895,6 +17912,12 @@ function ComputerSetup({ bot, actions, leaving } = {}) {
     (0, import_react48.createElement)(
       "div",
       { className: "bt-computer-actions" },
+      state?.canPrepareRuntime && state.environment?.ready === false && !blocked ? (0, import_react48.createElement)("button", {
+        type: "button",
+        className: "bt-soft",
+        disabled: preparing || leaving,
+        onClick: () => request("setup-prepare", { prepareRuntime: true, engineKind: "podman" })
+      }, t("Prepare Podman machine and desktop")) : null,
       (0, import_react48.createElement)("button", {
         type: "button",
         className: "bt-soft",
@@ -21012,6 +21035,9 @@ function apply(ctx) {
     noteMemoryNews(value.memoryNews ?? {});
     const current = roster.getSnapshot();
     const live2 = {};
+    for (const key of ["computer", "computerPreparing"]) {
+      if (typeof value[key] === "boolean" && value[key] !== current[key]) live2[key] = value[key];
+    }
     if (value.computerHandoffs !== void 0 && JSON.stringify(value.computerHandoffs) !== JSON.stringify(current.computerHandoffs ?? [])) live2.computerHandoffs = value.computerHandoffs;
     if (value.connectors !== void 0 && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live2.connectors = value.connectors;
     if (value.capabilityStatuses !== void 0 && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live2.capabilityStatuses = value.capabilityStatuses;

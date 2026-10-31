@@ -1071,3 +1071,22 @@ Windows 优先 Podman；不要求另配 Linux Node 来运行桥接。DS Bot 当�
 内的运行时交付、原生容器连接与可恢复准备流程，而不只是独立 app 启动脚本。
 
 此项是调查和待开发方案，不增加已实现功能的完成比例。
+
+### 24.12 插件内准备流程与原生 Windows Docker
+
+按 §24.11 的方案，已接入插件内“准备并启动”、Broker payload 交付、
+固定引擎发现、镜像构建、持久进度、取消/重试和真实截图就绪检查。
+Windows 可由原生 Node/Electron 连接本地 Docker named pipe，不再强制另配
+Linux Node 和 Broker Linux 路径。已有 WSL 配置继续保留。
+
+详细实现与尚未完成的 Podman/系统安装/OCI 发行项见
+[首次准备方案 §8](2026-10-31-cua-one-click-setup.md#8-开发记录插件内准备与-windows-原生-docker)。
+此项不等于完成全部 CUA 计划；Windows GUI 仍由用户验收。
+
+
+### 24.13 Podman adapter 与固定镜像候选发行
+
+已实现显式 Podman 选择、Windows 专用 machine 准备、连接/存储身份固定及 Broker
+所有 helper 适配，并补充固定 digest 镜像消费与手动候选发行 workflow。
+Podman 实机、实际镜像发行和系统安装验收尚未完成，不计为全部计划完成。
+参见 [2026-11-01 开发记录](2026-11-01-cua-podman-and-image-release.md)。

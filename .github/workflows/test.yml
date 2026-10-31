@@ -38,6 +38,7 @@ jobs:
         run: npm run harness -- --no-save "@deepseek-ai/dsh@${{ matrix.dsh }}"
       - run: npm test
       - run: node scripts/build-client.mjs --check
+      - run: node scripts/build-computer-runtime.mjs --check
       - run: npm run lint
 
   scan:

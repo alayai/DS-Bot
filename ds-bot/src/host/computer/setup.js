@@ -5,17 +5,17 @@ import { replaceFile } from '../files.js'
 import { refused, checkId } from './contract.js'
 import { loadSetupRuntime } from './setup-runtime.js'
 
-const ACTIVE = new Set(['checking', 'preparing-image', 'verifying-image', 'configuring', 'starting-desktop', 'checking-desktop', 'cancelling'])
+const ACTIVE = new Set(['checking', 'preparing-runtime', 'preparing-image', 'verifying-image', 'configuring', 'starting-desktop', 'checking-desktop', 'cancelling'])
 const PHASES = new Set([...ACTIVE, 'ready', 'failed', 'cancelled', 'interrupted'])
 const safeLog = text => String(text).replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/[\x00-\x08\x0b-\x1f]/g, '')
   .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[redacted]@')
   .replace(/((?:token|password|authorization|api[_-]?key)\s*[:=]\s*)\S+/gi, '$1[redacted]').slice(-16000)
 
-export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, now = Date.now } = {}) {
+export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, now = Date.now, platform = process.platform } = {}) {
   const directory = join(rt.home, 'computers')
   const file = join(directory, 'setup.json')
   let data = { version: 1 }
-  let loaded, loadingRuntime, restoring, operation, starting, disposed = false, fault, environment, inspectedAt = 0
+  let loaded, loadingRuntime, restoring, operation, starting, disposed = false, stopping = false, fault, environment, inspectedAt = 0
   let writing = Promise.resolve()
   const payload = () => loadingRuntime ??= runtime().catch(error => { loadingRuntime = undefined; throw error })
   const explicit = () => rt.config.computer?.enabled === true
@@ -36,7 +36,9 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       const value = JSON.parse(text)
       if (value?.version !== 1 || (value.config && (!/^sha256:[a-f0-9]{64}$/.test(value.config.image ?? '')
         || !/^[a-f0-9]{64}$/.test(value.config.recipe ?? '')))
-        || (value.job && (!PHASES.has(value.job.phase) || typeof value.job.id !== 'string' || typeof value.job.botId !== 'string'))) {
+        || (value.job && (!PHASES.has(value.job.phase) || typeof value.job.id !== 'string' || typeof value.job.botId !== 'string'
+          || (value.job.engineKind !== undefined && !['docker', 'podman'].includes(value.job.engineKind))
+          || (value.job.prepareRuntime !== undefined && typeof value.job.prepareRuntime !== 'boolean')))) {
         throw refused('setup-storage', 'Desktop setup metadata is invalid; it has not been overwritten.')
       }
       if (value.config) (await payload()).validate(value.config.engine)
@@ -66,11 +68,12 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     return next
   }
   async function restore() {
-    if (disabled() || explicit() || disposed) return
+    if (disabled() || explicit() || disposed || stopping) return
     await load()
     if (!data.config || rt.readOnly() !== undefined) return
     restoring ??= (async () => {
       const tools = await payload()
+      writable()
       await activate(tools.broker(data.config.engine, data.config.image))
     })().catch(error => { restoring = undefined; throw error })
     await restoring
@@ -78,20 +81,31 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
   function view() {
     return {
       enabled: Boolean(rt.computer), disabled: disabled(), explicit: explicit(), busy: Boolean(starting || operation),
-      configured: Boolean(data.config), engine: data.config?.engine.kind ?? null,
+      configured: Boolean(data.config), engine: data.config?.engine.kind ?? data.selection?.kind ?? null,
       job: data.job ? { ...data.job, log: safeLog(data.job.log ?? '') } : null,
     }
   }
-  async function state({ check = false } = {}) {
+  function selectedKind(kind) {
+    const saved = data.config?.engine ?? data.selection
+    const chosen = kind ?? saved?.kind ?? data.job?.engineKind ?? 'docker'
+    if (!['docker', 'podman'].includes(chosen) || (saved && chosen !== saved.kind)) {
+      throw refused('engine-conflict', 'Keep the original desktop engine; engine migration is not available.')
+    }
+    return chosen
+  }
+  async function state({ check = false, engineKind } = {}) {
     await load()
-    if (!disabled() && !explicit() && !operation && (check || !environment || now() - inspectedAt > 15000)) {
+    const kind = selectedKind(engineKind)
+    if (!disabled() && !explicit() && !operation && (check || !environment || environment.engine !== kind || now() - inspectedAt > 15000)) {
       try {
-        const engine = await (await payload()).discover(data.config?.engine ?? data.selection)
+        const engine = await (await payload()).discover(data.config?.engine ?? data.selection, kind)
         environment = { ready: true, engine: engine.kind }
-      } catch (error) { environment = { ready: false, error: safeLog(error.message).slice(0, 500) } }
+      } catch (error) { environment = { ready: false, engine: kind, code: error.code, error: safeLog(error.message).slice(0, 500) } }
       inspectedAt = now()
     }
-    return { ...view(), environment }
+    const selected = data.config?.engine ?? data.selection
+    return { ...view(), environment, canPrepareRuntime: platform === 'win32' && kind === 'podman'
+      && (!selected || selected.machine?.name === 'ds-bot') }
   }
   async function update(phase, error) {
     data.job = { ...data.job, phase, updatedAt: now(), ...(error ? { error } : { error: null }) }
@@ -101,7 +115,13 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     let service, record, startingDesktop = false
     try {
       const tools = await payload()
-      const engine = await tools.discover(data.config?.engine ?? data.selection)
+      if (data.job.prepareRuntime) {
+        await update('preparing-runtime')
+        await tools.startRuntime(data.config?.engine ?? data.selection, {
+          signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) },
+        })
+      }
+      const engine = await tools.discover(data.config?.engine ?? data.selection, data.job.engineKind)
       signal.throwIfAborted()
       data.selection = engine
       await save()
@@ -124,7 +144,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       await tools.image(engine, image)
       signal.throwIfAborted()
       writable()
-      data.config = { engine, image, recipe: tools.recipe }
+      data.config = { engine, image, recipe: data.config?.recipe ?? tools.recipe }
       await update('configuring')
       await restore()
       service = rt.computer
@@ -144,17 +164,23 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       await update('ready')
       await rt.save?.()
     } catch (error) {
+      let message = error.message ?? 'Desktop preparation failed.'
       if (signal.aborted && startingDesktop && record && service) {
         try { await service.manage('stop', { botId, expectedGeneration: record.generation }) }
-        catch { error = new Error('Preparation was cancelled, but stopping the new desktop could not be confirmed. Review its state before retrying.') }
+        catch { message = 'Preparation was cancelled, but stopping the new desktop could not be confirmed. Review its state before retrying.' }
       }
-      await update(signal.aborted ? 'cancelled' : 'failed', safeLog(error.message ?? 'Desktop preparation failed.').slice(0, 500))
+      await update(signal.aborted ? 'cancelled' : 'failed', safeLog(message).slice(0, 500))
     }
   }
-  async function prepare({ botId, jobId } = {}) {
+  async function prepare({ botId, jobId, engineKind, prepareRuntime } = {}) {
     await load()
     writable()
+    if (stopping) throw refused('unavailable', 'Desktop setup is stopping.')
     if (explicit()) throw refused('configured', 'This profile already has an explicit desktop runtime. Use its desktop controls.')
+    const kind = selectedKind(engineKind)
+    prepareRuntime ??= jobId && jobId === data.job?.id ? data.job.prepareRuntime ?? false : false
+    if (typeof prepareRuntime !== 'boolean') throw refused('invalid', 'Choose whether to prepare the Podman machine.')
+    if (prepareRuntime && (kind !== 'podman' || platform !== 'win32')) throw refused('unsupported', 'Runtime preparation is available for Podman on Windows.')
     checkId(botId)
     if (!rt.botOf(botId)) throw refused('owner-denied', 'Unknown Bot.')
     if (operation || starting) {
@@ -172,8 +198,9 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
         catch (error) { if (error.code !== 'ENOENT') throw error }
         if (Object.keys(registry?.computers ?? {}).length) throw refused('configured', 'Existing desktops require their original runtime configuration. Restore it before using setup.')
       }
-      data.job = { id: randomUUID(), botId, phase: 'checking', updatedAt: now(), log: '' }
+      data.job = { id: randomUUID(), botId, engineKind: kind, prepareRuntime: Boolean(prepareRuntime), phase: 'checking', updatedAt: now(), log: '' }
       await save()
+      if (stopping) return view()
       const controller = new AbortController()
       const entry = { controller }
       operation = entry
@@ -196,6 +223,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     return view()
   }
   async function dispose() {
+    stopping = true
     operation?.controller.abort(new Error('DSH is stopping. Retry desktop preparation after restarting.'))
     await operation?.done
     await writing

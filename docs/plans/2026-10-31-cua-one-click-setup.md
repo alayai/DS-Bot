@@ -1,6 +1,6 @@
 # CUA 首次准备与一键启动：OpenMausBot 源码调查
 
-日期：2026-10-31。状态：**调查完成，下面的 DS Bot 改造是待开发方案，不是已实现功能。**
+日期：2026-10-31。状态：**调查完成；A–C 功能已实现，Windows 首次无缓存与 GUI 验收未完成；D–E 尚未完成。具体证据见 §8。**
 
 ## 1. 结论
 
@@ -346,3 +346,57 @@ WSL2 如果由 Podman machine 或所选 runtime 管理，就不再要求用户�
 - 原生 Windows 与实际安装包是否验收。
 
 本轮只新增调查与改造方案，没有新增一键启动功能，没有替用户更改已装插件或运行环境。
+
+## 8. 开发记录：插件内准备与 Windows 原生 Docker
+
+用户批准方案后，在同一分支实现以下改动；本节取代前面的“本轮只新增调查”状态。
+
+- 插件 npm files 包含生成的 `computer-runtime/`，build/prepack 从共同源码准备
+  19 个文件和 manifest。新增 `build-computer-runtime.mjs --check` 检查内容与源文件一致。
+- 插件先用自身可信 verifier 检查完整 payload，再导入 runtime；app 打包时将插件
+  payload 放到 asar 外，CLI 可以读取真实构建目录。
+- `computer/setup.js` 提供持久 setup job、每两秒保存的有界日志、重复请求合并、
+  task ID 限定取消、失败重试和 Host 重启后的 interrupted 状态。
+- `computer-setup-state/prepare/retry/cancel` 接入现有用户管理通道，不注册为模型工具。
+- 配置缺省时提供准备流程；显式 false 禁用，显式 Broker 配置优先。
+  既有 registry 没有 setup 配置时拒绝猜测原引擎，保留原 WSL 路径。
+- `engine.mjs` 检查本地 Docker、Linux x64 guest、Windows named pipe/Unix socket，
+  保存 engine ID 和 endpoint；更换 daemon 后拒绝静默重建。首次 build 前就保存选择。
+- Broker 原生运行于 Windows Node/Electron，MCP、checkpoint、文件 helper 统一使用
+  已选 Docker executable。WSL transport 继续兼容。
+- 准备流程使用固定 recipe 构建，自动取得 image ID，创建 observe-only 桌面并等待
+  真实 preview。用户可随后开启 operate 和 YOLO。guest 仍断网。
+- 前端状态独立于 roster revision 更新；准备阶段不提前跳走丢失日志，面板关闭不取消
+  后台任务。初次准备有 Docker 安装入口和系统重启提示。
+
+新增 `ds-bot/dev/computer-setup-smoke.mjs`，在隔离目录测试插件 payload 的发现、
+首次镜像准备、真实截图、文件往返、checkpoint 和停止/再启动；只清理本次生成的
+Computer 身份及卷。测试不使用用户 DSH 数据。
+
+**尚未完成：**Podman adapter/machine 管理、应用内安装系统 runtime、自动系统重启恢复、
+预构建 OCI 镜像发行、签名安装器和 Windows GUI 人工验收。Docker 首次构建仍依赖
+镜像 registry 和 Python 包索引网络；无可信字节总量时只显示日志和阶段。
+
+最终测试结果、Windows 原生链路与通用 Web smoke 的限制记录在
+`computer-runtime/VALIDATION.md`，不以单测数量代替 Windows 用户验收。
+
+本轮最终验证：插件单测 1394 通过、2 跳过；build、生成文件校验和 lint 通过
+（lint 有警告）；原生 Windows 缓存镜像链路、实际构建取消以及解包后的插件链路通过。
+通用 Web smoke 51 通过、1 项首次模型选择出现 `fetch failed`，仍作为未解决例外保留。
+首次无缓存构建在下载阶段超出测试预算，不能据此宣称 C 批次验收完成。
+本地测试包为 `artifacts/ds-bot-0.2.5-cua.2.tgz`，没有发布或替换用户已装插件。
+
+
+## 9. 2026-11-01：Podman adapter 与镜像候选发行
+
+D 批次已增加实验性 Podman adapter、显式引擎选择、专用 machine 准备、固定连接与
+存储身份，以及所有 Broker/helper 路径的适配。由于本机没有 Podman，真实生命周期
+验收尚未完成，不能把 D 标为已验收。
+
+E 批次已增加手动候选镜像构建/验证/发布 workflow，插件支持 lock 中固定 digest
+的发行镜像；当前没有发布镜像，也没有填写虚构 digest。自动系统安装、签名发行、
+干净 Windows 首次无缓存及 GUI 验收仍待完成。准备任务支持在重启后由用户重试，
+保留原先明确选择的 Podman machine 准备步骤，不在应用启动时重放系统修改。
+
+细节见 [Podman 与镜像交付](2026-11-01-cua-podman-and-image-release.md)，最终测试
+与仍未解决的 Web 连接问题见 `computer-runtime/VALIDATION.md`。

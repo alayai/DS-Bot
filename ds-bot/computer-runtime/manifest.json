@@ -2,24 +2,25 @@
   "version": 1,
   "algorithm": "sha256",
   "files": {
-    "runtime.mjs": "6358c43c19155e004f9f614144bdcc0069b300575bbf2221b818bf36be8736f4",
+    "runtime.mjs": "8a45e3e82b4b5560a0e8fb21d937ee3e6b1563ab7a4e13f7f98e2359df93cb08",
     "runtime.lock.json": "deb294eed269f3bd5c5589a571c2c087480bae12dbfe3ce42fc0526111802218",
-    "engine.mjs": "5b7dc0fcdd72a22af9ee7d117b1b494304710ab8094e00613f44fe22692e6afd",
-    "README.md": "8f336259f3aded32e26d6a101e2926ed69135621b221872857b41bd600984753",
+    "engine.mjs": "3f7008959e7928f33adb006dcd37b09f24a20b4e35f98e26ae63035d893e5a99",
+    "podman.mjs": "4b14297313f646225aefdf5a31b534ef12cb44115470af9851fcae7a71a4a77e",
+    "README.md": "e75f84831eb4babc139101eb7e7b1feb361caddd4cba36f7f05f4f21103d1405",
     "TOOL_POLICY.md": "49530ee226b22f0da1fc46633ab82895d9b7dc2de66fb75128842e7a926cf0f1",
-    "broker/main.mjs": "c0019187d5ea5a4d63da3ae66861c5d22af67a762ae53e06388ef5a80e6b00cd",
+    "broker/main.mjs": "d22831396b4ec5ef2f23ab9df3b6e792f55ca89ed3997573ececfe70981399df",
     "broker/boundary.mjs": "9b3d06fef5b3daeff09abb7b897ade37f79f3bf94eeb676a050912abef5d6e27",
-    "broker/checkpoint.mjs": "73b20ba7aed046c40c7217b0c49a741b0ede2ab0e840eb6c6abf8bfc6d1e7ec0",
+    "broker/checkpoint.mjs": "b5c4d40e4ac68e6961deb2005befe2d729cd734e47c575d6351bc0808126f0d0",
     "broker/checkpoint.py": "68c4ad48d1ef49034ffe4657a63e466daae76d5d9c5b05e3db15a6a80d1607d5",
     "broker/files.py": "45462a540e51e8b74cbd15583f706717c8d59aab2fe470dbee41edca8e6bc3b9",
     "broker/input.mjs": "1cd1b05cb60c08b2f7eca279068337fa2645910e4ad9a9c8979491054e31b561",
-    "broker/mcp.mjs": "97011c585e1683ca510bbb387724c0a471013f0f572e26be29071b81051b6b9f",
+    "broker/mcp.mjs": "4a7b36a3fea9c5786734aff80cd1f19be8532edda4515519c0e21af146d46d5b",
     "desktop/Dockerfile": "8258df63f23877d85194bf7dd61dd9a343a2b8a451e99293b2214057f9d1d202",
     "desktop/requirements.txt": "98dabbec2a80b416bd5f6b14b480fdc04c23002404be736694b7ffd04669ad99",
     "desktop/launch.py": "8ae13363115d47f62733fcb56b5316b6a20ee02f938f9675a046a4a44075bc27",
     "desktop/inventory.py": "cb48e222a8d3847b86048a912c616493be1e84b33124da63a06c78fb1be2d7b6",
     "licenses/cua-MIT.txt": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
-    "LICENSE": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6",
-    "NOTICE": "72dad096b6490cf2033fbe51b4b6c1b7c515c925d996126d6674461ee8f354e0"
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "NOTICE": "b489be5459b128398b7216c64c02b2dfd62d50d2137d364f0eaeca6a506d53d9"
   }
 }

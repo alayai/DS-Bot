@@ -6,7 +6,7 @@ import { McpClient } from './mcp.mjs'
 import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
-import { discoverEngine, validateEngine } from '../engine.mjs'
+import { discoverEngine, validateEngine, runEngine, engineCommand, engineEnvironment } from '../engine.mjs'
 
 const run = promisify(execFile)
 const engine = process.env.DS_BOT_COMPUTER_ENGINE ? validateEngine(JSON.parse(process.env.DS_BOT_COMPUTER_ENGINE)) : null
@@ -27,7 +27,10 @@ const targets = new Map()
 const requests = new Map()
 const socket = '/tmp/dsbot-runtime/cua.sock'
 const docker = async (args, signal) => {
-  try { return await run(executable, args, { signal, windowsHide: true, timeout: 30_000, maxBuffer: 12 * 1024 * 1024 }) }
+  try {
+    if (engine) return await runEngine(engine, args, { signal, maxBuffer: 12 * 1024 * 1024 })
+    return await run(executable, args, { signal, windowsHide: true, timeout: 30_000, maxBuffer: 12 * 1024 * 1024 })
+  }
   catch (error) { error.operation = args[0]; throw error }
 }
 const fail = message => { throw Object.assign(new Error(message), { public: true }) }
@@ -36,7 +39,7 @@ async function localRuntime() {
   runtimeChecked ??= (async () => {
     if (engine) {
       await discoverEngine(engine)
-      process.env.DOCKER_HOST = engine.endpoint
+      if (engine.kind === 'docker') process.env.DOCKER_HOST = engine.endpoint
       delete process.env.DOCKER_CONTEXT
       return
     }
@@ -95,7 +98,7 @@ async function client(value, signal, key = 'client', session = value.modelSessio
   if (value[key] && !value[key].closed) return value[key]
   const info = await inspect(value, signal)
   if (!info?.State.Running) fail('Start the desktop before using it.')
-  const next = new McpClient(executable, ['exec', '-i', '--user', '1000:1000', value.name, 'cua-driver', 'mcp', '--socket', socket])
+  const next = new McpClient(executable, engineCommand(engine, ['exec', '-i', '--user', '1000:1000', value.name, 'cua-driver', 'mcp', '--socket', socket]), engine ? { env: engineEnvironment(engine) } : {})
   try {
     await next.initialize(signal)
     await next.call('start_session', { session }, signal)
@@ -272,7 +275,7 @@ async function dispatch(method, record, options, signal) {
       try { await start(candidate, signal); await preview(candidate, signal) }
       finally { await retireCandidate(value, options, undefined, candidate) }
       await cleanup(value, { ...options, kind: 'home', staged: true }, docker, signal)
-      await checkpoint('restore', value, options, { docker, image, signal, executable, destinationImage: options.targetImage })
+      await checkpoint('restore', value, options, { docker, image, signal, executable, engine, destinationImage: options.targetImage })
       try { await start(candidate, signal); await preview(candidate, signal) }
       finally { await retireCandidate(value, options, undefined, candidate) }
       if (info) await docker(['rm', value.name], signal)
@@ -292,7 +295,7 @@ async function dispatch(method, record, options, signal) {
     if (['checkpoint', 'restore', 'recreate'].includes(method)) {
       const info = await inspect(value, signal)
       if (info?.State.Running) fail('Stop the desktop before changing its storage.')
-      const result = method === 'recreate' ? null : await checkpoint(method, value, options, { docker, image, signal, executable })
+      const result = method === 'recreate' ? null : await checkpoint(method, value, options, { docker, image, signal, executable, engine })
       // The old home survives removal. Restore publishes a verified new home only in the host journal.
       if (method !== 'checkpoint' && info) await docker(['rm', value.name], signal)
       return result
@@ -302,8 +305,8 @@ async function dispatch(method, record, options, signal) {
       if (!info?.State.Running) fail('Start the desktop before transferring files.')
       const helper = await readFile(new URL('./files.py', import.meta.url), 'utf8')
       const result = await new Promise((resolve, reject) => {
-        const child = execFile(executable, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', helper],
-          { signal, windowsHide: true, timeout: 15_000, maxBuffer: 512 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout))
+        const child = execFile(executable, engineCommand(engine, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', helper]),
+          { signal, ...(engine ? { env: engineEnvironment(engine) } : {}), windowsHide: true, timeout: 15_000, maxBuffer: 512 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout))
         child.stdin.on('error', () => {})
         child.stdin.end(JSON.stringify({ operation: options.operation, name: options.name, data: options.data }))
       })

@@ -1,23 +1,37 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertLocalEndpoint } from './broker/boundary.mjs'
+import { validatePodman } from './podman.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const run = promisify(execFile)
 const docker = args => run('docker', args, { timeout: 30_000, maxBuffer: 1024 * 1024 })
 const payload = [
-  'runtime.mjs', 'runtime.lock.json', 'engine.mjs', 'README.md', 'TOOL_POLICY.md',
+  'runtime.mjs', 'runtime.lock.json', 'engine.mjs', 'podman.mjs', 'README.md', 'TOOL_POLICY.md',
   'broker/main.mjs', 'broker/boundary.mjs', 'broker/checkpoint.mjs', 'broker/checkpoint.py',
   'broker/files.py', 'broker/input.mjs', 'broker/mcp.mjs',
   'desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py',
   'desktop/inventory.py', 'licenses/cua-MIT.txt',
 ]
+// The closed inventory is UTF-8 text. Git's Windows checkout conversion must
+// not change the published payload hashes or the recipe cache key.
+export const runtimeText = bytes => Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'), 'utf8')
+
+export function publishedImage(lock) {
+  if (lock.publishedImage === undefined) return null
+  if (typeof lock.publishedImage !== 'string'
+    || !/^ghcr\.io\/[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9/._-]*@sha256:[a-f0-9]{64}$/.test(lock.publishedImage)) {
+    throw new Error('The published desktop image must be a digest-pinned GHCR reference.')
+  }
+  return lock.publishedImage
+}
 export async function validateLock() {
   const lock = JSON.parse(await readFile(join(root, 'runtime.lock.json'), 'utf8'))
+  publishedImage(lock)
   const recipe = (await readFile(join(root, 'desktop/Dockerfile'), 'utf8')).replace(/\r\n/g, '\n')
   const requirements = await readFile(join(root, 'desktop/requirements.txt'), 'utf8')
   if (lock.platform !== 'linux/amd64' || lock.protocolVersion !== 1
@@ -34,7 +48,8 @@ export async function checkRuntime(image, execute = docker, environment = { plat
   if (image && !/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error('Use an immutable local image ID (sha256:64 hex characters).')
   const endpoint = environment.endpoint ?? (await execute(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'])).stdout.trim()
   // Environment overrides take precedence over the selected Docker context.
-  assertLocalEndpoint(endpoint, environment.platform)
+  if (environment.engine?.kind === 'podman') validatePodman(environment.engine, environment.platform)
+  else assertLocalEndpoint(endpoint, environment.platform)
   if (!environment.endpoint && process.env.DOCKER_HOST) assertLocalEndpoint(process.env.DOCKER_HOST, environment.platform)
   const info = JSON.parse((await execute(['info', '--format', '{{json .}}'])).stdout)
   if (info.OSType !== 'linux' || !['x86_64', 'amd64'].includes(info.Architecture)) throw new Error('A local Linux x64 Docker Engine is required.')
@@ -61,7 +76,7 @@ export async function bundleRuntime(destination) {
       }
       const target = join(output, name)
       await mkdir(dirname(target), { recursive: true })
-      await copyFile(source, target)
+      await writeFile(target, runtimeText(await readFile(source)))
       files[name] = createHash('sha256').update(await readFile(target)).digest('hex')
     }
     await writeFile(join(output, 'manifest.json'), `${JSON.stringify({ version: 1, algorithm: 'sha256', files }, null, 2)}\n`)

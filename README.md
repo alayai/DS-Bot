@@ -17,14 +17,14 @@ DS Bot is a bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/dee
 
 ## Install
 
-**Experimental Computer runtime (source checkout):** the optional Linux CUA
+**Experimental Computer runtime (CUA branch):** the optional Linux CUA
 container backend now includes a private desktop panel, human takeover,
 Bot input with per-action approval or optional YOLO mode, chat file attachments,
 help requests that resume the originating chat, stopped-desktop checkpoints/recovery,
 paired image/home upgrades and rollback, storage diagnostics, and explicit backup/history cleanup. Windows source builds can use the WSL bridge
 via `start-cua.ps1`. Builds from this branch also bundle the Broker payload and
 verify it before use; existing homes stay pinned until an explicit verified migration.
-The runtime is disabled by default and runs offline; the Private desktop entry shows setup guidance until it is configured. See the [development setup and limitations](computer-runtime/README.md).
+The plugin now includes the Broker and a **Prepare and start** flow. With local Docker running on Windows x64 or Linux x64, it prepares the image and saves the connection without requiring Broker paths or a separate Linux Node. Preparation is opt-in, starts with observe-only access, and desktops run offline. Existing WSL configurations remain supported. An experimental Podman selector and explicit Windows machine preparation are also available; existing engine choices stay pinned. Podman runtime acceptance, automatic system installation, actual OCI image publication and Windows GUI acceptance remain separate work. See the [setup and limitations](computer-runtime/README.md).
 
 **Desktop app (Windows, macOS, Linux)**
 

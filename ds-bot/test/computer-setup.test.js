@@ -19,7 +19,7 @@ const until = async read => {
   for (let i = 0; i < 1000; i++) { if (await read()) return; await delay(5) }
   assert.fail('The setup task did not settle')
 }
-async function fixture(t, config = {}) {
+async function fixture(t, config = {}, options = {}) {
   const home = await mkdtemp(join(tmpdir(), 'dsbot-setup-'))
   let readOnly
   const calls = []
@@ -47,7 +47,7 @@ async function fixture(t, config = {}) {
     calls.push(['activate', broker])
     rt.computer ??= createComputerService(rt, fake)
   }
-  const setup = createComputerSetup(rt, activate, { runtime: async () => runtime })
+  const setup = createComputerSetup(rt, activate, { runtime: async () => runtime, ...options })
   t.after(async () => { await setup.dispose(); await rt.computer?.dispose(); await rm(home, { recursive: true, force: true }) })
   return {
     setup, rt, calls, runtime, activate, home,
@@ -194,4 +194,77 @@ test('the shipped plugin resolves and validates its own runtime without an app l
   const payload = await loadSetupRuntime()
   assert.match(payload.recipe, /^[a-f0-9]{64}$/)
   assert.ok(payload.broker(engine, image).entrypoint.endsWith('computer-runtime/broker/main.mjs'))
+})
+
+
+test('engine choice is saved before building and cannot silently move existing desktop data', async t => {
+  const h = await fixture(t)
+  const selected = { ...engine, kind: 'podman' }
+  h.runtime.validate = value => assert.equal(value.kind, 'podman')
+  h.runtime.discover = async (saved, kind) => {
+    assert.equal(kind, 'podman')
+    if (saved) assert.deepEqual(saved, selected)
+    return selected
+  }
+  await h.setup.prepare({ botId: 'a', engineKind: 'podman' })
+  await h.settled()
+  assert.equal((await h.setup.state()).engine, 'podman')
+  const saved = JSON.parse(await readFile(join(h.home, 'computers/setup.json')))
+  assert.equal(saved.job.engineKind, 'podman')
+  assert.equal(saved.config.engine.kind, 'podman')
+  await assert.rejects(h.setup.prepare({ botId: 'a', engineKind: 'docker' }), /original desktop engine/)
+  await assert.rejects(h.setup.state({ engineKind: 'docker' }), /original desktop engine/)
+})
+
+test('Windows machine preparation requires an explicit user operation and survives as an interrupted task', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  let started = false
+  h.runtime.startRuntime = async (_engine, { signal }) => {
+    started = true
+    await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  }
+  await h.setup.state({ engineKind: 'podman' })
+  assert.equal(started, false)
+  await h.setup.prepare({ botId: 'a', engineKind: 'podman', prepareRuntime: true })
+  await until(() => started)
+  const saved = JSON.parse(await readFile(join(h.home, 'computers/setup.json')))
+  assert.equal(saved.job.phase, 'preparing-runtime')
+  assert.equal(saved.job.prepareRuntime, true)
+  const { job } = await h.setup.state()
+  await h.setup.cancel({ jobId: job.id })
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'cancelled')
+  assert.equal(h.rt.computer, undefined)
+})
+
+test('a newer package does not relabel an existing pinned image as the new recipe', async t => {
+  const h = await fixture(t)
+  h.available()
+  await mkdir(join(h.home, 'computers'))
+  await writeFile(join(h.home, 'computers/setup.json'), JSON.stringify({ version: 1, config: { engine, image, recipe } }))
+  h.runtime.recipe = 'c'.repeat(64)
+  await h.setup.prepare({ botId: 'a' })
+  await h.settled()
+  const saved = JSON.parse(await readFile(join(h.home, 'computers/setup.json')))
+  assert.equal(saved.config.image, image)
+  assert.equal(saved.config.recipe, recipe)
+  assert.equal(h.calls.includes('build'), false)
+})
+
+test('retry after host restart retains the explicitly selected machine preparation step', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  await mkdir(join(h.home, 'computers'))
+  await writeFile(join(h.home, 'computers/setup.json'), JSON.stringify({
+    version: 1, job: { id: 'rebooted', botId: 'a', engineKind: 'podman', prepareRuntime: true, phase: 'preparing-runtime' },
+  }))
+  let machineStarts = 0
+  h.runtime.startRuntime = async () => { machineStarts++ }
+  h.runtime.discover = async () => ({ ...engine, kind: 'podman' })
+  const state = await h.setup.state()
+  assert.equal(state.job.phase, 'interrupted')
+  assert.equal(machineStarts, 0)
+  await h.setup.prepare({ botId: 'a', jobId: state.job.id })
+  await h.settled()
+  assert.equal(machineStarts, 1)
+  assert.equal((await h.setup.state()).job.phase, 'ready')
 })

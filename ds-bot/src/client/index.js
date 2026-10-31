@@ -168,6 +168,9 @@ export function apply(ctx) {
     const current = roster.getSnapshot()
     // Connector and capability states change without a new revision.
     const live = {}
+    for (const key of ['computer', 'computerPreparing']) {
+      if (typeof value[key] === 'boolean' && value[key] !== current[key]) live[key] = value[key]
+    }
     if (value.computerHandoffs !== undefined && JSON.stringify(value.computerHandoffs) !== JSON.stringify(current.computerHandoffs ?? [])) live.computerHandoffs = value.computerHandoffs
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses

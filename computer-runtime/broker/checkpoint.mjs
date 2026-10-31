@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { assertVolume, assertHomeImage } from './boundary.mjs'
+import { engineCommand, engineEnvironment } from '../engine.mjs'
 
 export const homeVolume = record => `dsbot-${record.id}-home${record.homeRevision ? `-${record.homeRevision}` : ''}`
 export const backupVolume = (record, id) => `dsbot-${record.id}-backup-${id}`
 const uuid = value => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value)
 
-export async function checkpoint(method, value, options, { docker, image, signal, destinationImage = image, executable = 'docker' }) {
+export async function checkpoint(method, value, options, { docker, image, signal, destinationImage = image, executable = 'docker', engine }) {
   const record = value.record
   const id = options.checkpointId
   if (!uuid(id) || (method === 'restore' && (!uuid(options.homeRevision) || !/^[a-f0-9]{64}$/.test(options.hash)))) throw new Error('Invalid checkpoint identity.')
@@ -36,13 +37,13 @@ export async function checkpoint(method, value, options, { docker, image, signal
     created = true
     const code = await readFile(new URL('./checkpoint.py', import.meta.url), 'utf8')
     const result = await new Promise((resolve, reject) => {
-      const child = execFile(executable, ['run', '--rm', '-i', '--name', helper,
+      const child = execFile(executable, engineCommand(engine, ['run', '--rm', '-i', '--name', helper,
         '--read-only', '--user', '1000:1000', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
         '--memory', '256m', '--memory-swap', '256m', '--cpus', '1', '--pids-limit', '32',
         '--mount', `type=volume,source=${source},target=/source,readonly`,
         '--mount', `type=volume,source=${destination},target=/home/cua`,
-        '--entrypoint', 'python3', image, '-c', code],
-      { signal, windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+        '--entrypoint', 'python3', image, '-c', code]),
+      { signal, ...(engine ? { env: engineEnvironment(engine) } : {}), windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
         if (error) { reject(error); return }
         try { resolve(JSON.parse(stdout)) } catch (error) { reject(error) }
       })

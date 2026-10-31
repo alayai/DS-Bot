@@ -6,7 +6,7 @@ const KEYS = ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'Arrow
 const PHASE = { ready: 'Running', stopped: 'Stopped', starting: 'Starting', error: 'Needs recovery', unavailable: 'Unavailable' }
 
 const SETUP_PHASE = {
-  checking: 'Checking the desktop environment', 'preparing-image': 'Preparing the desktop image',
+  checking: 'Checking the desktop environment', 'preparing-runtime': 'Preparing the Podman machine', 'preparing-image': 'Preparing the desktop image',
   'verifying-image': 'Verifying the desktop image', configuring: 'Saving desktop settings',
   'starting-desktop': 'Starting the private desktop', 'checking-desktop': 'Waiting for a desktop screenshot',
   cancelling: 'Cancelling preparation', cancelled: 'Preparation cancelled', failed: 'Preparation failed',
@@ -18,14 +18,15 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [showDesktop, setShowDesktop] = useState(false)
+  const [engineKind, setEngineKind] = useState(null)
   const session = useRef({ mounted: false, pending: false })
-  const ready = state?.enabled && state?.job?.phase === 'ready' && !state?.busy
+  const ready = Boolean(state?.enabled && state?.job?.phase === 'ready' && !state?.busy)
   async function request(method, args = {}) {
     if (!actions || leaving || session.current.pending) return
     session.current.pending = true
     if (method !== 'setup-state') setBusy(true)
     try {
-      const value = await actions.computerCall(method, { botId: bot.id, ...args })
+      const value = await actions.computerCall(method, { botId: bot.id, ...(engineKind ? { engineKind } : {}), ...args })
       if (session.current.mounted) { setState(value); setError('') }
     } catch (reason) { if (session.current.mounted) setError(reason.message) }
     finally { session.current.pending = false; if (session.current.mounted) setBusy(false) }
@@ -43,7 +44,7 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', poll)
     }
-  }, [bot?.id, leaving, ready, showDesktop])
+  }, [bot?.id, leaving, ready, showDesktop, engineKind])
   if (showDesktop || ready) return h(ComputerView, { bot, actions, leaving })
   const job = state?.job
   const preparing = busy || state?.busy
@@ -52,17 +53,24 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t('Not configured'))),
     h('p', null, t('Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.')),
     h('p', { className: 'bt-muted' }, t('Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop has no internet access.')),
+    h('label', null, t('Container engine'), ' ', h('select', {
+      value: state?.engine ?? engineKind ?? state?.environment?.engine ?? 'docker',
+      disabled: preparing || blocked || Boolean(state?.engine) || leaving,
+      onChange: event => { setEngineKind(event.target.value); setState(null) },
+    }, h('option', { value: 'docker' }, 'Docker'), h('option', { value: 'podman' }, t('Podman (experimental)')))),
     blocked ? h('p', { className: 'bt-error' }, t(state.disabled ? 'Private desktops are disabled by the DSH profile.' : 'This profile already has an explicit desktop runtime. Use its desktop controls.')) : null,
     !state ? h('p', { role: 'status', className: 'bt-muted' }, t('Checking the desktop environment')) : null,
     state?.environment ? h('p', { className: state.environment.ready ? 'bt-muted' : 'bt-error' },
-      t(state.environment.ready ? 'Docker is ready on the DSH host.' : state.environment.error)) : null,
+      t(state.environment.ready ? (state.environment.engine === 'podman' ? 'Podman is ready on the DSH host.' : 'Docker is ready on the DSH host.') : state.environment.error)) : null,
     state?.environment?.ready === false ? h('div', { className: 'bt-computer-help' },
-      h('a', { href: 'https://docs.docker.com/desktop/setup/install/', target: '_blank', rel: 'noreferrer' }, t('Docker installation guide')),
-      h('p', null, t('Install and start Docker with Linux containers, then check again. If Windows requests a restart, reopen DSH afterward.'))) : null,
+      h('a', { href: state.environment.engine === 'podman' ? 'https://podman-desktop.io/docs/installation' : 'https://docs.docker.com/desktop/setup/install/', target: '_blank', rel: 'noreferrer' }, t(state.environment.engine === 'podman' ? 'Podman installation guide' : 'Docker installation guide')),
+      h('p', null, t(state.environment.engine === 'podman' ? 'Install Podman, then prepare its machine. If Windows requests a restart, reopen DSH and retry. The desktop engine runs on the DSH host.' : 'Install and start Docker with Linux containers, then check again. If Windows requests a restart, reopen DSH afterward.'))) : null,
     job ? h('p', { role: 'status', 'aria-live': 'polite' }, t(SETUP_PHASE[job.phase] ?? 'Checking the desktop environment')) : null,
     job?.error ? h('p', { className: 'bt-error' }, t(job.error)) : null,
     error ? h('p', { className: 'bt-error', role: 'alert' }, t(error)) : null,
     h('div', { className: 'bt-computer-actions' },
+      state?.canPrepareRuntime && state.environment?.ready === false && !blocked ? h('button', { type: 'button', className: 'bt-soft', disabled: preparing || leaving,
+        onClick: () => request('setup-prepare', { prepareRuntime: true, engineKind: 'podman' }) }, t('Prepare Podman machine and desktop')) : null,
       h('button', { type: 'button', className: 'bt-soft', disabled: preparing || blocked || !state || leaving,
         onClick: () => request(job ? 'setup-retry' : 'setup-prepare', job ? { jobId: job.id } : {}) }, t(job ? 'Retry preparation' : 'Prepare and start')),
       h('button', { type: 'button', className: 'bt-soft', disabled: preparing || leaving, onClick: () => request('setup-state', { check: true }) }, t('Check again')),

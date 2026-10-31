@@ -375,3 +375,146 @@ It was not published or installed into the user's DSH. Installing it fixes entry
 discovery; it still requires the separately configured Broker and guest image.
 The shared checkout's Windows esbuild installation was preserved; Linux build
 checks used the same esbuild version from an isolated temporary tool directory.
+
+
+## Installed-plugin preparation and native Windows Docker
+
+The approved first-use plan now has an implementation of batches A–C: the npm
+plugin ships its verified Broker payload, discovers a local Docker engine, saves
+its identity, builds the pinned desktop recipe and waits for an actual screenshot.
+The setup UI exposes persistent progress, cancel and retry. It starts with
+observe-only access; the existing operate and YOLO controls remain explicit.
+This checkpoint does not mark A–C acceptance or the entire CUA plan complete.
+
+| Check | Result | Scope |
+|---|---|---|
+| Final plugin unit suite | **1394 passed, 2 skipped, 0 failed** | Persistent setup, engine selection, cancellation, UI lifecycle, scoped tools, payload tampering and existing Bot behavior |
+| Build and generated checks | **Passed** | Client and 19-file runtime payload match their sources |
+| Plugin and runtime lint | **Passed with warnings** | No errors; includes intentional control-character validation regex warnings |
+| Focused app runtime tests | **7 passed** | Payload inventory, native transport and packaging configuration |
+| Real composed Computer smoke | **Passed** | Public DSH tools, guest input, approval/YOLO, attachments, control, files, checkpoint/restore/recreate/rollback and recovery |
+| Native Windows cached-image setup | **Passed, repeated after final build** | Windows Node → plugin payload → native Docker named pipe → Broker; screenshot, file roundtrip, checkpoint, stop/start, engine persistence |
+| Native Windows actual build cancellation | **Passed** | Cancels a real preparation; taskkill terminates the owned Docker/buildx process tree and releases inherited pipes |
+| Native Windows child-process fixture | **1 passed** | Independently checks that the descendant process is gone after cancellation |
+| First preparation without an image cache | **Not accepted** | Fixed base resolution and pinned wheel download began, but the download stalled and the 20-minute smoke budget expired |
+| Generic Web smoke | **51 passed, 1 failed** | Fresh temporary home and public DSH CLI; first model selection returned `fetch failed` |
+| Windows GUI / signed installer | **Not run** | User will perform native app GUI testing; no installer release claim |
+
+The first uncached Windows run exposed a real cancellation defect: terminating
+only docker.exe left docker-buildx.exe alive with inherited stdout/stderr pipes.
+The fix kills the owned process tree on Windows, and the owned process group on
+Linux, with bounded termination handling. Both the Windows process fixture and
+actual Docker cancellation passed afterward. No global process or Docker cleanup
+was used. Build cancellation retains reusable layers and does not promise to
+remove Docker's shared build cache.
+
+A cached-image run is not first-download evidence. It seeds only the isolated
+fixture's setup config with an explicitly supplied immutable image ID. Normal
+users still click Prepare and start; the implementation selects and verifies the
+image without asking them to enter that ID. The guest remains offline even though
+host-side image preparation needs registry/package-index access.
+
+A local test artifact, `artifacts/ds-bot-0.2.5-cua.2.tgz`, includes the generated
+client, setup service, trusted verifier and all 19 runtime files plus manifest.
+The extracted archive successfully loaded its own verified runtime from a
+standalone temporary directory, without the source checkout or app directory.
+The extracted package also passed the cached-image native Windows setup smoke,
+including screenshot, file transfer, checkpoint and stop/start, with no dependency
+on the source runtime. Only the staging package version changed; the source
+release version remains 0.2.4. The SHA-256 is recorded beside the artifact. This package was not published
+or installed into the user's DSH.
+
+Reproduce the targeted native tests with Windows Node (or Linux Node for the
+corresponding platform); use only an immutable, previously verified image ID:
+
+```sh
+node ds-bot/dev/computer-setup-smoke.mjs IMAGE_ID
+node ds-bot/dev/computer-setup-smoke.mjs --cancel
+node --test ds-bot/test/computer-engine.test.js
+node ds-bot/scripts/build-computer-runtime.mjs --check
+```
+
+Running `computer-setup-smoke.mjs` without an image argument exercises actual
+image preparation. All fixture metadata lives under a newly created
+`.dsh-test-setup-*`; cleanup uses only that fixture's registry identities and
+labelled volumes. It never adopts the user's existing Computer.
+
+Remaining gates: uncached first preparation through the Windows GUI, Podman
+adapter/machine management, runtime installation and system-restart recovery,
+published digest-pinned OCI images, signed installer/platform acceptance, and the
+other unfinished items in the main CUA plan. The implementation provides Docker
+installation guidance; it does not install system components automatically.
+
+The final generic Web run passed the view-card and handoff checks that had failed
+in an earlier run, but its first model-selection request returned `fetch failed`.
+This remains an unresolved validation exception, not a claimed fix or a proven
+pre-existing defect. No automatic retry was added to mutating API requests and
+DSH was not patched. A separate restart attempt on the mounted Windows filesystem
+was refused by DSH because its fixture credentials file reported mode 777; the
+final bench used a fresh Linux temporary directory instead. No user credentials
+or DSH data were read or modified.
+
+The test benches were stopped and their temporary homes removed. The standalone
+native setup smokes cleaned their owned containers and volumes. The existing
+user Computer was left running and unchanged.
+
+
+## 2026-11-01: Experimental Podman and image-candidate delivery
+
+The setup flow now offers an explicit experimental Podman selection, including
+Windows preparation of the dedicated rootful `ds-bot` machine. The selected
+machine/connection/store stays pinned, and every Broker subprocess uses the same
+connection arguments. Saved machine preparation can be retried after a Host
+restart without replaying system changes merely by opening the application.
+Rootless and remote engines are rejected by this adapter. Actual Podman lifecycle
+acceptance has not been performed: no Podman runtime is installed on this host.
+
+The optional `publishedImage` lock field accepts only an immutable GHCR digest.
+A manual candidate workflow builds, verifies, exercises and inventories the image
+before an explicitly selected publication step. The workflow has not been run,
+no image has been published, and the current lock has no published reference.
+The shipped setup therefore continues to build locally.
+
+| Check | Result | Scope |
+|---|---|---|
+| Final plugin unit suite | **1407 passed, 2 skipped, 0 failed** | Includes Podman endpoint/store isolation, machine preparation, persistent choice, restart retry and preserved image recipe provenance |
+| Build, client and runtime checks | **Passed** | Generated runtime now contains 20 files plus manifest |
+| Plugin and runtime lint | **Passed with warnings** | No lint errors; control-character validators intentionally use bounded regexes |
+| Focused app runtime tests | **7 passed** | Native transport and complete payload inventory |
+| Native Windows adapter/cancellation fixtures | **7 passed** | Path handling, fixed argv, simulated Podman metadata and real child-process cancellation; not a real Podman engine |
+| DSH → Broker → real Docker guest | **Passed** | Input, approvals/YOLO, screenshots, files, human control, checkpoint/restore/recreate/rollback and recovery |
+| Final extracted npm package on Windows | **Passed** | Native Windows Node/Docker, cached image, actual screenshot, file transfer, checkpoint and stop/start |
+| Generic Web smoke | **51 passed, 1 failed** | First model-selection request failed with `ECONNRESET` |
+| Isolated first-model HTTP diagnostic | **2 steps passed** | Fresh bench, Connection: close, no mutation retries; suggests a connection-reuse issue but does not prove the root cause or fix DSH |
+| Image candidate workflow | **YAML and shell syntax passed** | Not remotely executed or published |
+| Real Podman / clean Windows first use | **Not run** | Still an acceptance gate |
+
+During package review, cross-platform Git newline conversion was found to make
+raw source hashes non-reproducible. The builder now canonicalizes its closed
+UTF-8 text inventory to LF, and generated runtime files disable Git's automatic
+text conversion. Runtime verifiers still hash exact installed bytes; no runtime
+normalization bypasses tamper detection. Build/check uses the same canonical
+source representation. Existing pinned images retain their original recipe
+metadata when a newer plugin is installed.
+
+The local preview artifact is `artifacts/ds-bot-0.2.5-cua.3.tgz`; its SHA-256 is
+recorded alongside it. Only the staging package version changes. The final
+archive was extracted into an independent temporary directory and exercised
+through Windows Node with the existing verified immutable Docker image. No
+checkout runtime path or app path was needed. It was not installed into user DSH,
+published to npm, or signed as a desktop installer.
+
+For real Podman acceptance, run the standalone setup smoke with
+`--engine=podman`, optionally supplying an immutable image already in that engine's
+store. On Windows, `--prepare-runtime` explicitly permits creating/starting the
+fixed dedicated machine; the script retains the machine and only cleans its
+owned Computer containers/volumes. Do not treat a Docker cached image as present
+in Podman's separate store.
+
+Remaining work includes real Podman lifecycle/storage acceptance, automatic
+system-component installation, clean Windows first preparation and GUI checks,
+actual approved OCI publication/lock update, signed installer acceptance and the
+other deferred main-plan items. The pooled Web transport exception remains open;
+no production API retries or DSH patches were introduced. All test benches and
+temporary test homes from this checkpoint were removed; the existing user
+Computer was not stopped or modified.

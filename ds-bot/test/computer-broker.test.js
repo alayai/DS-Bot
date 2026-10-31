@@ -58,7 +58,7 @@ test('named volumes cannot hide bind, network or unowned storage', () => {
     { Labels: {} }, { Driver: 'nfs' }, { Name: 'another-volume' },
     { Options: { type: 'none', o: 'bind', device: '/home/user' } },
   ]) assert.throws(() => assertVolume({ ...volume, ...patch }, target))
-  assertLocalEndpoint('unix:///var/run/docker.sock')
+  assertLocalEndpoint('unix:///var/run/docker.sock', 'linux')
   for (const endpoint of ['ssh://remote', 'tcp://localhost:2375', 'unix://', null]) assert.throws(() => assertLocalEndpoint(endpoint))
 })
 

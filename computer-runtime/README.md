@@ -2,7 +2,7 @@
 
 This directory adds an optional, locally managed Linux desktop to the DS Bot
 plugin. DSH remains the agent loop. The plugin calls a private IPC Broker, which
-uses Docker to run Cua Driver inside each Bot's container.
+uses Docker (or the experimental Podman adapter) to run Cua Driver inside each Bot's container.
 
 This is a development checkpoint of the [CUA plan](../docs/plans/2026-10-31-cua-computers.md),
 not a release or a completed MVP. The plan's checklist and VALIDATION.md record
@@ -13,8 +13,57 @@ rollback, explicit storage/history cleanup, and journaled interrupted-operation 
 A runtime check/build CLI and a separately distributable source payload are included.
 Desktop builds now carry that payload outside the asar and can opt in with
 `broker.bundled: true`, including Windows-to-WSL path resolution.
-Windows GUI acceptance, network policy, in-app image preparation, signed installer acceptance,
+Windows GUI acceptance, network policy, signed installer acceptance,
 cross-browser-version compatibility and complete disk quotas remain incomplete.
+
+## Prepare from the installed plugin
+
+CUA plugin builds include a verified runtime payload. On Windows x64, start
+Docker Desktop in Linux-container mode; on Linux x64, start local Docker.
+Open a Bot's **Private desktop**, then choose **Prepare and start**. The Host
+checks its local engine, builds the fixed recipe, saves the exact engine and
+image identity, starts an observe-only desktop, and waits for a real screenshot.
+No source checkout or separate WSL Node installation is needed on this path.
+
+Progress and bounded, redacted logs are saved under the plugin's own
+`computers/setup.json`. Closing the panel does not cancel the job. A Host restart
+marks incomplete work interrupted; **Retry preparation** checks existing state
+before continuing. Cancellation retains reusable image layers and desktop data.
+The selected engine is pinned even if image preparation fails. A changed Docker
+engine identity is refused instead of silently creating desktops in another store.
+
+An explicit `computer.enabled: false` disables the setup flow. Explicit provider
+configurations keep precedence; pre-existing Computer records without a saved
+setup configuration require their original provider settings. Setup never edits
+the user's DSH profile. The operation runs on the DSH server, not necessarily the
+machine where its browser is open.
+
+Windows uses a native Node/Electron Broker and a local Docker named pipe.
+Docker and Windows virtualization prerequisites still need installation through
+the normal system flow. The engine selector also offers **Podman (experimental)**.
+On Windows, **Prepare Podman machine and desktop** explicitly creates/starts the
+fixed `ds-bot` machine (rootful, Linux x64) before preparing the image. It does not
+install Podman or Windows features, restart Windows, remove a machine, or change
+the default Podman connection. If system setup requires a reboot, reopen DSH and
+retry after the system setup finishes. Existing non-DS-Bot machines must be
+managed from Podman Desktop. Linux Podman requires a running rootful local Unix
+socket service. Both paths require cgroup v2 for resource limits.
+
+The adapter pins the machine name/creation identity, SSH key path, loopback
+endpoint and engine store. It rejects remote connections, rootless engines,
+changed stores and incompatible isolation settings. Inspect field normalization
+does not fill in missing resource or security settings. A configured engine cannot
+be switched from the selector; migration remains a separate operation. Real
+Podman lifecycle acceptance is still outstanding; Docker remains the tested path.
+
+The manual `Computer image candidate` workflow builds the pinned recipe, exercises
+an actual desktop and collects its package inventory. Publishing is off by default.
+A published candidate produces `image-candidate.json`; after release acceptance,
+its `publishedImage` may be added to `runtime.lock.json`. Only digest-pinned GHCR
+references are accepted. The setup job then pulls that exact image and validates
+its local immutable ID and runtime labels. There is no published reference in the
+current lock, so this version still builds locally. No registry publication or
+signed-installer release has been performed.
 
 ## Supported development setup
 
@@ -23,9 +72,9 @@ cross-browser-version compatibility and complete disk quotas remain incomplete.
 - The immutable local image built below. The Broker never pulls an image.
 - Image-capable models for Computer observations; tests need no model key.
 
-Windows source builds use a configured WSL distribution with Linux Node.js and
+Existing Windows source configurations can still use a WSL distribution with Linux Node.js and
 Docker. The native Windows Node → WSL → real guest path has its own smoke test;
-this is separate from Linux-only testing. Remote Docker, Podman, ARM, native
+this is separate from Linux-only testing. Remote Docker/Podman, ARM, native
 Windows guests and packaged Windows installers remain outside this checkpoint.
 
 Build from the repository root:
@@ -50,9 +99,10 @@ check, not image provenance attestation or a complete supply-chain audit.
 
 ## Installed plugin but no desktop entry
 
-The plugin enable switch and `computer.enabled` are separate. Earlier CUA builds
+The plugin enable switch and desktop setup are separate. Earlier CUA builds
 hid **Private desktop** entirely while the runtime was disabled. Updated builds
-keep the entry in Bot details/settings and open setup guidance until configured.
+keep the entry in Bot details/settings and offer **Prepare and start**. A profile
+that explicitly sets `computer.enabled: false` still disables preparation.
 The entry belongs to an individual Bot, not the plugin-management page or a group.
 Installing a package does not download an image or configure/start the Broker.
 A source code fix also does not update a package already installed in DSH; install

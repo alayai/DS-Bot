@@ -1,0 +1,68 @@
+name: Computer image candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested candidate to GHCR (does not update the plugin lock)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: computer-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the pinned recipe and verify the plugin payload
+        run: |
+          node ds-bot/scripts/build-computer-runtime.mjs
+          node ds-bot/scripts/build-computer-runtime.mjs --check
+          node --input-type=module -e 'import { validateLock } from "./computer-runtime/runtime.mjs"; await validateLock()'
+          docker build --platform linux/amd64 --progress=plain -t ds-bot-cua:candidate computer-runtime/desktop
+          image_id="$(docker image inspect ds-bot-cua:candidate --format '{{.Id}}')"
+          node computer-runtime/runtime.mjs check "$image_id" > image-build.json
+          node -e 'const fs = require("node:fs"); const r = JSON.parse(fs.readFileSync("image-build.json")); if (!/^sha256:[a-f0-9]{64}$/.test(r.image)) throw Error("Invalid image"); fs.appendFileSync(process.env.GITHUB_ENV, `CUA_IMAGE=${r.image}\n`)'
+      - name: Exercise the actual image and collect its inventory
+        run: |
+          node ds-bot/dev/computer-setup-smoke.mjs "$CUA_IMAGE"
+          node computer-runtime/runtime.mjs inventory "$CUA_IMAGE" > guest-sbom.cdx.json
+      - name: Publish the candidate only when explicitly selected
+        if: inputs.publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}/cua-desktop"
+          reference="$repository:sha-$GITHUB_SHA"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker tag "$CUA_IMAGE" "$reference"
+          docker push "$reference"
+          docker image inspect "$reference" --format '{{json .RepoDigests}}' > image-digests.json
+          CUA_REPOSITORY="$repository" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const values = JSON.parse(readFileSync("image-digests.json"));
+            const publishedImage = values.find(value => value.startsWith(`${process.env.CUA_REPOSITORY}@sha256:`));
+            if (!publishedImage) throw Error("Published digest missing");
+            writeFileSync("image-candidate.json", JSON.stringify({ commit: process.env.GITHUB_SHA, publishedImage }, null, 2) + "\n");
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: computer-image-evidence
+          path: |
+            image-build.json
+            guest-sbom.cdx.json
+            image-candidate.json

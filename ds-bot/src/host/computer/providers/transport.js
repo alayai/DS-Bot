@@ -25,11 +25,12 @@ export function brokerLaunch({ entrypoint, image, images = [], wsl, native, engi
 
 // A private pipe, not a listener. WSL never receives application cookies or model credentials.
 export function openBroker(launch) {
-  const env = Object.fromEntries(['PATH', 'HOME', 'LANG', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'SystemRoot', 'WINDIR', 'USERPROFILE']
+  const env = Object.fromEntries(['PATH', 'HOME', 'LANG', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'SystemRoot', 'WINDIR', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'ProgramData', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME']
     .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]))
   if (launch.engine) {
     env.DS_BOT_COMPUTER_ENGINE = JSON.stringify(launch.engine)
-    env.DOCKER_HOST = launch.engine.endpoint
+    if (launch.engine.kind === 'docker') env.DOCKER_HOST = launch.engine.endpoint
+    else delete env.DOCKER_HOST
     delete env.DOCKER_CONTEXT
   }
   if (launch.entrypoint) {
