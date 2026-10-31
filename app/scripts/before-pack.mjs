@@ -5,6 +5,7 @@ import { Arch } from 'electron-builder'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { preparePrimaryRuntime, runtimeTarget } from './prepare-runtime.mjs'
+import { prepareComputerRuntime } from './prepare-computer-runtime.mjs'
 
 const WHERE = {
   darwin: { x64: 'on an Intel Mac, or under Rosetta with an x64 Node', arm64: 'on a Mac with Apple silicon' },
@@ -41,11 +42,13 @@ export function officeRuntimeRequest(context) {
   }
 }
 
-export async function beforePack(context, prepare = preparePrimaryRuntime) {
+export async function beforePack(context, prepare = preparePrimaryRuntime, prepareComputer = prepareComputerRuntime) {
   const targets = []
   for (const archToNames of context.packager?.packagerOptions?.targets?.values() ?? [])
     for (const arch of archToNames.keys()) targets.push(Arch[arch])
   const problem = archProblem({ target: Arch[context.arch], platform: context.electronPlatformName, targets })
   if (problem !== undefined) throw new Error(problem)
-  await prepare(officeRuntimeRequest(context))
+  const request = officeRuntimeRequest(context)
+  await prepare(request)
+  await prepareComputer({ output: request.output })
 }

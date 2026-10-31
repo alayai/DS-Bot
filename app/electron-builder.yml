@@ -15,6 +15,7 @@ asarUnpack:
   - node_modules/@deepseek-ai/libreoffice-kit/**
   # The payload Node cannot read office.js through the asar.
   - node_modules/ds-bot/office.js
+  - node_modules/ds-bot/computer-runtime/**
   # Automatic unpacking misses versioned Linux libraries such as libvips-cpp.so.8.18.7.
   - node_modules/@img/sharp*/**
 # The Office payload that scripts/prepare-runtime.mjs writes in beforePack (see package.json's
@@ -24,6 +25,8 @@ extraResources:
     to: primary-runtime
   - from: build/runtime/office-skills
     to: office-skills
+  - from: build/runtime/computer-runtime
+    to: computer-runtime
 # node-pty, sharp and koffi ship prebuilt binaries for each platform. A rebuild would compile
 # node-pty from source and needs a C++ toolchain.
 npmRebuild: false

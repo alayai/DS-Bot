@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { verifyComputerRuntime } from '../src/computer-runtime.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const [given, shotFile] = process.argv.slice(2)
@@ -43,6 +44,7 @@ if (!existsSync(executable)) {
     join('app.asar.unpacked', 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js'),
     join('app.asar.unpacked', 'node_modules', 'ds-bot', 'office.js'),
   ]
+  verifyComputerRuntime(join(resources, 'computer-runtime'))
   const missing = required.filter((entry) => !existsSync(join(resources, entry)))
   if (missing.length > 0) {
     console.error(`check-packed: FAILED: missing from ${resources}:\n  ${missing.join('\n  ')}`)

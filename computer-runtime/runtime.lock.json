@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "platform": "linux/amd64",
+  "baseImage": "docker.io/trycua/xfce-cua@sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b",
+  "driver": {
+    "version": "0.37.0",
+    "source": "https://pypi.org/project/cua-driver/0.37.0/",
+    "artifact": "cua_driver-0.37.0-py3-none-manylinux_2_31_x86_64.whl",
+    "sha256": "e530ee36226d99516ef7ec696ba31d516e487ae5e5effdd5e2610c56af3eee19",
+    "license": "MIT"
+  }
+}

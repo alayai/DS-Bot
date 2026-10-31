@@ -6,6 +6,24 @@ The DS Bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek
 
 Tested with dsh `0.2.1-rc.4` (Web) and `0.2.0-rc.2` (Web and Desktop).
 
+## Experimental private desktop (CUA)
+
+Installing or enabling the plugin does **not** enable the Computer runtime.
+In CUA builds, open a Bot's details or settings and choose **Private desktop**.
+If the runtime is disabled, this opens setup guidance instead of a live desktop.
+The plugin-management page's enable switch controls the plugin, not CUA.
+
+The development runtime requires a prepared Linux desktop image and an external
+Broker. Windows uses WSL2, Docker Linux containers and Linux Node.js 22+.
+Enable `computer.enabled` and configure `computer.broker` in the DSH profile,
+then restart DSH. Preserve the other Bot settings when applying a profile patch.
+The plugin npm package does not include the Docker image or the external Broker.
+See `computer-runtime/README.md` in the source checkout for the complete setup.
+
+`start-cua.ps1` launches the source desktop app with isolated test data and an
+explicit CUA configuration. It does not change an already running DSH install.
+Desktops currently run offline; other Bot tools retain their existing permissions.
+
 ## Features
 
 - **Long-lived Bots**: each Bot is a dsh Session in the "DS Bot" workspace, with its own name, role, instructions and model.

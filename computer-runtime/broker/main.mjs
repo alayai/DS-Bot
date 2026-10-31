@@ -1,0 +1,400 @@
+import { readFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { randomUUID } from 'node:crypto'
+import { McpClient } from './mcp.mjs'
+import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from './boundary.mjs'
+import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
+import { driverInput, driverReceipt } from './input.mjs'
+import { discoverEngine, validateEngine } from '../engine.mjs'
+
+const run = promisify(execFile)
+const engine = process.env.DS_BOT_COMPUTER_ENGINE ? validateEngine(JSON.parse(process.env.DS_BOT_COMPUTER_ENGINE)) : null
+const executable = engine?.executable ?? 'docker'
+const image = process.argv[2]
+const allowedImages = process.argv[4] ? JSON.parse(process.argv[4]) : [image]
+if (!Array.isArray(allowedImages) || allowedImages.length > 5 || !allowedImages.includes(image) || allowedImages.some(id => !/^sha256:[a-f0-9]{64}$/.test(id))) throw new Error('Invalid image list.')
+const imageOf = value => value.record.runtimeImage ?? image
+const stdio = process.argv[3] === '--stdio'
+const send = message => {
+  if (stdio) { if (!process.stdout.destroyed) process.stdout.write(`${JSON.stringify(message)}\n`) }
+  else if (process.connected) process.send(message)
+}
+if (!/^sha256:[a-f0-9]{64}$/.test(image ?? '') || (!process.send && !stdio)) {
+  throw new Error('Start the development Broker through its IPC adapter with an immutable local image id.')
+}
+const targets = new Map()
+const requests = new Map()
+const socket = '/tmp/dsbot-runtime/cua.sock'
+const docker = async (args, signal) => {
+  try { return await run(executable, args, { signal, windowsHide: true, timeout: 30_000, maxBuffer: 12 * 1024 * 1024 }) }
+  catch (error) { error.operation = args[0]; throw error }
+}
+const fail = message => { throw Object.assign(new Error(message), { public: true }) }
+let runtimeChecked
+async function localRuntime() {
+  runtimeChecked ??= (async () => {
+    if (engine) {
+      await discoverEngine(engine)
+      process.env.DOCKER_HOST = engine.endpoint
+      delete process.env.DOCKER_CONTEXT
+      return
+    }
+    const host = (process.env.DOCKER_CONTEXT ? undefined : process.env.DOCKER_HOST)
+      ?? JSON.parse((await docker(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}'])).stdout)
+    try { assertLocalEndpoint(host) } catch (error) { fail(error.message) }
+    // Pin every later CLI/MCP subprocess to the checked daemon even if the
+    // user's default Docker context changes while this Broker is running.
+    process.env.DOCKER_HOST = host
+    delete process.env.DOCKER_CONTEXT
+  })()
+  return runtimeChecked
+}
+let closing = false
+function target(record) {
+  if (!record || !/^cmp_[a-f0-9-]{36}$/.test(record.id) || !/^[\w-]{1,160}$/.test(record.botId)
+    || !Number.isSafeInteger(record.generation) || record.generation < 1
+    || (record.homeRevision !== undefined && !/^[a-f0-9-]{36}$/.test(record.homeRevision))) fail('Invalid desktop identity.')
+  if (record.runtimeImage !== undefined && !allowedImages.includes(record.runtimeImage)) fail('This desktop is pinned to another image. Restore the original runtime configuration.')
+  let value = targets.get(record.id)
+  if (!value) {
+    value = {
+      name: `dsbot-${record.id}`, volume: homeVolume(record),
+      record: { ...record }, fence: null, client: null, previewClient: null, modelSession: `model-${randomUUID()}`, previewSession: `preview-${randomUUID()}`, frame: null, busy: false,
+    }
+    targets.set(record.id, value)
+  }
+  if (record.botId !== value.record.botId || record.generation < value.record.generation) fail('Stale desktop identity.')
+  if (record.generation === value.record.generation && (homeVolume(record) !== value.volume || (record.runtimeImage && value.record.runtimeImage && record.runtimeImage !== value.record.runtimeImage))) fail('Stale home identity.')
+  if (record.generation > value.record.generation) {
+    if (value.busy || value.fence) fail('Revoke the old desktop generation first.')
+    value.record = { ...record }
+    value.volume = homeVolume(record)
+  }
+  value.record = { ...record }
+  return value
+}
+async function inspect(value, signal) {
+  let data
+  try { data = JSON.parse((await docker(['inspect', value.name], signal)).stdout)[0] }
+  catch (error) {
+    if (/no such (object|container)/i.test(error.stderr ?? '')) return null
+    fail('The container runtime could not inspect this desktop.')
+  }
+  try {
+    assertContainer(data, value, imageOf(value))
+    const volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0]
+    assertVolume(volume, value)
+    assertHomeImage(volume, value.record, imageOf(value), data.Image)
+  } catch (error) {
+    fail(error.operation ? 'The container runtime could not inspect the desktop volume.' : error.message)
+  }
+  return data
+}
+async function client(value, signal, key = 'client', session = value.modelSession) {
+  if (value[key] && !value[key].closed) return value[key]
+  const info = await inspect(value, signal)
+  if (!info?.State.Running) fail('Start the desktop before using it.')
+  const next = new McpClient(executable, ['exec', '-i', '--user', '1000:1000', value.name, 'cua-driver', 'mcp', '--socket', socket])
+  try {
+    await next.initialize(signal)
+    await next.call('start_session', { session }, signal)
+  }
+  catch (error) { await next.close(); throw error }
+  value[key] = next
+  return next
+}
+async function revoke(value) {
+  if (value.revoking) return value.revoking
+  value.fence = null
+  value.frame = null
+  value.dirty = true
+  value.abort?.abort()
+  value.revoking = (async () => {
+    await value.settled
+    try {
+      const info = await inspect(value)
+      if (info?.State.Running) {
+        if (!value.reconciled) {
+          // A new Broker cannot account for input from a dead predecessor.
+          // Stop its container; only an explicit start can resume this desktop.
+          await docker(['stop', '--time', '5', value.name])
+        } else {
+          const list = async () => {
+            const response = JSON.parse((await docker(['exec', value.name, 'cua-driver', 'sessions', 'list', '--json', '--socket', socket])).stdout)
+            if (!Array.isArray(response.sessions) || response.count !== response.sessions.length) fail('The driver could not enumerate input scopes.')
+            return response.sessions.filter(session => session.state === 'active')
+          }
+          const sessions = await list()
+          for (const session of sessions) {
+            if (typeof session.session !== 'string' || session.session.length > 200 || session.session.startsWith('-')) fail('Invalid driver session identity.')
+            await docker(['exec', value.name, 'cua-driver', 'revoke', '--session', session.session, '--socket', socket])
+          }
+          await value.client?.close()
+          await value.previewClient?.close()
+          if ((await list()).length) fail('The driver did not revoke every input scope.')
+        }
+      }
+      value.modelSession = `model-${randomUUID()}`
+      value.previewSession = `preview-${randomUUID()}`
+      value.reconciled = true
+      value.dirty = false
+    } finally {
+      await value.client?.close()
+      await value.previewClient?.close()
+      value.previewClient = null
+      value.client = null
+      value.fence = null
+      value.frame = null
+    }
+  })()
+  try { await value.revoking } finally { value.revoking = null }
+}
+async function preview(value, signal) {
+  const peer = await client(value, signal, 'previewClient', value.previewSession)
+  const file = `/tmp/dsbot-frame-${randomUUID()}.png`
+  try {
+    const frame = await peer.call('get_desktop_state', { screenshot_out_file: file, session: value.previewSession }, signal)
+    if (typeof frame.capture_id !== 'string') fail('The desktop returned no capture binding.')
+    const encoded = (await docker(['exec', value.name, 'base64', '-w0', file], signal)).stdout
+    signal.throwIfAborted()
+    return { data: encoded, width: frame.screenshot_width, height: frame.screenshot_height }
+  } finally {
+    await docker(['exec', value.name, 'rm', '-f', file]).catch(() => {})
+  }
+}
+async function start(value, signal) {
+  const image = imageOf(value)
+  const record = value.record
+  const metadata = JSON.parse((await docker(['image', 'inspect', image], signal)).stdout)[0]
+  if (metadata.Id !== image || metadata.Os !== 'linux' || metadata.Architecture !== 'amd64' || metadata.Config?.User !== '1000:1000'
+    || metadata.Config?.Labels?.['org.ds-bot.computer.protocol'] !== '1'
+    || metadata.Config?.Labels?.['org.ds-bot.computer.driver'] !== '0.37.0') fail('Unsupported desktop image.')
+  let info = await inspect(value, signal)
+  if (!info) {
+    let volume
+    try { volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0] }
+    catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+    if (volume) {
+      try { assertVolume(volume, value); assertHomeImage(volume, record, image) } catch (error) { fail(error.message) }
+    }
+    if (!volume) await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.image=${image}`, value.volume], signal)
+    await docker([
+      'create', '--name', value.name,
+      '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.owner=${record.botId}`,
+      '--label', 'org.ds-bot.computer.protocol=1',
+      '--init', '--user', '1000:1000', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--pids-limit', '512', '--shm-size', '256m', '--restart', 'no',
+      '--log-opt', 'max-size=5m', '--log-opt', 'max-file=2',
+      '--mount', `type=volume,source=${value.volume},target=/home/cua`, image,
+    ], signal)
+    info = await inspect(value, signal)
+  }
+  if (!info.State.Running) {
+    await docker(['start', value.name], signal)
+    value.reconciled = true
+  }
+  for (let attempt = 0; attempt < 40; attempt++) {
+    signal.throwIfAborted()
+    try {
+      await docker(['exec', value.name, 'cua-driver', 'status', '--socket', socket], signal)
+      return null
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+  }
+  fail('The desktop driver did not become ready.')
+}
+function candidateValue(value, options) {
+  if (!/^[a-f0-9-]{36}$/.test(options.homeRevision ?? '') || !allowedImages.includes(options.targetImage)) fail('Invalid upgrade identity.')
+  const record = { ...value.record, homeRevision: options.homeRevision, runtimeImage: options.targetImage }
+  return { ...value, record, name: `dsbot-upgrade-${record.id}-${options.homeRevision}`, volume: homeVolume(record), client: null, previewClient: null }
+}
+async function retireCandidate(value, options, signal, existing) {
+  const candidate = existing ?? candidateValue(value, options)
+  await candidate.previewClient?.close()
+  candidate.previewClient = null
+  const info = await inspect(candidate, signal)
+  if (info?.State.Running) await docker(['stop', '--time', '5', candidate.name], signal)
+  if (info) await docker(['rm', candidate.name], signal)
+}
+async function dispatch(method, record, options, signal) {
+  await localRuntime()
+  const value = target(record)
+  const image = imageOf(value)
+  if (method === 'inspect') {
+    const info = await inspect(value, signal)
+    let volume
+    if (!info) {
+      try { volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0] }
+      catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+      if (volume) assertVolume(volume, value)
+    }
+    return { phase: value.dirty ? 'error' : info?.State.Running ? 'ready' : 'stopped', provider: 'local-container', isolation: 'container',
+      image: info?.Image ?? volume?.Labels?.['org.ds-bot.computer.image'] ?? null, homeExists: Boolean(info || volume) }
+  }
+  if (method === 'revoke') { await revoke(value); return null }
+  if (value.busy || value.revoking) fail('The desktop is busy.')
+  if (value.dirty && method !== 'stop') fail('Desktop input must be revoked before this Computer can be reused.')
+  value.busy = true
+  let settle
+  value.settled = new Promise(resolve => { settle = resolve })
+  const abort = new AbortController()
+  value.abort = abort
+  signal = AbortSignal.any([signal, abort.signal])
+  try {
+    if (method === 'start') return await start(value, signal)
+    if (method === 'stop') {
+      value.fence = null
+      value.frame = null
+      await value.client?.close()
+      await value.previewClient?.close()
+      value.previewClient = null
+      value.client = null
+      const info = await inspect(value, signal)
+      if (info?.State.Running) await docker(['stop', '--time', '5', value.name], signal)
+      return null
+    }
+    if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: 'offline', isolation: 'container' }
+    if (method === 'cleanup') {
+      if (options.targetImage && options.staged) await retireCandidate(value, options, signal)
+      return await cleanup(value, options, docker, signal)
+    }
+    if (method === 'upgrade') {
+      if (!allowedImages.includes(options.targetImage) || allowedImages.indexOf(options.targetImage) <= allowedImages.indexOf(image)) fail('Choose a different configured image.')
+      const info = await inspect(value, signal)
+      if (info?.State.Running) fail('Stop the desktop before upgrading.')
+      const candidate = candidateValue(value, options)
+      // A blank desktop must pass image, driver and screenshot checks before any home is copied.
+      await ownedVolume(candidate.volume, value, docker, signal, { missing: true }).then(data => { if (data) fail('Staging storage already exists.') })
+      await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`,
+        '--label', `org.ds-bot.computer.image=${options.targetImage}`, '--label', 'org.ds-bot.computer.storage=staged-home', candidate.volume], signal)
+      try { await start(candidate, signal); await preview(candidate, signal) }
+      finally { await retireCandidate(value, options, undefined, candidate) }
+      await cleanup(value, { ...options, kind: 'home', staged: true }, docker, signal)
+      await checkpoint('restore', value, options, { docker, image, signal, executable, destinationImage: options.targetImage })
+      try { await start(candidate, signal); await preview(candidate, signal) }
+      finally { await retireCandidate(value, options, undefined, candidate) }
+      if (info) await docker(['rm', value.name], signal)
+      return { image: options.targetImage }
+    }
+    if (method === 'rollback') {
+      const info = await inspect(value, signal)
+      if (info?.State.Running) fail('Stop the desktop before rolling back.')
+      if (!(record.previousHomes ?? []).includes(options.homeRevision) || options.homeRevision === (record.homeRevision ?? null)) fail('Choose a retained previous home.')
+      const previous = await ownedVolume(homeVolume({ ...record, homeRevision: options.homeRevision }), value, docker, signal)
+      const previousImage = record.previousImages?.[options.homeRevision ?? 'original'] ?? image
+      if (!allowedImages.includes(previousImage) || options.targetImage !== previousImage) fail('The previous home image must remain configured.')
+      assertHomeImage(previous, { ...record, runtimeImage: previousImage }, previousImage)
+      if (info) await docker(['rm', value.name], signal)
+      return null
+    }
+    if (['checkpoint', 'restore', 'recreate'].includes(method)) {
+      const info = await inspect(value, signal)
+      if (info?.State.Running) fail('Stop the desktop before changing its storage.')
+      const result = method === 'recreate' ? null : await checkpoint(method, value, options, { docker, image, signal, executable })
+      // The old home survives removal. Restore publishes a verified new home only in the host journal.
+      if (method !== 'checkpoint' && info) await docker(['rm', value.name], signal)
+      return result
+    }
+    if (method === 'files') {
+      const info = await inspect(value, signal)
+      if (!info?.State.Running) fail('Start the desktop before transferring files.')
+      const helper = await readFile(new URL('./files.py', import.meta.url), 'utf8')
+      const result = await new Promise((resolve, reject) => {
+        const child = execFile(executable, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', helper],
+          { signal, windowsHide: true, timeout: 15_000, maxBuffer: 512 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout))
+        child.stdin.on('error', () => {})
+        child.stdin.end(JSON.stringify({ operation: options.operation, name: options.name, data: options.data }))
+      })
+      const response = JSON.parse(result)
+      if (!response.ok) fail(response.error)
+      return response.value
+    }
+    if (method === 'preview') return await preview(value, signal)
+    if (method === 'observe') {
+      if (typeof options.fence !== 'string' || options.fence.length > 100) fail('Invalid input fence.')
+      const peer = await client(value, signal, 'client', value.modelSession)
+      const file = `/tmp/dsbot-frame-${randomUUID()}.png`
+      try {
+        const frame = await peer.call('get_desktop_state', { screenshot_out_file: file, session: value.modelSession }, signal)
+        if (typeof frame.capture_id !== 'string') fail('The desktop returned no capture binding.')
+        const encoded = (await docker(['exec', value.name, 'base64', '-w0', file], signal)).stdout
+        signal.throwIfAborted()
+        value.fence = options.fence
+        value.frame = frame
+        return { data: encoded, width: frame.screenshot_width, height: frame.screenshot_height }
+      } finally {
+        await docker(['exec', value.name, 'rm', '-f', file]).catch(() => {})
+      }
+    }
+    if (method === 'perform') {
+      if (!value.frame || value.fence !== options.fence || !value.client) fail('The observation or input lease was revoked.')
+      let input
+      try { input = driverInput(options.actions, value.frame) } catch (error) { fail(error.message) }
+      value.frame = null
+      const result = await value.client.call(input.name, { ...input.args, session: value.modelSession }, signal)
+      signal.throwIfAborted()
+      return driverReceipt(result)
+    }
+    fail('Unsupported Broker operation.')
+  } catch (error) {
+    if (!['preview', 'files', 'diagnostics'].includes(method)) {
+      value.dirty = true
+      value.fence = null
+      value.frame = null
+    }
+    throw error
+  } finally {
+    value.busy = false
+    value.abort = null
+    settle()
+  }
+}
+function receive(message) {
+  if (message?.cancel) { requests.get(message.cancel)?.abort(); return }
+  if (closing || !Number.isSafeInteger(message?.id) || requests.has(message.id)) return
+  const abort = new AbortController()
+  requests.set(message.id, abort)
+  void dispatch(message.method, message.record, message.options ?? {}, abort.signal).then(
+    value => send({ id: message.id, ok: true, value }),
+    error => {
+      send({
+        id: message.id, ok: false,
+        error: error.public === true ? error.message
+          : `Computer operation failed (${error.operation ?? 'protocol'}, ${String(error.code ?? error.name).slice(0, 40)}). Input may have executed; observe before continuing.`,
+      })
+    },
+  ).finally(() => requests.delete(message.id))
+}
+process.on('message', receive)
+if (stdio) {
+  let buffer = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', chunk => {
+    buffer += chunk
+    if (buffer.length > 1024 * 1024) { void shutdown(); return }
+    for (let end; (end = buffer.indexOf('\n')) >= 0;) {
+      const line = buffer.slice(0, end)
+      buffer = buffer.slice(end + 1)
+      let message
+      try { message = JSON.parse(line) } catch { void shutdown(); return }
+      receive(message)
+    }
+  })
+  process.stdin.once('end', () => { void shutdown() })
+  process.stdout.on('error', () => { void shutdown() })
+}
+async function shutdown() {
+  if (closing) return
+  closing = true
+  for (const abort of requests.values()) abort.abort()
+  await Promise.allSettled([...targets.values()].map(async value => {
+    await revoke(value)
+    const info = await inspect(value)
+    if (info?.State.Running) await docker(['stop', '--time', '5', value.name])
+  }))
+  process.exit(0)
+}
+process.once('disconnect', shutdown)
+process.once('SIGTERM', shutdown)

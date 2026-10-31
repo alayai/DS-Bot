@@ -8,7 +8,7 @@ import { STORAGE } from './storage.js'
 
 export const MIN_CHAT = 420
 export const RAIL_WIDTH = 88
-export const PANEL_MIN = { details: 320, browser: 360, side: 320 }
+export const PANEL_MIN = { details: 320, browser: 360, computer: 360, side: 320 }
 // The shell collapses its own sidebar below this width.
 export const DSH_NARROW = 1024
 // The open column's width range; a drag released short of RAIL_SNAP lands on the rail.

@@ -16,6 +16,7 @@ import { useGlide, useMorph } from './motion.js'
 import { MemberApprovals, MemberState, StopMemberWork, StopRoomWork, useMemberWork, workState } from './member-status.js'
 import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
 import { t } from './i18n.js'
+import { hasComputerEntry } from './computer-model.js'
 
 function transcriptOf(list, id, name, hiddenTurns = []) {
   const outline = list.projectionsBySession?.[id]?.values?.turnOutline ?? list.byId[id]?.projectionValues?.turnOutline
@@ -227,6 +228,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
     bot: bot !== undefined,
     room: room !== undefined,
     canBrowse: bot !== undefined && roster.browser === true && actions.openBrowser !== undefined,
+    canComputer: bot !== undefined && hasComputerEntry(roster),
     canTerminal: actions.canOpenTerminal?.() === true,
     canFiles: actions.canOpenFiles?.() === true,
   }).map(key => menuItemFor(key, actions, sessionId))

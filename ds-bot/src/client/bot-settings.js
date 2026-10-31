@@ -12,6 +12,7 @@ import { AvatarLibraryPanel, avatarImage } from './avatar-library.js'
 import { useMemoryCount } from './memory-panel.js'
 import { SPRING_SHAPE, SPRING_TAP, spring, useGlide } from './motion.js'
 import { t } from './i18n.js'
+import { hasComputerEntry } from './computer-model.js'
 
 const capitalize = word => word[0].toUpperCase() + word.slice(1)
 
@@ -227,6 +228,7 @@ export function BotSettingsForm({ bot, roster, actions, run }) {
     h(Card, { title: t('Instructions') },
       h(Row, { label: t('What this Bot does'), hint: t('Its job on the team. Part of the Bot\'s system prompt.'), stack: true },
         h(InlineText, { label: t('Instructions'), value: bot.instructions, multiline: true, placeholder: t('What this Bot is responsible for…'), onSave: instructions => save({ instructions }) }))),
+    hasComputerEntry(roster) ? h(Card, { title: t('Private desktop') }, h('div', { className: 'bt-set-row bt-bs-row' }, h('span', { className: 'bt-set-copy' }, t(roster.computer === true ? 'Manage desktop access, control and files.' : 'Set up a private desktop for this Bot.')), h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => actions.openComputer(bot.id) }, t(roster.computer === true ? 'Open desktop' : 'Set up desktop')))) : null,
     h(BotCapabilitiesCard, { bot, roster, actions, run, Card, SwitchRow }),
     roster.memory === false ? null : h(MemoryCard, { bot, actions }),
     h(BotSchedules, { bot, roster, actions }),

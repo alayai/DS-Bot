@@ -17,6 +17,15 @@ DS Bot is a bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/dee
 
 ## Install
 
+**Experimental Computer runtime (source checkout):** the optional Linux CUA
+container backend now includes a private desktop panel, human takeover,
+Bot input with per-action approval or optional YOLO mode, chat file attachments,
+help requests that resume the originating chat, stopped-desktop checkpoints/recovery,
+paired image/home upgrades and rollback, storage diagnostics, and explicit backup/history cleanup. Windows source builds can use the WSL bridge
+via `start-cua.ps1`. Builds from this branch also bundle the Broker payload and
+verify it before use; existing homes stay pinned until an explicit verified migration.
+The runtime is disabled by default and runs offline; the Private desktop entry shows setup guidance until it is configured. See the [development setup and limitations](computer-runtime/README.md).
+
 **Desktop app (Windows, macOS, Linux)**
 
 The desktop app brings its own DSH, so you don't need to install DSH first. Download it from [Releases](https://github.com/Fei2411/DS-Bot/releases):

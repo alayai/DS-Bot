@@ -41,7 +41,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
       ui.set((state) => {
         if (!state.details || state.details === id) return state
         const snap = roster.getSnapshot()
-        const view = state.view === 'browser' && snap.byId[id] === undefined ? 'details'
+        const view = ['browser', 'computer'].includes(state.view) && snap.byId[id] === undefined ? 'details'
           : state.view === 'side' && !(snap.sideChats?.[snap.byId[id]?.id] ?? []).some(chat => chat?.id === state.side) ? 'details'
             : state.view
         return { ...state, details: id, view, renaming: false, tab: null }
@@ -57,7 +57,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     closeMemory: () => { ui.set(state => (state.memory ? { ...state, memory: null } : state)) },
     openConnectors: () => { ui.set(state => ({ ...state, settings: { page: 'connectors', id: null }, menu: null, palette: null, newChat: null })) },
     setPanelView: (view) => {
-      if (view !== 'details' && view !== 'browser' && view !== 'side') return
+      if (!['details', 'browser', 'side', 'computer'].includes(view)) return
       ui.set(state => (state.details && state.view !== view ? { ...state, view, panelYield: yieldTo(state, view) } : state))
     },
     // A side chat on the panel's own view, opened from the strip, the `···`
@@ -70,6 +70,8 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
       openSideChat(sessionId, value?.chatId)
       return value
     },
+    openComputer: id => ui.set(state => ({ ...state, details: id, view: 'computer', settings: null, renaming: false, panelYield: yieldTo(state, 'computer') })),
+    computerCall: (name, body) => call(`computer-${name}`, body),
     sideCall: (name, body) => after(call(name, body)),
     askSide: (sessionId, chatId, text) => after(call('side-ask', { sessionId, chatId, text })),
     cancelSide: (chatId, entryId) => after(call('side-cancel', { chatId, entryId })),

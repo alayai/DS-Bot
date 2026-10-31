@@ -171,3 +171,58 @@ The launch URL of the Host is good for one use only. When the first load never c
 The Host installs plugins with the app's own pnpm (`node_modules/pnpm`).
 
 Some files adapt code from DSH Desktop (MIT); see [NOTICE](../NOTICE).
+
+## Optional Computer runtime payload
+
+Builds from this branch include `resources/computer-runtime` beside `app.asar`.
+`beforePack` prepares and verifies its Broker, Python helpers, image recipe,
+runtime lock and notices. `npm run runtime:computer` prepares the same payload
+under `build/runtime` for source development, without downloading images or
+starting Docker. Keep the installed copy of `ds-bot` up to date as described above.
+
+Computers remain disabled by default. To use the packaged payload, set
+`DS_BOT_COMPUTER_CONFIG` to an explicit JSON file:
+
+```json
+{
+  "enabled": true,
+  "broker": {
+    "bundled": true,
+    "image": "sha256:REPLACE_WITH_64_HEX_LOCAL_IMAGE_ID",
+    "wsl": {
+      "distribution": "Ubuntu-24.04",
+      "node": "/absolute/linux/path/to/node"
+    }
+  }
+}
+```
+
+Windows requires Linux Node.js 22 or newer and local Docker in the selected WSL
+distribution. The app verifies the bundled file inventory, then runs `wslpath`
+with fixed arguments to translate the package location; paths with spaces are
+supported. Linux x64 omits the `wsl` object. Do not specify `entrypoint` alongside
+`bundled`; existing configurations with an explicit Broker path remain supported.
+No model or web request can change these paths or prepare an image.
+
+Prepare/check the separately built image with the bundled `runtime.mjs` in Linux
+or WSL, following [Computer runtime](../computer-runtime/README.md). The package
+does not carry the desktop image, Docker or WSL. A damaged opted-in payload stops
+launch with an error; disabling the Computer opt-in leaves normal app launch
+independent of that payload. Hash checks detect corruption and are not a signature.
+
+The pack hook uses a temporary directory and a build lock. If the build process
+is killed, remove `build/runtime/.computer-runtime.prepare.lock` only after
+confirming no packaging process is running, then prepare again. This directory
+contains generated build artifacts, not desktop homes or user DSH data.
+
+A payload can be checked with real Docker from Linux x64 before GUI testing:
+
+```sh
+node scripts/check-computer-runtime.mjs /absolute/payload/computer-runtime sha256:LOCAL_IMAGE_ID
+```
+
+This explicitly starts a fresh disposable test desktop, verifies a screenshot
+and persistent file bytes, and removes only its own test resources. It does not
+certify an installed Windows app, its GUI or a signed NSIS installer. Existing
+Computer homes remain pinned to their original image; app updates do not migrate
+them automatically.

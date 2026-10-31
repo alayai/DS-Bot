@@ -63,7 +63,12 @@ try {
     # The desktop app installs a copy of the plugin. Hash npm's package file list so new
     # or removed source files also refresh that copy, even when its version is unchanged.
     $packJson = Invoke-Npm $plugin @('pack', '--dry-run', '--json', '--ignore-scripts')
-    $package = @((($packJson -join "`n") | ConvertFrom-Json))[0]
+    # npm 12 returns { "<name>": { files } }. Older npm returns a one-element array.
+    $parsed = ($packJson -join "`n") | ConvertFrom-Json
+    $package = @($parsed)[0]
+    if (-not $package.files) {
+        $package = @($parsed.PSObject.Properties | ForEach-Object { $_.Value } | Where-Object { $_.files })[0]
+    }
     if (-not $package.files) { throw 'npm did not return the plugin package file list.' }
     $appFiles = @((Join-Path $appDir 'package.json'), (Join-Path $appDir 'package-lock.json'), (Join-Path $appDir '.npmrc'))
     $appFiles += @($package.files | ForEach-Object { Join-Path $plugin $_.path })

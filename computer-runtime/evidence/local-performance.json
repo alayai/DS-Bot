@@ -1,0 +1,57 @@
+{
+  "timings": [
+    {
+      "name": "cached-start",
+      "ms": 1838
+    },
+    {
+      "name": "screenshot",
+      "ms": 648
+    },
+    {
+      "name": "screenshot",
+      "ms": 305
+    },
+    {
+      "name": "screenshot",
+      "ms": 276
+    },
+    {
+      "name": "screenshot",
+      "ms": 248
+    },
+    {
+      "name": "screenshot",
+      "ms": 251
+    },
+    {
+      "name": "screenshot",
+      "ms": 262
+    },
+    {
+      "name": "screenshot",
+      "ms": 248
+    },
+    {
+      "name": "screenshot",
+      "ms": 266
+    },
+    {
+      "name": "screenshot",
+      "ms": 280
+    },
+    {
+      "name": "screenshot",
+      "ms": 254
+    },
+    {
+      "name": "upgrade",
+      "ms": 7708
+    }
+  ],
+  "screenshotP95Ms": 648,
+  "samples": 10,
+  "image": "sha256:05c781b5fe711e1b3c62247ca5074ef33851306c2de5ed4e4683f9478dfd5c7a",
+  "environment": "WSL Linux x64 client with local Docker Desktop Linux Engine",
+  "scope": "10 sequential screenshots; warm local image; two temporary image variants with unchanged browser/driver; no Windows GUI or visual-model benchmark"
+}

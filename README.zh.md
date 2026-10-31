@@ -17,6 +17,8 @@ DS Bot 是一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 
 ## 安装
 
+**实验性 Computer runtime（源码开发版）：**可选的 Linux CUA 容器后端已加入私有桌面面板、人类接管、Bot 逐次审批或可选 YOLO 免审批输入、聊天文件附件、接管回答后返回原聊天续跑，以及停止状态下的备份、恢复、镜像与 home 成对升级/回滚、存储诊断和备份/操作历史清理。Windows 源码版可通过 `start-cua.ps1` 使用 WSL 桥接。本分支构建的应用也会携带 Broker 运行时并在使用前校验，已有 home 在显式迁移通过前始终绑定原镜像。运行时默认关闭、容器断网；未配置时“私有桌面”入口会显示设置说明。使用步骤与限制见 [开发说明](computer-runtime/README.md)。
+
 **桌面应用（Windows、macOS、Linux）**
 
 桌面应用自带 dsh，不用先装 dsh。在 [Releases](https://github.com/Fei2411/DS-Bot/releases) 里下载：

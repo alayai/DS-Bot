@@ -139,14 +139,15 @@ export async function submitSide({ call, roster, sessionId, args, attachments, o
 }
 
 // The strip shows whenever there is at least one browser tab or side chat.
-export const panelHasStrip = (canBrowse, tabCount, sideCount) =>
-  (canBrowse === true && tabCount > 0) || sideCount > 0
+export const panelHasStrip = (canBrowse, tabCount, sideCount, canComputer = false) =>
+  canComputer || (canBrowse === true && tabCount > 0) || sideCount > 0
 
 // The strip `···` menu keys, in order. 'sep' joins the two groups only when
 // both have entries.
-export function stripMenuKeys({ canBrowse, canTerminal, canFiles }) {
+export function stripMenuKeys({ canBrowse, canComputer, canTerminal, canFiles }) {
   const keys = []
   if (canBrowse === true) keys.push('new-tab')
+  if (canComputer === true) keys.push('computer')
   keys.push('side')
   const tail = []
   if (canTerminal === true) tail.push('terminal')
@@ -157,9 +158,10 @@ export function stripMenuKeys({ canBrowse, canTerminal, canFiles }) {
 
 // The details `···` menu keys, in order. A group gets only the tail group; a
 // non-team surface gets nothing, and the button hides.
-export function drawerMenuKeys({ bot, room, canBrowse, canTerminal, canFiles }) {
+export function drawerMenuKeys({ bot, room, canBrowse, canComputer, canTerminal, canFiles }) {
   const keys = []
   if (bot === true && canBrowse === true) keys.push('browser')
+  if (bot === true && canComputer === true) keys.push('computer')
   if (bot === true) keys.push('side')
   const tail = []
   if (bot === true || room === true) {

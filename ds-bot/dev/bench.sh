@@ -10,12 +10,17 @@
 # Environment: CONTEXT_WINDOW (the mock models' context window, in tokens, with an 8,000
 # token reply; default: the adapter's own), CHECK_RATIO (the plugin's checkRatio), MOCK_DELAY_MS,
 # DSH_HARNESS (the deepseek-harness checkout; default: beside this checkout, else at the
-# same place in the main worktree).
+# same place in the main worktree). DSH_CLI may instead name an absolute installed dsh
+# executable; that mode uses the public CLI without checkout-only test overlays.
+# DSH_START_TIMEOUT_SEC extends the default 120s startup window for slow filesystems.
 set -eu
 NAME=${1:?usage: bench.sh <name> <web-port> <mock-port> [start|stop|reset|status]}
 WEB_PORT=${2:?usage: bench.sh <name> <web-port> <mock-port> [start|stop|reset|status]}
 MOCK_PORT=${3:?usage: bench.sh <name> <web-port> <mock-port> [start|stop|reset|status]}
 ACTION=${4:-start}
+START_TIMEOUT=${DSH_START_TIMEOUT_SEC:-120}
+case "$START_TIMEOUT" in *[!0-9]*|'') echo "DSH_START_TIMEOUT_SEC must be a positive integer" >&2; exit 1 ;; esac
+[ "$START_TIMEOUT" -gt 0 ] || exit 1
 case "$NAME" in *[!a-z0-9-]*|'') echo "bench name must match [a-z0-9-]+" >&2; exit 1 ;; esac
 if [ "$WEB_PORT" = 3080 ]; then echo "port 3080 belongs to the real service" >&2; exit 1; fi
 
@@ -98,9 +103,18 @@ start() {
   if ! alive web; then
     log="$HOME_DIR/web.log"
     rm -f "$log" "$HOME_DIR/web.pid"
-    (cd "$DSH_HARNESS" && DSH_HOME="$HOME_DIR" DEEPSEEK_BASE_URL="http://127.0.0.1:$MOCK_PORT/v1" DEEPSEEK_API_KEY=mock-key \
+    if [ -n "${DSH_CLI:-}" ]; then
+      case "$DSH_CLI" in /*) ;; *) echo "DSH_CLI must be an absolute executable path" >&2; exit 1 ;; esac
+      [ -x "$DSH_CLI" ] || { echo "DSH_CLI is not executable" >&2; exit 1; }
+      launch_dir="$ROOT"
+      set -- "$DSH_CLI" --profile web
+    else
+      launch_dir="$DSH_HARNESS"
+      set -- pnpm -s dsh --profile web --patch apps/web/tests/pin-browse-picker.overlay.yml
+    fi
+    (cd "$launch_dir" && DSH_HOME="$HOME_DIR" DEEPSEEK_BASE_URL="http://127.0.0.1:$MOCK_PORT/v1" DEEPSEEK_API_KEY=mock-key \
       exec setsid sh -c 'set -eu; echo $$ >"$1"; shift; exec "$@"' sh "$HOME_DIR/web.pid" \
-      pnpm -s dsh --profile web --patch apps/web/tests/pin-browse-picker.overlay.yml --patch "$HOME_DIR/bench.patch.yml" \
+      "$@" --patch "$HOME_DIR/bench.patch.yml" \
       --no-open --port "$WEB_PORT") </dev/null >"$log" 2>&1 &
     # The process writes its own pid just before dsh starts; wait for that file so a
     # start still in progress is not read as an exit.
@@ -109,7 +123,7 @@ start() {
     i=0
     until grep -q "dsh web: http" "$log" 2>/dev/null; do
       i=$((i + 1))
-      if [ $i -gt 120 ] || ! alive web; then echo "dsh web did not start; see $log" >&2; tail -20 "$log" | grep -v 'token=' >&2; exit 1; fi
+      if [ $i -gt "$START_TIMEOUT" ] || ! alive web; then echo "dsh web did not start; see $log" >&2; tail -20 "$log" | grep -v 'token=' >&2; exit 1; fi
       sleep 1
     done
   fi

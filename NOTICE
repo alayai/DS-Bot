@@ -133,3 +133,17 @@ their ideas; it does not contain their code.
     (packages/experimental/client-ui-voice-input), MIT: the voice chat
     records with the same steps (record, resample to 16 kHz mono, PCM16 WAV)
     before it calls the plugin's speech service.
+
+==============================================================================
+Optional Computer runtime dependencies
+==============================================================================
+
+Cua Driver and the Cua XFCE base image (https://github.com/trycua/cua)
+MIT License, Copyright (c) 2025 Cua AI, Inc.
+
+  computer-runtime/desktop/ builds an optional development image from the pinned
+  official XFCE image and installs the checksum-pinned cua-driver Python wheel.
+  The driver license is included in computer-runtime/licenses/cua-MIT.txt.
+  Operating-system and desktop packages keep their notices inside the image;
+  this development image is not yet a distribution release.
+  The Computer orchestration and plugin code are original DS Bot code.

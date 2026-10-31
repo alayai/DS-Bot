@@ -12,10 +12,12 @@ import { MIN_CHAT } from './frame-layout.js'
 import { chatRoom } from './frame-watch.js'
 import { SPRING_SHAPE, springEasing } from './motion.js'
 import { DetailsDrawer } from './details-drawer.js'
+import { ComputerView, ComputerSetup } from './computer-pane.js'
 import { SideChatView } from './side-chat.js'
 import { panelHasStrip, sideChatsOf, stripMenuKeys } from './side-model.js'
 import { DotsIcon, FolderIcon, SideIcon, TerminalIcon } from './icons.js'
 import { t } from './i18n.js'
+import { hasComputerEntry } from './computer-model.js'
 import { rectsOverlap } from './browser-overlap.js'
 
 export const PANEL_LINGER_MS = 300
@@ -70,7 +72,7 @@ const savedWidth = () => {
 // `room` is what the panel and the conversation share: the viewport minus the
 // left column's footprint (frame-layout.js). The panel never takes the last
 // MIN_CHAT px of it; below that it covers the conversation instead.
-const widthRange = (view, room) => (view === 'browser'
+const widthRange = (view, room) => (['browser', 'computer'].includes(view)
   ? [MIN_WIDTH, room - MIN_CHAT]
   : [DETAILS_WIDTH, Math.min(DETAILS_MAX, room - MIN_CHAT)])
 const fitWidth = (width, [low, high]) => Math.round(Math.max(low, Math.min(width, high)))
@@ -120,6 +122,7 @@ export function menuItemFor(key, actions, subject) {
   switch (key) {
     case 'browser': return { key, icon: GlobeIcon, label: t('Browser'), onPick: report(() => actions.openBrowser(subject)) }
     case 'new-tab': return { key, icon: PlusTabIcon, label: t('New browser tab'), onPick: report(() => actions.browserNewTab(subject)) }
+    case 'computer': return { key, icon: WindowIcon, label: t('Private desktop'), onPick: report(() => actions.openComputer(subject)) }
     case 'side': return { key, icon: SideIcon, label: t('Side chat'), onPick: report(() => actions.newSideChat(subject)) }
     case 'terminal': return { key, icon: TerminalIcon, label: t('Terminal'), onPick: report(() => actions.newTerminal()) }
     case 'files': return { key, icon: FolderIcon, label: t('Files'), onPick: report(() => actions.openFiles()) }
@@ -133,7 +136,7 @@ const sideTitle = chat => chat?.entries?.[0]?.question?.trim() || t('Side chat')
 // The strip across the panel's top: the Bot's own tab first (the details view,
 // collapsed), then one tab per browser page, one per side chat, then `···` and
 // close.
-function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, reading, onView, actions, useBrowserPages }) {
+function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, canComputer, reading, onView, actions, useBrowserPages }) {
   const pages = useBrowserPages(map => map)
   const wrap = useRef(null)
   const ind = useRef(null)
@@ -147,7 +150,7 @@ function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, r
     if (!box || !capsule) return undefined
     const node = view === 'details'
       ? box.querySelector('.bt-ptab-bot')
-      : view === 'side'
+      : view === 'computer' ? box.querySelector('.bt-ptab-computer') : view === 'side'
         ? box.querySelector(`[data-side="${side}"]`)
         : box.querySelector(`[data-tab="${active}"]`)
     if (under.current !== node) {
@@ -192,7 +195,7 @@ function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, r
     return () => { watcher.current = null; observer.disconnect() }
   }, [])
   const items = stripMenuKeys({
-    canBrowse,
+    canBrowse, canComputer,
     canTerminal: actions.canOpenTerminal?.() === true,
     canFiles: actions.canOpenFiles?.() === true,
   }).map(key => menuItemFor(key, actions, subject))
@@ -204,6 +207,7 @@ function PanelStrip({ bot, subject, view, ids, active, sides, side, canBrowse, r
       },
         h(BotMark, { bot, size: 20, state: reading ? 'searching' : 'idle' }),
         view === 'details' ? h('span', { className: 'bt-ptab-name' }, bot.name) : null),
+      canComputer ? h('button', { type: 'button', role: 'tab', className: 'bt-ptab bt-ptab-computer', 'aria-selected': view === 'computer', onClick: () => onView('computer') }, h(WindowIcon), t('Private desktop')) : null,
       ids.map((tabId) => {
         const page = pages[tabId] ?? EMPTY_PAGE
         const on = view === 'browser' && tabId === active
@@ -524,9 +528,10 @@ function ImportCard({ flow, page, busy, onApply, onCancel, onCloseAndImport, onD
 export function BotPanel({ pane, leaving, room, overlay, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages, useBrowserHolds }) {
   const bot = roster.byId[pane.id]
   const canBrowse = Boolean(bot && roster.browser === true && actions.browserShow)
+  const canComputer = Boolean(bot && hasComputerEntry(roster) && actions.computerCall)
   const sideChats = bot ? sideChatsOf(roster, bot.id) : []
   const sideChat = sideChats.find(chat => chat?.id === pane.side)
-  const view = pane.view === 'browser' && canBrowse ? 'browser' : pane.view === 'side' && sideChat !== undefined ? 'side' : 'details'
+  const view = pane.view === 'computer' && canComputer ? 'computer' : pane.view === 'browser' && canBrowse ? 'browser' : pane.view === 'side' && sideChat !== undefined ? 'side' : 'details'
   const tabState = useBrowserTabs(map => (bot ? (map[bot.id] ?? EMPTY_TABS) : EMPTY_TABS))
   const active = tabState.active
   const page = useBrowserPages(pages => (active ? pages[active] : null) ?? EMPTY_PAGE)
@@ -542,9 +547,9 @@ export function BotPanel({ pane, leaving, room, overlay, roster, actions, useSes
   const instant = dragging || resizing
   const [reading, setReading] = useState(false)
 
-  const panelWidth = fitWidth(width ?? (view === 'browser' ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, room))
+  const panelWidth = fitWidth(width ?? (['browser', 'computer'].includes(view) ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, room))
   // Once the browser has shown, the Bot page keeps its width (up to DETAILS_MAX).
-  useLayoutEffect(() => { if (view === 'browser' && width === null) setWidth(DEFAULT_WIDTH) }, [view, width])
+  useLayoutEffect(() => { if (['browser', 'computer'].includes(view) && width === null) setWidth(DEFAULT_WIDTH) }, [view, width])
   useLayoutEffect(() => { chatRoom.hold(instant) }, [instant])
   // A view switch that changes the width holds the guest back and pins both views to
   // the final width until the panel edge has settled. It is set while rendering, so the
@@ -714,10 +719,10 @@ export function BotPanel({ pane, leaving, room, overlay, roster, actions, useSes
     for (const name of ends) grip.addEventListener(name, onEnd)
   }
 
-  const hasStrip = panelHasStrip(canBrowse, tabState.ids.length, sideChats.length)
+  const hasStrip = panelHasStrip(canBrowse, tabState.ids.length, sideChats.length, canComputer)
   return h('aside', {
     ref: root, className: 'bt-panel', 'data-view': view,
-    'aria-label': view === 'browser' && bot ? t("{name}'s browser", { name: bot.name }) : view === 'side' ? t('Side chat') : t('Conversation details'),
+    'aria-label': view === 'computer' ? t('Private desktop') : view === 'browser' && bot ? t("{name}'s browser", { name: bot.name }) : view === 'side' ? t('Side chat') : t('Conversation details'),
     'data-leaving': leaving || undefined, 'aria-hidden': leaving || undefined, 'data-settling': settling || undefined,
     'data-instant': instant || undefined, 'data-dragging': dragging || undefined, 'data-overlay': overlay || undefined, style: { '--bt-panel-w': `${panelWidth}px` },
     onAnimationEnd: (event) => { if (event.target === event.currentTarget) setLanded(true) },
@@ -726,8 +731,8 @@ export function BotPanel({ pane, leaving, room, overlay, roster, actions, useSes
     // Over the whole window while dragging: the cursor stays a resize cursor and the
     // pages underneath (the chat, the guest) see no pointer.
     dragging ? createPortal(h('div', { className: 'bt-drag-shield', 'aria-hidden': true }), document.body) : null,
-    hasStrip ? h(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, sides: sideChats, side: pane.side, canBrowse, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
-    view === 'browser' && bot
+    hasStrip ? h(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, sides: sideChats, side: pane.side, canBrowse, canComputer, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
+    view === 'computer' && bot ? (roster.computer === true && !roster.computerPreparing ? h(ComputerView, { key: `computer:${bot.id}`, bot, actions, leaving }) : h(ComputerSetup, { key: `setup:${bot.id}`, bot, actions, leaving })) : view === 'browser' && bot
       ? h(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages, hold })
       : view === 'side' && sideChat
         ? h('div', { key: `side:${sideChat.id}`, className: 'bt-panel-view' }, h(SideChatView, { subject: pane.id, chat: sideChat, actions: panelActions }))

@@ -77,6 +77,7 @@ export function install(rt) {
     prefs: state.prefs,
     // Whether a Desktop window should serve Bot browser reads (see browser.js).
     browser: rt.browserEnabled,
+    computer: Boolean(rt.computer),
     // False when config.memory turns memory off: no Memory row or panel.
     memory: rt.memoryEnabled !== false,
     // Set while another dsh host holds the team (store.js): why this one cannot change it.
@@ -89,6 +90,8 @@ export function install(rt) {
   // turn there runs; the approvals waiting; per Bot, who it waits for to hand back work;
   // and per Session, when its running turn began.
   const live = () => ({
+    computer: Boolean(rt.computer),
+    computerPreparing: rt.computerSetup?.pending() ?? false,
     activity: rt.activityView(),
     work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {} },
     memoryNews: rt.memoryNews(),
@@ -144,16 +147,19 @@ export function install(rt) {
     try {
       const body = payload ?? {}
       await rt.refresh()
+      await rt.computerSetup?.restore().catch(() => {})
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
-        case 'state':
+        case 'state': {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
           if (readOnly === undefined) await rt.bootstrap()
           await rt.catalog()
           await rt.loadSecrets()
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) return ok({ revision: state.revision, unchanged: true, ...live() })
-          return ok({ ...view(), ...live() })
+          const computerHandoffs = rt.computer ? await rt.computer.handoffs.list().catch(() => []) : []
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) return ok({ revision: state.revision, unchanged: true, ...live(), computerHandoffs })
+          return ok({ ...view(), ...live(), computerHandoffs })
+        }
         case 'models':
           await rt.catalog({ fresh: true })
           return ok({ modelsKey: modelsKey() })
@@ -546,6 +552,51 @@ export function install(rt) {
           rt.browserChannel?.setHold(botId, { by: 'user', reason: 'stopped', note: 'The user is controlling this browser.' })
           return ok(true)
         }
+        case 'computer-setup-state':
+          return ok(await rt.computerSetup.state(body))
+        case 'computer-setup-prepare':
+        case 'computer-setup-retry':
+          return ok(await rt.computerSetup.prepare(body))
+        case 'computer-setup-cancel':
+          return ok(await rt.computerSetup.cancel(body))
+        case 'computer-state':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.state())
+        case 'computer-preview':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.preview(body))
+        case 'computer-input':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.humanAct(body))
+        case 'computer-files':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.files(body))
+        case 'computer-handoff-answer':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.handoffs.answer(body))
+        case 'computer-bind':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.bind(body))
+        case 'computer-diagnostics':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.diagnostics(body))
+        case 'computer-upgrade':
+        case 'computer-recover':
+        case 'computer-rollback':
+        case 'computer-delete-home':
+        case 'computer-delete-checkpoint':
+        case 'computer-prune-journal':
+        case 'computer-checkpoint':
+        case 'computer-restore':
+        case 'computer-recreate':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.storage(endpoint.slice('computer-'.length), body))
+        case 'computer-start':
+        case 'computer-stop':
+        case 'computer-takeover':
+        case 'computer-release':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.manage(endpoint.slice('computer-'.length), body))
         case 'diagnostics':
           await rt.load()
           return ok(await rt.diagnostics.report(body))

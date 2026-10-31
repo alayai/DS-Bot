@@ -1,0 +1,2 @@
+# Linux x86_64 artifact verified against the publisher's PyPI release metadata.
+cua-driver==0.37.0 --hash=sha256:e530ee36226d99516ef7ec696ba31d516e487ae5e5effdd5e2610c56af3eee19
