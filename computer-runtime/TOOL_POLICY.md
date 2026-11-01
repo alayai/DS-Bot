@@ -7,7 +7,7 @@ rejected at binding and registry loading. YOLO changes CUA action approval only.
 
 | Surface | Current behavior | Required before `computer-only` can be enabled |
 |---|---|---|
-| Nine `computer_*` tools | Registered in current Bot Agent scope; execution rechecks Bot, Session, turn, grant and generation. Child Agents cannot use the desktop. | Retain these checks, including direct and nested dispatch. |
+| Eleven `computer_*` tools | Registered in current Bot Agent scope; execution rechecks Bot, Session, turn, grant and generation. Child Agents cannot use the desktop. | Retain these checks, including direct and nested dispatch. |
 | Desktop start, stop, bind and storage | Authenticated `api/bot` management endpoints; no corresponding model tools. | Keep runtime paths, image IDs, volume names and permissions operator-owned. |
 | Native shell, filesystem, terminal and jobs | Continue under the existing DSH permission preset. The guest's isolation does not isolate these tools. | Deny host effects, background jobs and indirect execution for the restricted Agent. |
 | `run_code`, nested tools and wrappers | Public monotonic `tools.guard` covers ordinary and parent-token nested executor calls, as tested in `computer-dsh.test.js`. | Check every delegated effect, not just the outer tool name. A tool body can also call host services directly. |
@@ -38,3 +38,17 @@ composition and delegation policy; unsupported isolation must remain unavailable
 The queued-task tool `computer_task_update` only records progress/results for the
 current fenced task and turn. Management and backup operations remain user-only.
 Queue pause/recovery and guest network policies do not isolate host tools.
+
+The guest Firefox tools use bounded, original protocol commands over the existing
+engine connection, with no caller JavaScript, privileged browser context or
+published control port. They reuse the same screenshot-context, approval/YOLO,
+receipt and lease checks. Element actions validate a fresh DOM snapshot rather
+than pixel equality; changed node identity, URL/tab or bounded form state is
+refused. Unknown results remain unknown and are not automatically retried.
+Password and file inputs are refused. Guest profiles remain private desktop data.
+
+Task timeouts block new Computer calls immediately at the deadline; the periodic
+watchdog additionally persists a pause and revokes input before cancelling the
+matching turn. Repeating tasks only advance after explicit success. Delivery
+uncertainty, failed results and interrupted attempts never cause unattended retry.
+These guarantees apply to Computer tools, not to an Agent's other host tools.

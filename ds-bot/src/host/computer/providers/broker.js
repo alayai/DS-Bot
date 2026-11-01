@@ -247,6 +247,8 @@ export function createBrokerProvider(config = {}) {
     inspect: (record, options) => call('inspect', record, options),
     start: (record, options) => call('start', record, options),
     stop: (record, options) => call('stop', record, options),
+    browserObserve: (record, options) => call('browser-observe', record, options),
+    browserPerform: (record, options) => call('browser-perform', record, options),
     revoke: (record, options) => call('revoke', record, options),
     async observe(record, options) {
       const result = await call('observe', record, options)

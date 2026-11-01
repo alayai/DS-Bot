@@ -1197,3 +1197,40 @@ SHA-256: `489672725c5d136f1d9720bee1f8f0f3b5caa85e133017bd117011187f8a304e`.
 Independent extraction verified all 30 runtime files, installed setup loader,
 the host task implementation and generated client. Only the staged package version
 is `0.2.5-cua.17`; source remains `0.2.4`. Log: `/tmp/cua17-package.log`.
+
+## cua.18 — visible Firefox, progress limits and recurring tasks
+
+- Full plugin unit suite: **1558 passed, 2 skipped, 0 failed**. Tests cover
+  semantic screenshot context, Session/takeover/approval fences, durable rejected
+  and unknown receipts, strict action validation, daily/weekly scheduling,
+  multiple time zones, DST gaps/folds, bounded run history, missed-run policies,
+  explicit resume, progress renewal and total/stall deadline enforcement.
+- `python3 -m unittest computer-runtime/test/browser_test.py`: **5/5**. Changed
+  references and form state, password/file inputs, unsafe URLs, token consumption
+  and uncertain input after a successful clear are checked without Firefox.
+- `dev/computer-browser-smoke.mjs` uses real Docker, the pinned image, guest
+  Firefox and public DSH ToolRuntime. It passed visible observation,
+  fill/click/back/tab switching, stale-page and password rejection, release and
+  reconnect, persistent localStorage after desktop restart, loopback listener
+  checks, and refusal to replace an already-running ordinary Firefox.
+  It uses a local fixture, not a real account or a vision-model evaluation.
+- Real Chromium/React plus actual host task managers passed weekly weekday/time
+  zone/limits entry, live step/percentage/wait reasons, timeout pause, explicit
+  resume, successful recurrence and history. Existing backup download/import,
+  resource configuration and one-time scheduling regressions also passed.
+- App runtime packaging tests: **5/5**. Client/runtime generated checks and lint
+  passed; existing lint warnings remain. The Windows mount directory rename lock
+  was handled by generating in a temporary directory, verifying, copying payloads
+  with the manifest last and verifying the installed tree again.
+- Isolated mock DSH smoke: **52/52**. Test Web/mock processes, temporary team and
+  test desktop resources were cleaned up. No existing user container or DSH data
+  was modified. Windows Electron GUI acceptance remains with the user.
+- Logs: `/tmp/cua18-tests.log`, `/tmp/cua18-python.log`,
+  `/tmp/cua18-browser.log`, `/tmp/cua18-ui.log`, `/tmp/cua18-app.log`,
+  `/tmp/cua18-lint.log`, `/tmp/cua18-smoke.log`, `/tmp/cua18-package.log`.
+
+Artifact: `artifacts/ds-bot-0.2.5-cua.18.tgz`, 1,146,620 bytes.
+SHA-256: `8b68206116b19f3f147190519a8adc5a621de7c315ca8fc99a8b65a5e9207e52`.
+Independent extraction verified all **32** runtime files, the installed setup
+loader, new host/browser modules and generated client bytes. Source version
+remains 0.2.4; only the staged artifact is 0.2.5-cua.18.

@@ -136,3 +136,92 @@ test('pause fences a delayed delivery before it reaches the agent inbox', async 
   await h.command('pause', { id: item.id }); release(); await pending
   assert.equal(h.sent.length, 0); assert.equal((await h.tasks.list('a'))[0].status, 'paused')
 })
+
+const repeat = { kind: 'daily', time: '09:00', timeZone: 'Asia/Shanghai', missed: 'once' }
+async function enterDue(h, item) {
+  h.advance(Math.max(0, item.runAt - h.now()))
+  await h.tasks.tick()
+  const current = (await h.tasks.list('a')).find(task => task.id === item.id)
+  h.rt.live.set('chat', { turn: h.sent.length, info: { exchangeId: current.attempt } })
+  await h.tasks.enter(h.agent)
+  return current
+}
+test('recurring success schedules one future occurrence, persists history and fences the old attempt', async t => {
+  const h = await fixture(t), [item] = await h.command('add', { goal: 'Daily check', repeat })
+  await enterDue(h, item)
+  await h.tasks.report({ taskId: item.id, status: 'completed', note: 'Verified.' }, {})
+  const current = (await h.tasks.list('a'))[0]
+  assert.equal(current.status, 'queued'); assert.equal(current.runs, 1)
+  assert.ok(current.runAt > h.now()); assert.equal(current.history[0].note, 'Verified.')
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+  await assert.rejects(h.tasks.report({ taskId: item.id, status: 'completed', note: 'Duplicate' }, {}))
+  h.rt.live.clear(); h.reload()
+  assert.equal((await h.tasks.list('a'))[0].runAt, current.runAt)
+  await h.tasks.tick(); assert.equal(h.sent.length, 1)
+})
+test('recurring history stays bounded and failures block later occurrences until review', async t => {
+  const h = await fixture(t), [item] = await h.command('add', { goal: 'Daily check', repeat })
+  for (let n = 0; n < 22; n++) {
+    await enterDue(h, (await h.tasks.list('a'))[0])
+    await h.tasks.report({ taskId: item.id, status: n === 21 ? 'failed' : 'completed', note: `Evidence ${n}` }, {})
+    h.rt.live.clear()
+  }
+  let current = (await h.tasks.list('a'))[0]
+  assert.equal(current.status, 'failed'); assert.equal(current.runs, 22)
+  assert.equal(current.history.length, 20); assert.equal(current.history[0].note, 'Evidence 2')
+  h.advance(3 * 86400000); await h.tasks.tick(); assert.equal(h.sent.length, 22)
+  await h.command('resume', { id: item.id, confirm: true }); await h.tasks.tick()
+  current = (await h.tasks.list('a'))[0]
+  assert.equal(current.status, 'sending'); assert.equal(h.sent.length, 23)
+})
+test('overdue repeat coalesces once or skips instead of replaying a backlog', async t => {
+  for (const missed of ['once', 'skip']) {
+    const h = await fixture(t), [item] = await h.command('add', { goal: 'Check', repeat: { ...repeat, missed } })
+    h.advance(item.runAt - h.now() + 3 * 86400000)
+    await h.tasks.tick(); await h.tasks.tick()
+    assert.equal(h.sent.length, missed === 'once' ? 1 : 0)
+    if (missed === 'skip') {
+      assert.ok((await h.tasks.list('a'))[0].runAt > h.now())
+      await h.command('pause', { id: item.id })
+      await h.command('resume', { id: item.id, confirm: true })
+      h.advance(360000); await h.tasks.tick()
+      assert.equal(h.sent.length, 1, 'explicit resume is not skipped as a missed recurrence')
+    }
+  }
+})
+test('task deadlines block tools immediately and watchdog pauses/cancels only its own turn', async t => {
+  const h = await fixture(t), item = await h.start()
+  await h.tasks.report({ taskId: item.id, status: 'progress', note: 'Read page', step: 'Inspect', progress: 20 }, {})
+  h.advance(590000)
+  await h.tasks.report({ taskId: item.id, status: 'waiting', note: 'Read page', step: 'Inspect', progress: 20, waitReason: 'Waiting for server' }, {})
+  h.advance(10000)
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /No progress/)
+  await assert.rejects(h.tasks.report({ taskId: item.id, status: 'progress', note: 'Late heartbeat' }, {}), /No progress/)
+  await h.tasks.tick()
+  let current = (await h.tasks.list('a'))[0]
+  assert.equal(current.status, 'paused'); assert.match(current.waitReason, /No progress/)
+  assert.equal(current.elapsedMs, 600000); assert.equal(h.cancelled.length, 1)
+  h.advance(60000); current = (await h.tasks.list('a'))[0]
+  assert.equal(current.elapsedMs, 600000)
+})
+test('meaningful progress renews stall time but never the total deadline', async t => {
+  const h = await fixture(t)
+  const [item] = await h.command('add', { goal: 'Limited', maxRunMs: 120000, stallMs: 60000 })
+  await h.tasks.tick()
+  const queued = (await h.tasks.list('a'))[0]
+  h.rt.live.set('chat', { turn: 1, info: { exchangeId: queued.attempt } }); await h.tasks.enter(h.agent)
+  for (const progress of [20, 40]) {
+    h.advance(50000); await h.tasks.report({ taskId: item.id, status: 'progress', note: `Step ${progress}`, progress }, {})
+    await h.tasks.tick(); assert.equal((await h.tasks.list('a'))[0].status, 'running')
+  }
+  h.advance(20000); await h.tasks.tick()
+  assert.match((await h.tasks.list('a'))[0].waitReason, /time limit/)
+})
+test('queue reports blockers and corrupt optional task records are rejected', async t => {
+  const h = await fixture(t), [item] = await h.command('add', { goal: 'Check', repeat })
+  assert.equal((await h.tasks.list('a'))[0].queueReason, 'scheduled')
+  h.advance(item.runAt - h.now()); h.rt.live.set('chat', { turn: 4 })
+  assert.equal((await h.tasks.list('a'))[0].queueReason, 'bot-busy')
+  await assert.rejects(h.store.update(draft => { draft.tasks[item.id].history = [null] }), /Invalid desktop task/)
+  await assert.rejects(h.store.update(draft => { draft.tasks[item.id].resumeOnce = 'yes' }), /Invalid desktop task/)
+})

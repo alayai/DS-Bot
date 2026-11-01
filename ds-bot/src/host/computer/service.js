@@ -3,7 +3,7 @@ import { checkTransfer, CHUNK_SIZE } from '../../shared/computer-files.js'
 import { DEFAULT_RESOURCE_LIMITS, resourceLimits, resourceWarnings } from '../../shared/computer-resources.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { checkActions, checkFrame, checkId, checkProvider, refused } from './contract.js'
+import { checkActions, checkBrowserAction, checkFrame, checkId, checkProvider, refused } from './contract.js'
 import { createComputerStore } from './store.js'
 import { createLeases } from './leases.js'
 import { contextFile, fileBytes, fileName } from './artifacts.js'
@@ -19,6 +19,7 @@ const receipt = operation => ({
   operationId: operation.id,
   outcome: operation.outcome === 'pending' ? 'unknown' : operation.outcome,
   completedActions: operation.completedActions ?? 0,
+  ...(operation.note ? { note: operation.note } : {}),
   retryPolicy: operation.outcome === 'completed' ? 'do-not-repeat' : 'observe-first',
 })
 
@@ -494,7 +495,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     const view = await state()
     return view.computers.find(item => item.id === record.id)
   }
-  async function observe(exec) {
+  async function observe(exec, browser = false) {
     await ready()
     const who = owner(exec)
     const record = await assigned(who.botId)
@@ -506,6 +507,14 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       held.set(record.id, lease)
       frames.delete(record.id)
       const frame = checkFrame(await provider.observe(record, { fence: lease.fence, signal }))
+      let browserState
+      if (browser) {
+        if (!provider.browserObserve) throw refused('unavailable', 'This provider has no guest browser integration.')
+        browserState = await provider.browserObserve(record, { fence: lease.fence, signal })
+        if (browserState?.outcome === 'rejected') throw refused('browser-unavailable', String(browserState.error).slice(0, 500))
+        if (typeof browserState?.token !== 'string' || browserState.token.length > 100 || !Array.isArray(browserState.elements)
+          || browserState.elements.length > 160 || JSON.stringify(browserState).length > 200000) throw refused('observation-unavailable', 'Invalid browser observation.')
+      }
       signal.throwIfAborted()
       await stillOwns(record, who)
       leases.check(lease)
@@ -529,12 +538,13 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         observationId: `obs_${randomUUID()}`, width: attachment.width, height: attachment.height,
         nativeWidth: frame.width, nativeHeight: frame.height, generation: record.generation,
         scaleX: frame.width / attachment.width, scaleY: frame.height / attachment.height, origin: { x: 0, y: 0 },
+        ...(browser ? { browser: browserState } : {}),
       }
       frames.set(record.id, { ...observation, imageHash: imageHash(frame.data), attachmentId: attachment.attachmentId, lease, who })
       return { text: JSON.stringify(observation), attachment }
     })
   }
-  async function act(args, exec) {
+  async function act(args, exec, browser = false) {
     await ready()
     const who = owner(exec)
     const record = await assigned(who.botId)
@@ -542,7 +552,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (record.grant !== 'operate') throw refused('policy-denied', 'The user granted observation only.')
     if (typeof exec.callId !== 'string' || !exec.callId) throw refused('invalid', 'A tool call id is required.')
     const id = hash([record.id, record.generation, who.sessionId, who.turnId, exec.callId])
-    const actionHash = hash(args)
+    const actionHash = hash(browser ? ['browser', args] : args)
     const previous = (await store.load()).operations[id]
     if (previous) {
       if (previous.hash !== actionHash) throw refused('conflict', 'This call id was already used for different input.')
@@ -558,8 +568,9 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       block.type === 'image' && block.offloaded !== true && block.attachment?.attachmentId === frame.attachmentId))) {
       throw refused('stale-observation', 'The screenshot is no longer in this Session context. Observe again.')
     }
-    const actions = checkActions(args.actions, frame)
-    if (actions.length > (provider.maxActions ?? 8) || (provider.actions && actions.some(action => !provider.actions.includes(action.type)))) {
+    const actions = browser ? [checkBrowserAction(args.action)] : checkActions(args.actions, frame)
+    if (browser && (!provider.browserPerform || (actions[0].type !== 'open' && !frame.browser))) throw refused('stale-observation', 'Observe the guest browser before using element or tab references.')
+    if (!browser && (actions.length > (provider.maxActions ?? 8) || (provider.actions && actions.some(action => !provider.actions.includes(action.type))))) {
       throw refused('unsupported-action', 'This provider does not support the requested action batch.')
     }
     leases.check(frame.lease)
@@ -575,7 +586,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         entry.previewAllowed = true
         try {
           decision = await approval.request({
-            agent: exec.agent, toolName: 'computer_act', callId: exec.callId,
+            agent: exec.agent, toolName: browser ? 'computer_browser_act' : 'computer_act', callId: exec.callId,
             signal: AbortSignal.any([signal, waiting.signal]),
             reason: `Allow ${actions.length} desktop action(s) for ${rt.botOf(who.botId).name}? Review the current desktop and requested tool arguments.`,
           })
@@ -591,10 +602,12 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       }
       await stillOwns(record, who)
       leases.check(frame.lease)
-      const currentFrame = checkFrame(await provider.observe(record, { fence: frame.lease.fence, signal }))
-      if (imageHash(currentFrame.data) !== frame.imageHash) {
-        frames.delete(record.id)
-        throw refused('stale-observation', 'The desktop changed before input. Observe again before requesting new input.')
+      if (!browser || actions[0].type === 'open') {
+        const currentFrame = checkFrame(await provider.observe(record, { fence: frame.lease.fence, signal }))
+        if (imageHash(currentFrame.data) !== frame.imageHash) {
+          frames.delete(record.id)
+          throw refused('stale-observation', 'The desktop changed before input. Observe again before requesting new input.')
+        }
       }
       signal.throwIfAborted()
       await stillOwns(record, who)
@@ -609,7 +622,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         signal.throwIfAborted()
         await stillOwns(record, who)
         leases.check(frame.lease)
-        const response = await provider.perform(record, {
+        const response = browser ? await provider.browserPerform(record, {
+          action: actions[0], token: frame.browser?.token, fence: frame.lease.fence,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+        }) : await provider.perform(record, {
           actions: actions.map(action => (action.x === undefined ? action : {
             ...action, x: Math.floor(action.x * frame.scaleX), y: Math.floor(action.y * frame.scaleY),
           })),
@@ -620,6 +636,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
           || !Number.isInteger(response.completedActions) || response.completedActions < 0 || response.completedActions > actions.length
           || (response.outcome === 'completed' && response.completedActions !== actions.length)) throw new Error('Invalid receipt')
         result = { outcome: response.outcome, completedActions: response.completedActions }
+        if (browser && response.outcome === 'rejected' && typeof response.error === 'string') result.note = response.error.slice(0, 500)
       } catch {
         // The driver may have accepted input before the connection failed.
         result = { outcome: 'unknown', completedActions: 0 }

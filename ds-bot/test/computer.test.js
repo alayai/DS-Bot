@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createComputerService } from '../src/host/computer/service.js'
 import { createLeases } from '../src/host/computer/leases.js'
-import { checkActions, checkFrame } from '../src/host/computer/contract.js'
+import { checkActions, checkFrame, checkBrowserAction } from '../src/host/computer/contract.js'
 import { createFakeComputer } from '../src/host/computer/providers/fake.js'
 import { install as installApprovals } from '../src/host/approvals.js'
 
@@ -86,6 +86,71 @@ async function setup(t, { provider = createFakeComputer(), options } = {}) {
   const click = frame => ({ observationId: frame.observationId, actions: [{ type: 'click', x: 3, y: 4 }] })
   return { service, provider, rt, services, exec, bind, start, manage, observe, click, home, messages, bots, room, owners, readOnly: value => { readOnly = value } }
 }
+
+test('semantic browser tools share screenshots, approvals, receipts and session fences', async t => {
+  const h = await setup(t); await h.start()
+  let dispatched = 0, approvals = 0
+  h.provider.browserObserve = async () => ({ token: 'fixture-token', elements: [{ ref: '1', name: 'Save' }], text: 'Page content' })
+  h.provider.browserPerform = async (_record, options) => {
+    assert.equal(options.token, 'fixture-token'); dispatched++
+    return { outcome: 'completed', completedActions: 1 }
+  }
+  h.services.approval.request = async args => { assert.equal(args.toolName, 'computer_browser_act'); approvals++; return 'allowed-once' }
+  const observed = await h.service.observe(h.exec(), true), frame = JSON.parse(observed.text)
+  h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
+  assert.equal(frame.browser.text, 'Page content')
+  const args = { observationId: frame.observationId, action: { type: 'click', ref: '1' } }
+  await assert.rejects(h.service.act(args, h.exec('a-group', 'other'), true), fails('stale-observation'))
+  assert.equal((await h.service.act(args, h.exec(), true)).outcome, 'completed')
+  assert.equal((await h.service.act(args, h.exec(), true)).outcome, 'completed')
+  assert.equal(dispatched, 1); assert.equal(approvals, 1)
+  await assert.rejects(h.service.act(args, h.exec()), fails('conflict'))
+  await assert.rejects(h.service.act(args, h.exec('a', 'new'), true), fails('stale-observation'))
+})
+
+test('semantic browser cannot use missing context, ordinary frames for refs or human-owned control', async t => {
+  const h = await setup(t); await h.start()
+  h.provider.browserObserve = async () => ({ token: 'token', elements: [] })
+  h.provider.browserPerform = async () => assert.fail('No input should be dispatched')
+  const observed = await h.service.observe(h.exec(), true), frame = JSON.parse(observed.text)
+  const args = { observationId: frame.observationId, action: { type: 'back' } }
+  await assert.rejects(h.service.act(args, h.exec(), true), fails('stale-observation'))
+  h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
+  const ordinary = await h.observe()
+  await assert.rejects(h.service.act({ ...args, observationId: ordinary.observationId }, h.exec(), true), fails('stale-observation'))
+  await h.manage('takeover')
+  await assert.rejects(h.service.observe(h.exec(), true), fails('human-control'))
+})
+
+test('semantic rejected and unknown outcomes are durable and never replayed', async t => {
+  const h = await setup(t); await h.start()
+  h.provider.browserObserve = async () => ({ token: 'token', elements: [] })
+  let calls = 0
+  for (const outcome of ['rejected', 'unknown']) {
+    h.provider.browserPerform = async () => {
+      calls++
+      if (outcome === 'unknown') throw Error('connection lost after input')
+      return { outcome, completedActions: 0, error: 'The page changed.' }
+    }
+    const observed = await h.service.observe(h.exec(), true)
+    h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
+    const args = { observationId: JSON.parse(observed.text).observationId, action: { type: 'back' } }
+    const result = await h.service.act(args, h.exec('a', outcome), true)
+    assert.equal(result.outcome, outcome)
+    if (outcome === 'rejected') assert.equal(result.note, 'The page changed.')
+    assert.deepEqual(await h.service.act(args, h.exec('a', outcome), true), result)
+  }
+  assert.equal(calls, 2)
+})
+
+test('browser action contract rejects scripts, credentials and unknown fields', () => {
+  for (const action of [{ type: 'open', url: 'javascript:alert(1)' }, { type: 'open', url: 'http://user:secret@localhost' },
+    { type: 'script', text: 'document.cookie' }, { type: 'click', ref: '1', script: 'x' },
+    { type: 'fill', ref: '1', text: 'x'.repeat(4001) }, { type: 'back', url: 'https://example.test' }]) {
+    assert.throws(() => checkBrowserAction(action))
+  }
+  assert.deepEqual(checkBrowserAction({ type: 'fill', ref: '1', text: '' }), { type: 'fill', ref: '1', text: '' })
+})
 
 test('Computer starts only on an explicit management request and survives service reload', async t => {
   const h = await setup(t)

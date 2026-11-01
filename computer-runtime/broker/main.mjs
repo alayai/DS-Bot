@@ -12,6 +12,7 @@ import { maintainStorage } from './maintenance.mjs'
 import { createTransfers } from './transfers.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
 import { rfbInput } from './rfb.mjs'
+import { createBrowserBridge } from './browser.mjs'
 import { discoverEngine, validateEngine, runEngine, engineCommand, engineEnvironment } from '../engine.mjs'
 
 const run = promisify(execFile)
@@ -316,6 +317,8 @@ async function revoke(value) {
     await value.inputCleanup
     await value.settled
     try {
+      await value.browser?.close()
+      value.browser = null
       const info = await inspect(value)
       if (info?.State.Running) {
         await value.transfers?.clear()
@@ -555,6 +558,16 @@ async function dispatch(method, record, options, signal, onProgress) {
       catch (error) { fail(error.message) }
     }
     if (method === 'preview') return await preview(value, signal)
+    if (method === 'browser-observe' || method === 'browser-perform') {
+      if (!value.frame || value.fence !== options.fence) fail('The observation or input lease was revoked.')
+      const info = await inspect(value, signal)
+      if (!info?.State.Running) fail('Start the desktop before using its browser.')
+      if (!value.browser || value.browser.closed) value.browser = await createBrowserBridge(value, { executable, engine })
+      if (method === 'browser-perform') value.frame = null
+      return await value.browser.call(method === 'browser-observe' ? 'observe' : 'perform', {
+        action: options.action, token: options.token,
+      }, signal)
+    }
     if (method === 'observe') {
       if (typeof options.fence !== 'string' || options.fence.length > 100) fail('Invalid input fence.')
       const peer = await client(value, signal, 'client', value.modelSession)

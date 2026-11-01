@@ -17559,6 +17559,52 @@ module.exports = __toCommonJS(index_exports);
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Task schedule": "任务计划",
+  "Daily": "每日",
+  "Weekly": "每周",
+  "Repeating schedule": "周期计划",
+  "Time of day": "执行时刻",
+  "IANA time zone": "IANA 时区",
+  "Monday": "周一",
+  "Tuesday": "周二",
+  "Wednesday": "周三",
+  "Thursday": "周四",
+  "Friday": "周五",
+  "Saturday": "周六",
+  "Sunday": "周日",
+  "Missed occurrence": "错过执行时间",
+  "Run once when available": "可用时补执行一次",
+  "Skip when over 5 minutes late": "迟到超过 5 分钟则跳过",
+  "Total time limit (minutes)": "总时限（分钟）",
+  "No-progress limit (minutes)": "无进展时限（分钟）",
+  "A waiting task still has a time limit. Timeout checks run every 30 seconds and pause the task for review.": "等待中的任务仍受时限约束。每 30 秒检查超时，超时后暂停并等待核验。",
+  "Repeating tasks run again only after success. Failures and uncertain results require review. Pause or cancel stops the whole schedule. Missing daylight-saving times are skipped; repeated times run once.": "周期任务仅在成功后安排下次执行。失败或结果不明时需核验；暂停或取消会停止整个周期。夏令时不存在的时刻会跳过，重复时刻只执行一次。",
+  "Waiting for the scheduled time.": "等待计划时间。",
+  "Waiting for the previous task to finish or be reviewed.": "等待前一个任务完成或核验。",
+  "Desktop access is off.": "桌面访问已关闭。",
+  "Waiting for desktop control to be returned.": "等待交还桌面控制权。",
+  "Start the desktop to run this task.": "请启动桌面以执行此任务。",
+  "Waiting for the Bot chat to become idle.": "等待 Bot 聊天空闲。",
+  "Waiting for the next queue check.": "等待下一次队列检查。",
+  "Elapsed: {minutes} min": "已用时：{minutes} 分钟",
+  "Limits: {total} min total / {stall} min without progress": "时限：总计 {total} 分钟 / 无进展 {stall} 分钟",
+  "Current step": "当前步骤",
+  "Task progress": "任务进度",
+  "Last progress: {time}": "最近进展：{time}",
+  "Run history ({count} total; latest 20)": "执行历史（累计 {count} 次，显示最近 20 次）",
+  "Task time limit reached.": "任务已达到总时限。",
+  "No progress was reported before the timeout.": "超过时限仍未报告新的进展。",
+  "Paused by the user.": "用户已暂停。",
+  "Cancelled by the user.": "用户已取消。",
+  "Missed occurrence skipped.": "已跳过错过的执行时间。",
+  "The turn ended without an explicit result.": "回合结束但未报告明确结果。",
+  "DSH restarted during this attempt. Review before resuming.": "执行期间 DSH 已重启，请核验后恢复。",
+  "The desktop changed. Review before resuming.": "桌面已变更，请核验后恢复。",
+  "Delivery result is unknown. Review before resuming.": "任务投递结果不明，请核验后恢复。",
+  "Desktop control was interrupted. Review before resuming.": "桌面控制已中断，请核验后恢复。",
+  "Choose a daily or weekly schedule, time zone and missed-run policy.": "请选择每日或每周计划、时区与错过执行时的处理方式。",
+  "Choose a valid IANA time zone.": "请输入有效的 IANA 时区。",
+  "Task time limits must be between 1 minute and 24 hours.": "任务时限须为 1 分钟至 24 小时。",
   "Use numbered backup parts": "使用编号备份分片",
   "Desktop CPU, memory and network": "桌面 CPU、内存和网络",
   "Stop this desktop before saving. Its home is retained; the new limits apply on the next start.": "保存前请停止桌面。用户目录会保留，新限制在下次启动时生效。",
@@ -29990,7 +30036,7 @@ function TaskForm({ roster, actions, start, onDone, onCancel }) {
   const [kind, setKind] = (0, import_react26.useState)("daily");
   const [at, setAt] = (0, import_react26.useState)(inAnHour);
   const [time, setTime] = (0, import_react26.useState)("09:00");
-  const [weekdays, setWeekdays] = (0, import_react26.useState)([1, 2, 3, 4, 5]);
+  const [weekdays2, setWeekdays] = (0, import_react26.useState)([1, 2, 3, 4, 5]);
   const [count, setCount] = (0, import_react26.useState)(1);
   const [unit, setUnit] = (0, import_react26.useState)("hours");
   const [busy, setBusy] = (0, import_react26.useState)(false);
@@ -29998,7 +30044,7 @@ function TaskForm({ roster, actions, start, onDone, onCancel }) {
   const timing = () => {
     if (kind === "at") return { kind, at: new Date(at).toISOString() };
     if (kind === "every") return { kind, minutes: Math.round(Number(count) * UNITS.find(([id]) => id === unit)[1]) };
-    return { kind, time, timeZone: localZone(), ...kind === "weekly" ? { weekdays } : {} };
+    return { kind, time, timeZone: localZone(), ...kind === "weekly" ? { weekdays: weekdays2 } : {} };
   };
   const submit = (event) => {
     event.preventDefault();
@@ -30058,7 +30104,7 @@ function TaskForm({ roster, actions, start, onDone, onCancel }) {
           key: day,
           type: "button",
           className: "bt-task-day",
-          "aria-pressed": weekdays.includes(day),
+          "aria-pressed": weekdays2.includes(day),
           onClick: () => toggleDay(day)
         }, when2(Date.UTC(2024, 0, day), { weekday: "narrow", timeZone: "UTC" })))) : null,
         kind === "daily" || kind === "weekly" ? (0, import_react26.createElement)("input", { className: "bt-input bt-task-time", type: "time", value: time, "aria-label": t("Time"), onChange: (event) => setTime(event.target.value) }) : null,
@@ -33024,7 +33070,7 @@ function SpanPicker({ span, today, oldest, active, near, onPick, onClose }) {
     const [from, to] = [anchor, key].sort();
     onPick(from, to);
   };
-  const weekdays = (0, import_react38.useMemo)(() => Array.from({ length: 7 }, (_, at) => dates({ weekday: "narrow" }).format(Date.UTC(2024, 0, 1 + at))), []);
+  const weekdays2 = (0, import_react38.useMemo)(() => Array.from({ length: 7 }, (_, at) => dates({ weekday: "narrow" }).format(Date.UTC(2024, 0, 1 + at))), []);
   const month = (start, side) => {
     const length = new Date(addMonths(start, 1) - DAY_MS).getUTCDate();
     const lead = (new Date(start).getUTCDay() + 6) % 7;
@@ -33057,7 +33103,7 @@ function SpanPicker({ span, today, oldest, active, near, onPick, onClose }) {
       "div",
       { key: start, className: "bt-us-month" },
       (0, import_react38.createElement)("div", { className: "bt-us-month-head" }, nav, (0, import_react38.createElement)("span", null, dates({ year: "numeric", month: "long" }).format(start))),
-      (0, import_react38.createElement)("div", { className: "bt-us-weekdays", "aria-hidden": true }, weekdays.map((name, at) => (0, import_react38.createElement)("span", { key: at }, name))),
+      (0, import_react38.createElement)("div", { className: "bt-us-weekdays", "aria-hidden": true }, weekdays2.map((name, at) => (0, import_react38.createElement)("span", { key: at }, name))),
       (0, import_react38.createElement)("div", { className: "bt-us-days", onMouseLeave: () => setHover(null) }, cells)
     );
   };
@@ -37181,8 +37227,20 @@ var localDateTime = (date) => {
   const pad2 = (value) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 };
+var weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+var queueReasons = {
+  scheduled: "Waiting for the scheduled time.",
+  "previous-task": "Waiting for the previous task to finish or be reviewed.",
+  "access-off": "Desktop access is off.",
+  "control-held": "Waiting for desktop control to be returned.",
+  "desktop-stopped": "Start the desktop to run this task.",
+  "bot-busy": "Waiting for the Bot chat to become idle.",
+  "waiting-dispatch": "Waiting for the next queue check."
+};
 function ComputerTasks({ record, call: call2 }) {
   const [items, setItems] = (0, import_react49.useState)([]), [goal, setGoal] = (0, import_react49.useState)(""), [runAt, setRunAt] = (0, import_react49.useState)(""), [error, setError] = (0, import_react49.useState)(""), [busy, setBusy] = (0, import_react49.useState)(false), [confirm, setConfirm] = (0, import_react49.useState)(null);
+  const [kind, setKind] = (0, import_react49.useState)("once"), [time, setTime] = (0, import_react49.useState)("09:00"), [timeZone, setTimeZone] = (0, import_react49.useState)(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [days, setDays] = (0, import_react49.useState)([1]), [missed, setMissed] = (0, import_react49.useState)("once"), [maxMinutes, setMaxMinutes] = (0, import_react49.useState)("60"), [stallMinutes, setStallMinutes] = (0, import_react49.useState)("10");
   const alive = (0, import_react49.useRef)(true), pending = (0, import_react49.useRef)(false), polling = (0, import_react49.useRef)(null);
   (0, import_react49.useEffect)(() => {
     alive.current = true;
@@ -37210,14 +37268,19 @@ function ComputerTasks({ record, call: call2 }) {
     setError("");
     try {
       await polling.current;
-      const scheduled = method === "add" && runAt ? Date.parse(runAt) : void 0;
+      const scheduled = method === "add" && kind === "once" && runAt ? Date.parse(runAt) : void 0;
       if (scheduled !== void 0 && (!Number.isSafeInteger(scheduled) || scheduled <= Date.now() || localDateTime(new Date(scheduled)) !== runAt)) throw Error("Choose a future time within one year.");
       const value = await call2("tasks", {
         method,
         id,
         goal,
         confirm: method === "resume",
-        ...scheduled === void 0 ? {} : { runAt: scheduled }
+        ...scheduled === void 0 ? {} : { runAt: scheduled },
+        ...method !== "add" ? {} : {
+          maxRunMs: Number(maxMinutes) * 6e4,
+          stallMs: Number(stallMinutes) * 6e4,
+          ...kind === "once" ? {} : { repeat: { kind, time, timeZone: timeZone.trim(), missed, ...kind === "weekly" ? { weekdays: days } : {} } }
+        }
       });
       if (alive.current) {
         setItems(value);
@@ -37242,6 +37305,7 @@ function ComputerTasks({ record, call: call2 }) {
     (0, import_react49.createElement)("summary", null, t("Desktop task queue")),
     (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Tasks run in order when the desktop is running and the Bot chat is idle. A restart or uncertain result requires review. Pausing only controls Computer tools; other tools remain in assisted mode.")),
     (0, import_react49.createElement)("p", { className: "bt-muted" }, t("The optional time uses your local time zone. Keep DSH and the desktop running. Due tasks wait until the Bot is available; future tasks do not block ready tasks.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Repeating tasks run again only after success. Failures and uncertain results require review. Pause or cancel stops the whole schedule. Missing daylight-saving times are skipped; repeated times run once.")),
     (0, import_react49.createElement)(
       "form",
       { onSubmit: (e) => {
@@ -37249,13 +37313,39 @@ function ComputerTasks({ record, call: call2 }) {
         void command("add");
       } },
       (0, import_react49.createElement)("textarea", { value: goal, maxLength: 4e3, disabled: busy, "aria-label": t("Desktop task goal"), onChange: (e) => setGoal(e.target.value) }),
-      (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Run at (optional)"), (0, import_react49.createElement)("input", {
+      (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Task schedule"), (0, import_react49.createElement)(
+        "select",
+        { "aria-label": t("Task schedule"), value: kind, disabled: busy, onChange: (e) => setKind(e.target.value) },
+        [["once", "Once"], ["daily", "Daily"], ["weekly", "Weekly"]].map(([value, label]) => (0, import_react49.createElement)("option", { key: value, value }, t(label)))
+      )),
+      kind === "once" ? (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Run at (optional)"), (0, import_react49.createElement)("input", {
         type: "datetime-local",
         value: runAt,
         disabled: busy,
         min: localDateTime(new Date(Date.now() + 6e4)),
         onChange: (e) => setRunAt(e.target.value)
-      })),
+      })) : (0, import_react49.createElement)(
+        "fieldset",
+        { disabled: busy },
+        (0, import_react49.createElement)("legend", null, t("Repeating schedule")),
+        (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Time of day"), (0, import_react49.createElement)("input", { type: "time", required: true, value: time, onChange: (e) => setTime(e.target.value) })),
+        (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("IANA time zone"), (0, import_react49.createElement)("input", { required: true, value: timeZone, maxLength: 100, placeholder: "Asia/Shanghai", onChange: (e) => setTimeZone(e.target.value) })),
+        kind === "weekly" ? (0, import_react49.createElement)("div", { className: "bt-computer-row" }, weekdays.map((day, index) => (0, import_react49.createElement)(
+          "label",
+          { key: day },
+          (0, import_react49.createElement)("input", { type: "checkbox", checked: days.includes(index + 1), onChange: (e) => setDays(e.target.checked ? [...days, index + 1].sort() : days.filter((n) => n !== index + 1)) }),
+          t(day)
+        ))) : null,
+        (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Missed occurrence"), (0, import_react49.createElement)(
+          "select",
+          { "aria-label": t("Missed occurrence"), value: missed, onChange: (e) => setMissed(e.target.value) },
+          (0, import_react49.createElement)("option", { value: "once" }, t("Run once when available")),
+          (0, import_react49.createElement)("option", { value: "skip" }, t("Skip when over 5 minutes late"))
+        ))
+      ),
+      (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Total time limit (minutes)"), (0, import_react49.createElement)("input", { type: "number", min: 1, max: 1440, step: 1, required: true, disabled: busy, value: maxMinutes, onChange: (e) => setMaxMinutes(e.target.value) })),
+      (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("No-progress limit (minutes)"), (0, import_react49.createElement)("input", { type: "number", min: 1, max: 1440, step: 1, required: true, disabled: busy, value: stallMinutes, onChange: (e) => setStallMinutes(e.target.value) })),
+      (0, import_react49.createElement)("p", { className: "bt-muted" }, t("A waiting task still has a time limit. Timeout checks run every 30 seconds and pause the task for review.")),
       (0, import_react49.createElement)("button", { type: "submit", className: "bt-soft bt-soft-sm", disabled: busy || !goal.trim() }, t("Add desktop task"))
     ),
     error ? (0, import_react49.createElement)("p", { role: "alert", className: "bt-error" }, t(error)) : null,
@@ -37264,8 +37354,22 @@ function ComputerTasks({ record, call: call2 }) {
       { key: item.id, className: "bt-computer-help" },
       (0, import_react49.createElement)("p", null, item.goal),
       (0, import_react49.createElement)("p", { role: "status" }, `${t("Task status")}: ${t(item.status)}`),
+      item.repeat ? (0, import_react49.createElement)("p", { className: "bt-muted" }, `${t(item.repeat.kind === "daily" ? "Daily" : "Weekly")} ${item.repeat.time} · ${item.repeat.timeZone}${item.repeat.weekdays ? ` · ${item.repeat.weekdays.map((n) => t(weekdays[n - 1])).join(", ")}` : ""} · ${t(item.repeat.missed === "skip" ? "Skip when over 5 minutes late" : "Run once when available")}`) : null,
       item.runAt ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Scheduled for {time}", { time: new Date(item.runAt).toLocaleString() })) : null,
+      item.queueReason ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t(queueReasons[item.queueReason] || item.queueReason)) : null,
+      item.startedAt !== void 0 ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Elapsed: {minutes} min", { minutes: Math.floor(item.elapsedMs / 6e4) })) : null,
+      (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Limits: {total} min total / {stall} min without progress", { total: (item.maxRunMs ?? 36e5) / 6e4, stall: (item.stallMs ?? 6e5) / 6e4 })),
+      item.step ? (0, import_react49.createElement)("p", null, `${t("Current step")}: ${item.step}`) : null,
+      item.progress !== void 0 ? (0, import_react49.createElement)("label", null, `${t("Task progress")}: ${item.progress}% `, (0, import_react49.createElement)("progress", { max: 100, value: item.progress, "aria-label": t("Task progress") })) : null,
+      item.progressAt !== void 0 ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Last progress: {time}", { time: new Date(item.progressAt).toLocaleString() })) : null,
+      item.waitReason ? (0, import_react49.createElement)("p", { role: "status" }, t(item.waitReason)) : null,
       item.note ? (0, import_react49.createElement)("p", null, item.note) : null,
+      item.history?.length ? (0, import_react49.createElement)(
+        "details",
+        null,
+        (0, import_react49.createElement)("summary", null, t("Run history ({count} total; latest 20)", { count: item.runs })),
+        item.history.slice().reverse().map((result, index) => (0, import_react49.createElement)("p", { key: index }, `${new Date(result.at).toLocaleString()} · ${t(result.status)} · ${result.note}`))
+      ) : null,
       (0, import_react49.createElement)(
         "div",
         { className: "bt-computer-row" },

@@ -1,5 +1,19 @@
 export const PROTOCOL_VERSION = 1
-export const TOOL_NAMES = ['computer_status', 'computer_observe', 'computer_act', 'computer_release', 'computer_request_takeover', 'computer_files', 'computer_import', 'computer_export', 'computer_task_update']
+export const TOOL_NAMES = ['computer_status', 'computer_observe', 'computer_act', 'computer_release', 'computer_request_takeover', 'computer_files', 'computer_import', 'computer_export', 'computer_task_update', 'computer_browser_observe', 'computer_browser_act']
+
+export function checkBrowserAction(action) {
+  const fields = { open: ['type', 'url'], click: ['type', 'ref'], fill: ['type', 'ref', 'text'], back: ['type'], switch: ['type', 'tab'] }
+  if (!action || !Object.hasOwn(fields, action.type) || Object.keys(action).sort().join() !== [...fields[action.type]].sort().join()) throw refused('invalid', 'Invalid browser action.')
+  if (action.type === 'open') {
+    let url
+    try { url = new URL(action.url) } catch {}
+    if (typeof action.url !== 'string' || action.url.length > 2000 || !url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw refused('invalid', 'Use an HTTP or HTTPS URL without embedded credentials.')
+  }
+  if (['click', 'fill'].includes(action.type) && (typeof action.ref !== 'string' || !/^[1-9]\d{0,2}$/.test(action.ref))) throw refused('invalid', 'Choose an observed browser element.')
+  if (action.type === 'fill' && (typeof action.text !== 'string' || action.text.length > 4000 || action.text.includes('\0'))) throw refused('invalid', 'Use at most 4000 text characters.')
+  if (action.type === 'switch' && (typeof action.tab !== 'string' || action.tab.length > 160)) throw refused('invalid', 'Choose an observed browser tab.')
+  return { ...action }
+}
 
 export function refused(code, message) {
   return Object.assign(new Error(message), { code: `bot/computer-${code}` })

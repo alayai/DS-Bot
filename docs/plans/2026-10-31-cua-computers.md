@@ -1347,3 +1347,21 @@ SHA-256 核对；本地发行测试包经过完整 archive 校验/引擎导入/�
 验证 Asia/Shanghai 与 America/Los_Angeles 的本地时间转换及刷新保留。
 Windows GUI 仍由用户验收。此批未实现 guest 浏览器语义工具、周期桌面任务、
 computer-only、Docker 硬配额或 P7 独立运行后端。
+
+### 24.27 同桌面浏览器、长任务与周期任务（cua.18）
+
+已实现用户授权的三项，设计及边界见
+[虚机浏览器、长任务和周期任务](2026-11-01-cua-browser-and-recurring.md)：
+
+- `computer_browser_observe/act` 使用可见 guest Firefox 和原有 profile，
+  支持语义观察、打开、点击、填写、返回、标签页切换。保留截图上下文、
+  generation/turn、审批/YOLO、接管和输入结果日志；陈旧元素拒绝操作。
+- 长任务持久化步骤、百分比、等待原因、用时和结果。总时限/无进展时限
+  可设置，默认 60/10 分钟；到期即拒绝新调用，30 秒检查负责暂停和撤权。
+- 每日/每周计划保存 IANA 时区，支持错过后补一次或跳过。成功后才安排
+  下一次；失败/不确定/中断需核验。保留最近 20 次结果及累计次数。
+
+真实 Docker/Firefox 验证表单、导航、新标签页同步、陈旧页面拒绝、释放后
+重新连接、桌面重启后 profile 保留，以及现有普通 Firefox 不被自动关闭。
+真实 Chromium/React 验证周期表单、进度、超时暂停、恢复和运行历史。
+Windows GUI 仍由用户验收；不宣称 computer-only、Docker 硬配额或独立后端完成。

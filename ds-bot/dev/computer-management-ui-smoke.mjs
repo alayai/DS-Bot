@@ -16,14 +16,14 @@ const provider = Object.assign(createFakeComputer(), {
     return { bytes: size, sha256: 'a'.repeat(64) }
   }, portableImport: async (_record, { path }) => { const bytes = await readFile(path); assert.equal(bytes.length, size); assert.ok(bytes.every(value => value === 7)) },
 })
-let service, browser, server, record
+let service, browser, server, record, clockOffset = 0
 const deliveries = []
 const rt = { home, config: {}, load: async () => {}, readOnly: () => undefined, botOf: id => id === 'ui-test' ? { id } : undefined,
   chatOf: () => 'ui-chat', live: new Map(), groupOwners: new Map(), isBotSession: id => id === 'ui-chat', selfOf: () => 'ui-test',
   ctx: { sessions: { flush: async () => {} } }, resolveAgent: async () => ({ session: { id: 'ui-chat' }, inbox: { nextTurn: [], nextStep: [], remove() {} }, cancel() {} }),
   deliver: async args => { (await service.tasks.validateDelivery(args.computerTask, args.sessionId))(); deliveries.push(args) },
 }
-service = createComputerService(rt, provider)
+service = createComputerService(rt, provider, { now: () => Date.now() + clockOffset })
 const errors = []
 try {
   await service.bind({ botId: 'ui-test', grant: 'observe', expectedRevision: 0 })
@@ -119,9 +119,52 @@ function App(){const[record,setRecord]=useState(initial);const call=async(method
       assert.equal(task.runAt, expected.timestamp)
     } finally { await scheduledPage.close() }
   }
+  await page.reload(); await page.getByText('Desktop task queue', { exact: true }).click()
+  await page.getByLabel('Desktop task goal', { exact: true }).fill('Weekly progress fixture')
+  await page.getByLabel('Task schedule', { exact: true }).selectOption('weekly')
+  await page.getByLabel('Monday', { exact: true }).uncheck()
+  await page.getByLabel('Tuesday', { exact: true }).check()
+  await page.getByLabel('Thursday', { exact: true }).check()
+  await page.getByLabel('Time of day', { exact: true }).fill('09:15')
+  await page.getByLabel('IANA time zone', { exact: true }).fill('Asia/Shanghai')
+  await page.getByLabel('Total time limit (minutes)', { exact: true }).fill('90')
+  await page.getByLabel('No-progress limit (minutes)', { exact: true }).fill('5')
+  await page.getByRole('button', { name: 'Add desktop task', exact: true }).click()
+  const row = page.locator('section').filter({ has: page.getByText('Weekly progress fixture', { exact: true }) })
+  await row.getByText('Task status: queued', { exact: true }).waitFor()
+  let task = (await service.tasks.list(record.botId)).find(item => item.goal === 'Weekly progress fixture')
+  assert.deepEqual(task.repeat, { kind: 'weekly', time: '09:15', timeZone: 'Asia/Shanghai', missed: 'once', weekdays: [2, 4] })
+  assert.equal(task.maxRunMs, 5400000); assert.equal(task.stallMs, 300000)
+  clockOffset = task.runAt - Date.now() + 1000
+  await service.tasks.tick()
+  task = (await service.tasks.list(record.botId)).find(item => item.id === task.id)
+  rt.live.set('ui-chat', { turn: 1, info: { exchangeId: task.attempt } })
+  await service.tasks.enter({ session: { id: 'ui-chat' } })
+  const exec = { agent: { id: 'ui-chat', session: { id: 'ui-chat' } } }
+  await service.tasks.report({ taskId: task.id, status: 'waiting', note: 'Read 2 of 5 pages.', step: 'Inspect pages', progress: 40, waitReason: 'Waiting for fixture response.' }, exec)
+  await row.getByText('Current step: Inspect pages', { exact: true }).waitFor()
+  await row.getByText('Waiting for fixture response.', { exact: true }).waitFor()
+  assert.equal(await row.getByRole('progressbar', { name: 'Task progress' }).getAttribute('value'), '40')
+  clockOffset += 300001; await service.tasks.tick(); rt.live.clear()
+  await row.getByText('Task status: paused', { exact: true }).waitFor()
+  await row.getByText('No progress was reported before the timeout.', { exact: true }).waitFor()
+  await row.getByRole('button', { name: 'Review and resume', exact: true }).click()
+  await row.getByRole('button', { name: 'Confirm task resume', exact: true }).click()
+  await row.getByText('Task status: queued', { exact: true }).waitFor()
+  await service.tasks.tick()
+  task = (await service.tasks.list(record.botId)).find(item => item.id === task.id)
+  rt.live.set('ui-chat', { turn: 2, info: { exchangeId: task.attempt } })
+  await service.tasks.enter({ session: { id: 'ui-chat' } })
+  await service.tasks.report({ taskId: task.id, status: 'completed', note: 'Verified all five fixture pages.' }, exec)
+  rt.live.clear()
+  await row.getByText('Run history (1 total; latest 20)', { exact: true }).click()
+  await row.getByText('Verified all five fixture pages.', { exact: false }).waitFor()
+  await row.getByText('Task status: queued', { exact: true }).waitFor()
+  assert.ok((await service.tasks.list(record.botId)).find(item => item.id === task.id).runAt > Date.now() + clockOffset)
   assert.deepEqual(errors, [])
   console.log('PASS: CPU/RAM confirmation, persistent queue pause/cancel and panel reload without browser errors')
   console.log('PASS: scheduled time in Shanghai/Los Angeles, absolute timestamp persistence, reload, no early dispatch and cancellation')
+  console.log('PASS: weekly weekday/timezone/limits form, live progress, timeout pause, explicit resume, successful recurrence and run history')
 } finally {
   await browser?.close(); await new Promise(resolve => server ? server.close(resolve) : resolve()); await service.dispose(); await rm(home, { recursive: true, force: true })
 }

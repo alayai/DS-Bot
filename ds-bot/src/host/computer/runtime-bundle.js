@@ -5,7 +5,7 @@ import { join } from 'node:path'
 // Version 1 is a closed inventory. Changing it requires updating the bundle contract.
 const FILES = [
   'runtime.mjs', 'runtime.lock.json', 'engine.mjs', 'podman.mjs', 'README.md', 'TOOL_POLICY.md', 'LICENSE', 'NOTICE',
-  'broker/main.mjs', 'broker/boundary.mjs', 'broker/checkpoint.mjs', 'broker/checkpoint-task.mjs', 'broker/maintenance.mjs', 'broker/policy.mjs', 'broker/network.mjs', 'broker/proxy.py', 'broker/portable.mjs', 'broker/portable.py', 'broker/checkpoint.py',
+  'broker/main.mjs', 'broker/browser.mjs', 'broker/browser.py', 'broker/boundary.mjs', 'broker/checkpoint.mjs', 'broker/checkpoint-task.mjs', 'broker/maintenance.mjs', 'broker/policy.mjs', 'broker/network.mjs', 'broker/proxy.py', 'broker/portable.mjs', 'broker/portable.py', 'broker/checkpoint.py',
   'broker/files.py', 'broker/transfers.mjs', 'broker/input.mjs', 'broker/rfb.mjs', 'broker/release-input.py', 'broker/mcp.mjs',
   'desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py',
   'desktop/inventory.py', 'licenses/cua-MIT.txt',
