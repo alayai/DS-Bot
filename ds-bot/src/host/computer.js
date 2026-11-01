@@ -4,6 +4,7 @@ import { TOOL_NAMES, refused } from './computer/contract.js'
 import { createComputerService } from './computer/service.js'
 import { createBrokerProvider } from './computer/providers/broker.js'
 import { createComputerSetup } from './computer/setup.js'
+import { registerComputerViewer } from './computer/viewer.js'
 
 export function install(rt) {
   let computer
@@ -17,6 +18,10 @@ export function install(rt) {
   }
   const setup = createComputerSetup(rt, activate, rt.config.computerSetupOptions)
   rt.computerSetup = setup
+  rt.ctx.effect(() => {
+    const dispose = registerComputerViewer(rt, () => computer)
+    return () => dispose?.()
+  }, 'ds-bot: computer viewer')
   rt.ctx.effect(() => {
     void setup.restore().catch(() => {})
     return async () => { await setup.dispose(); await computer?.dispose() }

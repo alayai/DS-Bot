@@ -8,6 +8,7 @@ export function createBrokerProvider(config = {}) {
   let closed = false
   let disconnected = false
   const pending = new Map()
+  const streams = new Map()
   function connect() {
     if (closed) throw refused('unavailable', 'The Computer provider is closed.')
     if (disconnected) throw refused('provider-unavailable', 'The Computer Broker disconnected. Restart the host to reconcile desktop ownership.')
@@ -15,6 +16,22 @@ export function createBrokerProvider(config = {}) {
     const peer = openBroker(launch)
     child = peer
     peer.on('message', message => {
+      if (message?.stream !== undefined) {
+        const stream = streams.get(message.stream)
+        if (!stream) return
+        if (message.type === 'data') {
+          if (typeof message.data !== 'string' || message.data.length > 87384
+            || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(message.data)) {
+            stream.close()
+            return
+          }
+          const data = Buffer.from(message.data, 'base64')
+          if (data.length > 65536) stream.close()
+          else stream.push(data)
+        } else if (message.type === 'written') stream.written()
+        else if (message.type === 'close') stream.close()
+        return
+      }
       const request = pending.get(message?.id)
       if (!request || request.peer !== peer) return
       if (message.ok) request.resolve(message.value)
@@ -23,6 +40,7 @@ export function createBrokerProvider(config = {}) {
     })
     const failed = () => {
       disconnected = true
+      for (const stream of streams.values()) stream.close()
       for (const request of pending.values()) {
         if (request.peer === peer) request.reject(refused('provider-unavailable', 'The Computer Broker disconnected. Input may have executed.'))
       }
@@ -31,6 +49,65 @@ export function createBrokerProvider(config = {}) {
     peer.on('disconnect', failed)
     peer.on('exit', () => { failed(); if (child === peer) child = undefined })
     return child
+  }
+  function makeStream(peer, id) {
+    let queued, listener, writing
+    const closeListeners = new Set()
+    const send = message => {
+      try { peer.send({ stream: id, ...message }, error => { if (error) stream.close() }) }
+      catch { stream.close() }
+    }
+    const deliver = data => {
+      let acknowledged = false
+      listener(data, () => {
+        if (acknowledged || stream.closed) return
+        acknowledged = true
+        send({ type: 'ack' })
+      })
+    }
+    const stream = {
+      closed: false,
+      push(data) {
+        if (stream.closed) return
+        if (data.length > 65536 || queued) return stream.close()
+        if (listener) deliver(data)
+        else queued = data
+      },
+      close() {
+        if (stream.closed) return
+        stream.closed = true
+        streams.delete(id)
+        if (peer.connected) send({ type: 'close' })
+        writing?.reject(refused('viewer-unavailable', 'The viewer closed.'))
+        writing = null
+        for (const callback of closeListeners) callback()
+        closeListeners.clear()
+        queued = listener = null
+      },
+      written() { writing?.resolve(); writing = null },
+      write(data) {
+        if (stream.closed || writing || !Buffer.isBuffer(data) || data.length > 65536) {
+          return Promise.reject(refused('viewer-unavailable', 'Invalid viewer write.'))
+        }
+        return new Promise((resolve, reject) => {
+          writing = { resolve, reject }
+          send({ type: 'write', data: data.toString('base64') })
+        })
+      },
+      onData(callback) {
+        if (!stream.closed) {
+          listener = callback
+          if (queued) { const data = queued; queued = null; deliver(data) }
+        }
+        return () => { listener = null }
+      },
+      onClose(callback) {
+        if (stream.closed) callback()
+        else closeListeners.add(callback)
+        return () => closeListeners.delete(callback)
+      },
+    }
+    return stream
   }
   function call(method, record, options = {}) {
     const peer = connect()
@@ -76,6 +153,19 @@ export function createBrokerProvider(config = {}) {
       if (typeof result?.data !== 'string' || result.data.length > 12 * 1024 * 1024) throw refused('observation-unavailable', 'Invalid desktop frame.')
       return { ...result, data: Buffer.from(result.data, 'base64') }
     },
+    async openViewer(record, options = {}) {
+      const peer = connect()
+      const id = `viewer-${++sequence}`
+      const stream = makeStream(peer, id)
+      streams.set(id, stream)
+      try {
+        await call('viewer-open', record, { ...options, stream: id })
+        return stream
+      } catch (error) {
+        stream.close()
+        throw error
+      }
+    },
     diagnostics: (record, options) => call('diagnostics', record, options),
     upgrade: (record, options) => call('upgrade', record, options),
     checkpoint: (record, options) => call('checkpoint', record, options),
@@ -87,6 +177,7 @@ export function createBrokerProvider(config = {}) {
     perform: (record, options) => call('perform', record, options),
     async dispose() {
       closed = true
+      for (const stream of streams.values()) stream.close()
       if (!child || child.exitCode !== null || child.signalCode !== null) return
       const peer = child
       if (peer.connected) peer.disconnect()

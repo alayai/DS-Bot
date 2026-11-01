@@ -26,6 +26,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   const humanTtl = 60_000
   const frameTtl = 5_000
   const frames = new Map()
+  const viewers = new Map()
   const held = new Map()
   const managing = new Set()
   const touched = new Map()
@@ -120,10 +121,14 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     compatible(record)
     return record
   }
-  function invalidate(id) {
+  function invalidate(id, keepViewers = false) {
     frames.delete(id)
     held.delete(id)
     leases.revoke(id)
+    if (!keepViewers) {
+      for (const viewer of viewers.get(id) ?? []) viewer.close()
+      viewers.delete(id)
+    }
   }
   async function administration(id, work) {
     if (managing.has(id)) throw refused('busy', 'Desktop settings are already changing.')
@@ -166,10 +171,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     })
     return entry.promise
   }
-  async function barrier(record, state = 'blocked') {
+  async function barrier(record, state = 'blocked', keepViewers = false) {
     controls.set(record.id, state)
     humans.delete(record.id)
-    invalidate(record.id)
+    invalidate(record.id, keepViewers)
     const pending = active.get(record.id)
     pending?.controller.abort()
     try {
@@ -521,6 +526,55 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     }).finally(() => { pending.preview = null })
     return pending.preview
   }
+  async function openViewer(args) {
+    const record = await userRecord(args)
+    if (typeof provider.openViewer !== 'function') throw refused('viewer-unavailable', 'Live desktop viewing is unavailable.')
+    if (managing.has(record.botId)) throw refused('busy', 'Desktop settings are changing.')
+    const current = viewers.get(record.id) ?? new Set()
+    if (current.size >= 4) throw refused('busy', 'Too many desktop viewers.')
+    viewers.set(record.id, current)
+    const controller = new AbortController()
+    let stream, timer, stopped = false
+    const close = () => {
+      if (stopped) return
+      stopped = true
+      clearInterval(timer)
+      controller.abort()
+      args.signal?.removeEventListener('abort', close)
+      current.delete(entry)
+      if (current.size === 0 && viewers.get(record.id) === current) viewers.delete(record.id)
+      touched.set(record.id, clock())
+      stream?.close()
+    }
+    const validate = async () => {
+      writable()
+      if (stopped) throw refused('viewer-unavailable', 'The viewer has closed.')
+      const latest = await userRecord(args)
+      if (stopped || latest.id !== record.id || store.snapshot()?.lifecycle?.[record.id]) {
+        close()
+        throw refused('stale-generation', 'The desktop binding changed.')
+      }
+    }
+    const entry = { close }
+    current.add(entry)
+    args.signal?.addEventListener('abort', close, { once: true })
+    try {
+      if (args.signal?.aborted) close()
+      controller.signal.throwIfAborted()
+      stream = await provider.openViewer(record, { signal: controller.signal })
+      await validate()
+      args.signal?.removeEventListener('abort', close)
+      stream.onClose(close)
+      timer = setInterval(() => { void validate().catch(close) }, 2000)
+      timer.unref?.()
+      touched.set(record.id, clock())
+      return { close, validate, write: data => stream.write(data), onData: fn => stream.onData(fn), onClose: fn => stream.onClose(fn) }
+    } catch (error) {
+      close()
+      stream?.close()
+      throw error
+    }
+  }
   async function humanAct(args) {
     const record = await userRecord(args)
     const ticket = human(record, args.controlToken)
@@ -683,7 +737,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       if (turnId !== undefined && held.get(record.id)?.turnId !== turnId) continue
       if (managing.has(record.botId)) continue
       await administration(record.botId, async () => {
-        await barrier(record)
+        await barrier(record, 'blocked', true)
         controls.set(record.id, 'none')
       })
     }
@@ -692,7 +746,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (closed || !initializing || idleStopMs === 0) return
     await ready()
     for (const record of Object.values((await store.load()).computers)) {
-      if (record.archived || held.has(record.id) || active.has(record.id) || managing.has(record.botId)
+      if (record.archived || held.has(record.id) || viewers.has(record.id) || active.has(record.id) || managing.has(record.botId)
         || controls.get(record.id) !== 'none' || clock() - (touched.get(record.id) ?? clock()) < idleStopMs) continue
       await administration(record.botId, async () => {
         // Block new leases before awaiting the provider; a polling viewer is active use.
@@ -720,5 +774,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, diagnostics, bind, status, observe, act, release, manage, preview, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, diagnostics, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }

@@ -1256,3 +1256,51 @@ test('upgrade reserves the runtime limit before allocating a checkpoint or candi
   assert.equal(upgraded, false)
   assert.equal((await second.state()).checkpoints.length, 0)
 })
+
+function fakeViewer() {
+  let closed = false
+  const listeners = new Set()
+  return {
+    get closed() { return closed },
+    onData() {}, write() {},
+    onClose(fn) { if (closed) fn(); else listeners.add(fn) },
+    close() { if (closed) return; closed = true; for (const fn of listeners) fn() },
+  }
+}
+
+test('viewers survive model turn fences but close on binding changes and read-only ownership', async t => {
+  const provider = createFakeComputer()
+  const opened = []
+  provider.openViewer = async () => { const stream = fakeViewer(); opened.push(stream); return stream }
+  const h = await setup(t, { provider })
+  const record = await h.start()
+  const stream = await h.service.openViewer({ botId: 'a', expectedGeneration: record.generation })
+  await h.observe()
+  await h.service.endTurn('a', 1)
+  assert.equal(opened[0].closed, false)
+  await stream.validate()
+  await h.bind('a', 'off')
+  assert.equal(opened[0].closed, true)
+  const next = await h.start()
+  const second = await h.service.openViewer({ botId: 'a', expectedGeneration: next.generation })
+  h.readOnly('another host')
+  await assert.rejects(second.validate(), fails('read-only'))
+  second.close()
+  h.readOnly(undefined)
+})
+
+test('a viewer opening concurrently with stop cannot outlive revocation', async t => {
+  const provider = createFakeComputer()
+  let finish
+  provider.openViewer = () => new Promise(resolve => { finish = resolve })
+  const h = await setup(t, { provider })
+  const record = await h.start()
+  const opening = h.service.openViewer({ botId: 'a', expectedGeneration: record.generation })
+  const rejected = assert.rejects(opening)
+  while (!finish) await delay(1)
+  await h.manage('stop')
+  const stream = fakeViewer()
+  finish(stream)
+  await rejected
+  assert.equal(stream.closed, true)
+})

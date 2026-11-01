@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
@@ -71,6 +71,7 @@ function target(record) {
   if (record.generation === value.record.generation && (homeVolume(record) !== value.volume || (record.runtimeImage && value.record.runtimeImage && record.runtimeImage !== value.record.runtimeImage))) fail('Stale home identity.')
   if (record.generation > value.record.generation) {
     if (value.busy || value.fence) fail('Revoke the old desktop generation first.')
+    closeViewers(value)
     value.record = { ...record }
     value.volume = homeVolume(record)
   }
@@ -107,6 +108,91 @@ async function client(value, signal, key = 'client', session = value.modelSessio
   value[key] = next
   return next
 }
+// One chunk in flight per viewer bounds both IPC and stdio/WSL transport queues.
+const viewers = new Map()
+const relay = `import os, socket, select
+s = socket.create_connection(('127.0.0.1', 5901), timeout=10)
+s.setblocking(False)
+os.set_blocking(0, False)
+os.set_blocking(1, False)
+a = bytearray()
+b = bytearray()
+try:
+ while True:
+  r, w, _ = select.select(([0] if len(a)<65536 else []) + ([s] if len(b)<65536 else []), ([s] if a else []) + ([1] if b else []), [], 30)
+  if 0 in r:
+   v = os.read(0, 65536-len(a))
+   if not v: break
+   a.extend(v)
+  if s in r:
+   v = s.recv(65536-len(b))
+   if not v: break
+   b.extend(v)
+  if s in w:
+   try: del a[:s.send(a)]
+   except BlockingIOError: pass
+  if 1 in w:
+   try: del b[:os.write(1,b)]
+   except BlockingIOError: pass
+finally:
+ s.close()
+`
+function closeViewer(id) {
+  const viewer = viewers.get(id)
+  if (!viewer) return
+  viewers.delete(id)
+  viewer.closed = true
+  const child = viewer.child
+  if (child) {
+    child.stdin.end()
+    const timer = setTimeout(() => child.kill('SIGKILL'), 2000)
+    timer.unref()
+    child.once('close', () => clearTimeout(timer))
+  }
+  send({ stream: id, type: 'close' })
+}
+function closeViewers(value) {
+  for (const [id, viewer] of viewers) if (viewer.value === value) closeViewer(id)
+}
+async function openViewer(value, id, signal) {
+  if (!/^viewer-[1-9][0-9]{0,15}$/.test(id ?? '') || viewers.has(id) || viewers.size >= 16
+    || [...viewers.values()].filter(viewer => viewer.value === value).length >= 4) fail('Invalid viewer identity or limit.')
+  const viewer = { value, closed: false, writing: false }
+  viewers.set(id, viewer)
+  try {
+    const info = await inspect(value, signal)
+    signal.throwIfAborted()
+    if (viewer.closed || closing || !info?.State.Running || value.dirty) fail('Start the desktop before viewing it.')
+    const child = spawn(executable, engineCommand(engine, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', relay]), {
+      ...(engine ? { env: engineEnvironment(engine) } : {}), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
+    })
+    viewer.child = child
+    child.stdout.on('data', data => {
+      child.stdout.pause()
+      if (!viewer.closed) send({ stream: id, type: 'data', data: data.toString('base64') })
+    })
+    child.stdin.on('error', () => closeViewer(id))
+    child.on('error', () => closeViewer(id))
+    child.once('close', () => closeViewer(id))
+    return null
+  } catch (error) { closeViewer(id); throw error }
+}
+function viewerMessage(message) {
+  const viewer = viewers.get(message.stream)
+  if (!viewer) return
+  const child = viewer.child
+  if (message.type === 'close') return closeViewer(message.stream)
+  if (message.type === 'ack') { child?.stdout.resume(); return }
+  if (message.type !== 'write' || !child || viewer.writing || typeof message.data !== 'string' || message.data.length > 87384
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(message.data)) return closeViewer(message.stream)
+  viewer.writing = true
+  child.stdin.write(Buffer.from(message.data, 'base64'), error => {
+    viewer.writing = false
+    if (error) closeViewer(message.stream)
+    else if (!viewer.closed) send({ stream: message.stream, type: 'written' })
+  })
+}
+
 async function revoke(value) {
   if (value.revoking) return value.revoking
   value.fence = null
@@ -236,6 +322,7 @@ async function dispatch(method, record, options, signal) {
     return { phase: value.dirty ? 'error' : info?.State.Running ? 'ready' : 'stopped', provider: 'local-container', isolation: 'container',
       image: info?.Image ?? volume?.Labels?.['org.ds-bot.computer.image'] ?? null, homeExists: Boolean(info || volume) }
   }
+  if (method === 'viewer-open') return await openViewer(value, options.stream, signal)
   if (method === 'revoke') { await revoke(value); return null }
   if (value.busy || value.revoking) fail('The desktop is busy.')
   if (value.dirty && method !== 'stop') fail('Desktop input must be revoked before this Computer can be reused.')
@@ -248,6 +335,7 @@ async function dispatch(method, record, options, signal) {
   try {
     if (method === 'start') return await start(value, signal)
     if (method === 'stop') {
+      closeViewers(value)
       value.fence = null
       value.frame = null
       await value.client?.close()
@@ -355,6 +443,7 @@ async function dispatch(method, record, options, signal) {
   }
 }
 function receive(message) {
+  if (message?.stream !== undefined) { viewerMessage(message); return }
   if (message?.cancel) { requests.get(message.cancel)?.abort(); return }
   if (closing || !Number.isSafeInteger(message?.id) || requests.has(message.id)) return
   const abort = new AbortController()
@@ -391,6 +480,7 @@ if (stdio) {
 async function shutdown() {
   if (closing) return
   closing = true
+  for (const id of viewers.keys()) closeViewer(id)
   for (const abort of requests.values()) abort.abort()
   await Promise.allSettled([...targets.values()].map(async value => {
     await revoke(value)

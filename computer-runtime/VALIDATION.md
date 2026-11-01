@@ -518,3 +518,40 @@ other deferred main-plan items. The pooled Web transport exception remains open;
 no production API retries or DSH patches were introduced. All test benches and
 temporary test homes from this checkpoint were removed; the existing user
 Computer was not stopped or modified.
+
+## 2026-11-01: noVNC observation and retained display
+
+Implemented a read-only RFB bridge in the canonical Broker and the generated
+plugin runtime. The Computer panel uses noVNC via DSH's authenticated exact
+Fetch route on both carrier types. Human control still displays the verified
+PNG used for input authorization. Both paths retain the previous canvas pixels
+while a new frame loads or the stream reconnects.
+
+Verification for this change:
+
+- Full unit suite: 1,419 passed, 2 skipped, 0 failed (1,421 total).
+- After the final poster/visibility changes: 151 focused Computer, installation,
+  generated-client and translation checks passed.
+- Client and runtime generated-output checks passed. Lint exited successfully
+  with existing warnings outside the new streaming implementation.
+- `dev/computer-stream-smoke.mjs` passed against a newly created isolated
+  TigerVNC desktop with a real Chromium/noVNC client. It verified incremental
+  updates, stable presentation-canvas identity, retained pixels during an
+  injected outage, successful reconnect and retention after invalid PNG decode.
+  The test removed its own container, volume, browser and temporary home.
+- The actual pinned DSH 0.2.1-rc.4 Web route rejected an unauthenticated viewer
+  request (401) and admitted the authenticated owner to the route (503 for the
+  deliberately unconfigured test runtime).
+- The generic mock-model smoke test did **not** pass: `show_view` option/large
+  view assertions failed. Bootstrap, model selection, Bot creation, group
+  messaging and memory flows ran successfully. The broad run was stopped after
+  these failures; it must not be reported as a passing full DSH regression.
+  All processes started by this run were stopped. DSH itself was not modified.
+- Windows GUI validation remains user-run; it was not performed in this WSL
+  session. The transport uses the public Desktop-capable Fetch contract.
+
+Local test artifact: `artifacts/ds-bot-0.2.5-cua.4.tgz`.
+Only the staging package version was changed; the repository version remains
+0.2.4. Packaged host files and client match the tested workspace, all runtime
+manifest hashes were checked, and noVNC source/license notices are included.
+SHA-256: `f9f6038d1099a8aae81a05b3e6de02c1927479d7cfd348960cd49498b988b594`.

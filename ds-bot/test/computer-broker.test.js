@@ -149,3 +149,42 @@ test('upgrade image IDs remain a bounded ordered argv value on Windows and Linux
   assert.deepEqual(brokerLaunch(config, 'linux').args, [image, '--ipc', JSON.stringify([image, candidate])])
   for (const images of ['not-an-array', ['mutable:tag'], Array(5).fill(candidate)]) assert.throws(() => brokerLaunch({ ...config, images }, 'linux'))
 })
+
+test('Broker viewer chunks wait for consumption and writes wait for stdin acknowledgement', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'ds-bot-viewer-'))
+  const entrypoint = join(home, 'fixture.mjs')
+  await writeFile(entrypoint, `
+let stream
+process.on('message', message => {
+  if (message.method === 'viewer-open') {
+    stream = message.options.stream
+    process.send({ id: message.id, ok: true, value: null })
+    process.send({ stream, type: 'data', data: Buffer.from('first').toString('base64') })
+  } else if (message.type === 'ack') process.send({ stream, type: 'data', data: Buffer.from('second').toString('base64') })
+  else if (message.type === 'write') setTimeout(() => process.send({ stream, type: 'written' }), 30)
+})
+`)
+  const provider = createBrokerProvider({ entrypoint, image })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  const stream = await provider.openViewer(target.record)
+  const chunks = []
+  let resume, first
+  const received = new Promise(resolve => { first = resolve })
+  stream.onData((data, ack) => { chunks.push(data.toString()); resume = ack; first() })
+  await received
+  await new Promise(resolve => setTimeout(resolve, 15))
+  assert.deepEqual(chunks, ['first'])
+  resume()
+  while (chunks.length < 2) await new Promise(resolve => setTimeout(resolve, 1))
+  assert.deepEqual(chunks, ['first', 'second'])
+  let written = false
+  const write = stream.write(Buffer.from([1])).then(() => { written = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(written, false)
+  await write
+  assert.equal(written, true)
+  const pending = stream.write(Buffer.from([1]))
+  const rejected = assert.rejects(pending, /closed/)
+  stream.close()
+  await rejected
+})

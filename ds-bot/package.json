@@ -40,7 +40,9 @@
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE",
+    "licenses/"
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs && node scripts/build-computer-runtime.mjs",
@@ -69,6 +71,7 @@
     "esbuild": "0.28.2"
   },
   "dependencies": {
+    "@novnc/novnc": "1.5.0",
     "deep-view": "0.1.0"
   }
 }

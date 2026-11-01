@@ -147,3 +147,16 @@ MIT License, Copyright (c) 2025 Cua AI, Inc.
   Operating-system and desktop packages keep their notices inside the image;
   this development image is not yet a distribution release.
   The Computer orchestration and plugin code are original DS Bot code.
+
+noVNC 1.5.0 (https://github.com/novnc/noVNC), MPL-2.0
+Copyright (C) 2022 The noVNC Authors
+
+  The generated ds-bot/client.js bundles the unmodified @novnc/novnc npm
+  library, including its pako dependency (MIT). The library remains covered
+  by its original licenses. License texts, author notices and the preferred
+  source for the corresponding core library and pako are distributed in
+  ds-bot/licenses/novnc/ (licenses/novnc/ in the npm package).
+  Source: https://github.com/novnc/noVNC/tree/v1.5.0
+  source-1.5.0.tar.gz contains core/, vendor/pako/ and their notices. The
+  original source is transformed only by the npm distribution and esbuild;
+  DS Bot's viewer integration is separate original code.

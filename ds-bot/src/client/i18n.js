@@ -5,6 +5,12 @@
 export const NAMESPACE = 'ds-bot'
 
 const ZH = {
+  "Retry live stream": "重试实时桌面流",
+  "Connecting to desktop…": "正在连接桌面…",
+  "Reconnecting to desktop…": "正在重新连接桌面…",
+  "Live desktop stream (read-only).": "实时流式桌面（只读）。",
+  "Control uses verified snapshots. The last image stays visible while the next one loads.": "接管操作使用已验证的截图。加载新画面时保留上一张画面。",
+  "Live desktop streaming is unavailable. Showing PNG snapshots instead.": "实时桌面流暂不可用，当前显示 PNG 截图。",
   "Container engine": "容器引擎",
   "Podman (experimental)": "Podman（实验性）",
   "Preparing the Podman machine": "正在准备 Podman 虚机",

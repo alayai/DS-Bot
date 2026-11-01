@@ -8,7 +8,7 @@
     "podman.mjs": "4b14297313f646225aefdf5a31b534ef12cb44115470af9851fcae7a71a4a77e",
     "README.md": "e75f84831eb4babc139101eb7e7b1feb361caddd4cba36f7f05f4f21103d1405",
     "TOOL_POLICY.md": "49530ee226b22f0da1fc46633ab82895d9b7dc2de66fb75128842e7a926cf0f1",
-    "broker/main.mjs": "d22831396b4ec5ef2f23ab9df3b6e792f55ca89ed3997573ececfe70981399df",
+    "broker/main.mjs": "87162bef263c75f5123f2139a4f3d9cd39d03864a83eb019df839c71567ea5b0",
     "broker/boundary.mjs": "9b3d06fef5b3daeff09abb7b897ade37f79f3bf94eeb676a050912abef5d6e27",
     "broker/checkpoint.mjs": "b5c4d40e4ac68e6961deb2005befe2d729cd734e47c575d6351bc0808126f0d0",
     "broker/checkpoint.py": "68c4ad48d1ef49034ffe4657a63e466daae76d5d9c5b05e3db15a6a80d1607d5",
@@ -21,6 +21,6 @@
     "desktop/inventory.py": "cb48e222a8d3847b86048a912c616493be1e84b33124da63a06c78fb1be2d7b6",
     "licenses/cua-MIT.txt": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "NOTICE": "b489be5459b128398b7216c64c02b2dfd62d50d2137d364f0eaeca6a506d53d9"
+    "NOTICE": "7a279f611d2a10858dbe5851b906cab181056d215a7407e235cd8e276fd9f61d"
   }
 }

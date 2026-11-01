@@ -88,7 +88,11 @@ function viewer({ setup = false } = {}) {
     return out
   }
   const button = label => find(render(), node => node.type === 'button' && node.props.children[0] === label)
-  const image = () => find(render(), node => node.type === 'img')
+  const image = () => {
+    const screen = find(render(), node => typeof node.type === 'function' && node.type.name === 'ComputerScreen')
+    if (!screen?.props.frame) return undefined
+    return { props: { ...screen.props, onLoad: () => screen.props.onPresented(screen.props.frame.data), onError: () => screen.props.onPresented(null), onClick: event => screen.props.onPointer(event, 'click') } }
+  }
   return {
     calls, timers, listeners, render, button, image,
     setupState: value => { setupState = { ...setupState, ...value } },
@@ -145,7 +149,7 @@ test('changed, expired and failed images cannot receive desktop input', async ()
   view.advance(5000)
   assert.equal(view.button('Send key').props.disabled, true)
   view.image().props.onError()
-  assert.equal(view.image(), undefined)
+  assert.equal(view.button('Send key').props.disabled, true)
   view.unmount()
 })
 
@@ -194,6 +198,23 @@ test('busy refresh keeps the last image, disables input and recovers on a fresh 
   await tick()
   assert.equal(view.image(), undefined)
   assert.equal(view.button('Give back to Bot').props.disabled, true)
+  view.unmount()
+})
+
+test('a background snapshot leaves the access selector enabled', async () => {
+  const view = viewer()
+  view.render()
+  await tick()
+  await tick()
+  const access = () => find(view.render(), node => node.type === 'select' && node.props.value === 'operate' && !node.props['aria-label'])
+  assert.equal(Boolean(access().props.disabled), false)
+  let release
+  view.wait(new Promise(done => { release = done }))
+  view.poll()
+  await tick()
+  assert.equal(Boolean(access().props.disabled), false)
+  release()
+  await tick()
   view.unmount()
 })
 
