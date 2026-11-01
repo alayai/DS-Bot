@@ -1,3 +1,53 @@
+import { randomUUID } from 'node:crypto'
+
+export function quotaArguments(bytes = 0, engine) {
+  if (!Number.isSafeInteger(bytes) || (bytes !== 0 && (bytes < 1024 ** 3 || bytes > 1024 ** 4))) throw new Error('Home quotas must be 0 or 1–1024 GiB.')
+  if (!bytes) return []
+  if (engine?.kind !== 'podman') throw new Error('Persistent home quotas require Podman on XFS with project quotas. This engine cannot enforce them.')
+  return ['--opt', `o=size=${bytes}`, '--label', `org.ds-bot.computer.quota=${bytes}`]
+}
+
+export async function probeHomeQuota(docker, image, engine, signal) {
+  quotaArguments(1024 ** 3, engine)
+  const id = randomUUID()
+  const volume = `dsbot-quota-probe-${id}`
+  const helper = `dsbot-quota-check-${id}`
+  let attempted = false
+  const code = `import os,errno,json\nwith open('/home/cua/.dsbot-quota-check','xb') as f:\n try:\n  os.posix_fallocate(f.fileno(),0,128*1024*1024)\n except OSError as e:\n  if e.errno != errno.EDQUOT: raise\n else: raise RuntimeError('The volume size was not enforced by the kernel.')\nprint(json.dumps({'enforced':True,'backend':'podman-xfs'}))`
+  try {
+    try {
+      await docker(['volume', 'inspect', volume], signal)
+      throw new Error('Quota probe storage already exists.')
+    } catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+    attempted = true
+    await docker(['volume', 'create', '--opt', 'o=size=67108864', '--opt', 'nocopy', '--uid', '1000', '--gid', '1000',
+      '--label', `org.ds-bot.computer.quota-probe=${id}`, volume], signal)
+    const result = await docker(['run', '--rm', '--name', helper, '--label', `org.ds-bot.computer.quota-probe=${id}`, '--read-only', '--user', '1000:1000',
+      '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--memory', '256m', '--memory-swap', '256m', '--cpus', '1', '--pids-limit', '32',
+      '--mount', `type=volume,source=${volume},target=/home/cua`, '--entrypoint', 'python3', image, '-c', code], signal)
+    const value = JSON.parse(result.stdout)
+    if (value.enforced !== true || value.backend !== 'podman-xfs') throw new Error('The home quota could not be verified.')
+    return value
+  } finally {
+    if (attempted) {
+      let container, value
+      try { container = JSON.parse((await docker(['inspect', helper])).stdout)[0] }
+      catch (error) { if (!/no such (object|container)/i.test(error.stderr ?? '')) throw error }
+      if (container) {
+        if (container.Config?.Labels?.['org.ds-bot.computer.quota-probe'] !== id) throw new Error('Quota probe cleanup could not verify its helper.')
+        await docker(['rm', '-f', helper])
+      }
+      try { value = JSON.parse((await docker(['volume', 'inspect', volume])).stdout)[0] }
+      catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+      if (value) {
+        if (value.Name !== volume || value.Labels?.['org.ds-bot.computer.quota-probe'] !== id) throw new Error('Quota probe cleanup could not verify its volume.')
+        await docker(['volume', 'rm', volume])
+      }
+    }
+  }
+}
+
 export function assertLocalEndpoint(endpoint, platform = process.platform) {
   const unix = platform === 'linux' && /^unix:\/\/\/[^?#\x00-\x20]+$/.test(endpoint)
   const pipe = platform === 'win32' && /^npipe:\/\/\/\/\.\/pipe\/(?:docker_engine|dockerDesktopLinuxEngine)$/.test(endpoint)
@@ -5,9 +55,16 @@ export function assertLocalEndpoint(endpoint, platform = process.platform) {
 }
 
 export function assertVolume(data, value) {
+  const backupPrefix = `dsbot-${value.record.id}-backup-`
+  const backup = value.volume.startsWith(backupPrefix) && /^[a-f0-9-]{36}$/.test(value.volume.slice(backupPrefix.length))
+    && data?.Labels?.['org.ds-bot.computer.storage'] === 'checkpoint'
+  const quota = backup ? 0 : value.record.homeQuotaBytes ?? 0
+  const expected = quota ? { o: `size=${quota}` } : {}
   if (data?.Name !== value.volume || data.Driver !== 'local'
     || data.Labels?.['org.ds-bot.computer.id'] !== value.record.id
-    || Object.keys(data.Options ?? {}).length > 0) {
+    || JSON.stringify(data.Options ?? {}) !== JSON.stringify(expected)
+    || (quota && data.Labels?.['org.ds-bot.computer.quota'] !== String(quota))
+    || (!quota && data.Labels?.['org.ds-bot.computer.quota'] !== undefined)) {
     throw new Error('The desktop volume is not a managed local Computer volume.')
   }
 }

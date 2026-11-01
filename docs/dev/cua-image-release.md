@@ -79,3 +79,35 @@ leave the user's DSH data and existing desktops alone.
 Fresh setup verifies the downloaded ID against the tested ID. Pull failure stays
 visible and retryable; it does not silently switch to local building. Existing
 desktops keep their original pinned image after a plugin update.
+
+## GitHub Release archive delivery
+
+`computer-image-release.yml` provides an alternative when anonymous GHCR access
+is unavailable. Push reviewed source to `codex/cua-image-release`, or dispatch the
+workflow at the reviewed commit. It builds and exercises the same desktop, exports
+a gzip Docker archive, and publishes 256 MiB parts in a preview GitHub Release.
+The manifest pins every part's byte length and SHA-256, the image ID and recipe.
+A second runner with an empty image cache downloads anonymously, verifies all
+bytes, loads the image and repeats the desktop smoke. No registry credentials
+are needed by the installer. A private repository cannot pass anonymous delivery.
+
+Only a successful verification creates
+`codex/cua-image-evidence-FULL_SOURCE_COMMIT`, whose sole additional commit pins
+`computer-runtime/runtime.lock.json`. Check that its parent is the intended source
+commit and its recipe matches the current desktop before importing that lock.
+The result branch `codex/cua-image-result-FULL_SOURCE_COMMIT-RUN_ID` records the
+publish/verify outcomes for operators using SSH Git without GitHub API access.
+A release or result branch alone is not approval to promote the lock.
+
+Published assets are not overwritten on a rerun. An existing manifest must match
+exactly. If a failed release contains incomplete or different assets, investigate
+it and publish a new reviewed source commit instead of force-pushing evidence.
+The source development branch is never moved by the workflow. Successful
+publication still needs the lock imported, generated payload rebuilt and a new
+plugin package; existing installations retain their original image pin.
+
+The loader allows at most 8 GiB, rejects malformed manifests and incomplete,
+changed or oversized parts, checks temporary free disk space and cleans its own
+temporary files after success, error or cancellation. It never extracts the
+archive on the host. Download errors remain visible and retryable; they do not
+silently fall back to building a different image.

@@ -268,3 +268,89 @@ test('retry after host restart retains the explicitly selected machine preparati
   assert.equal(machineStarts, 1)
   assert.equal((await h.setup.state()).job.phase, 'ready')
 })
+
+test('Windows installation persists consent and resumes after a new boot without replaying WSL', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  let status = { bootId: '2026-11-01T01:00:00.000Z', wslReady: false, engineInstalled: false, wingetAvailable: true }
+  const installs = []
+  let opens = 0
+  h.runtime.systemStatus = async () => status
+  h.runtime.installSystem = async (_, component) => {
+    const saved = JSON.parse(await readFile(join(h.home, 'computers/setup.json')))
+    assert.equal(saved.job.systemStep, component)
+    installs.push(component)
+    if (component === 'engine') status.engineInstalled = true
+  }
+  h.runtime.openEngine = async () => { opens++ }
+  await assert.rejects(h.setup.prepare({ botId: 'a', installSystem: true }), /Confirm/)
+  await h.setup.prepare({ botId: 'a', installSystem: true, installConsent: true })
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'waiting-restart')
+  await h.setup.resume()
+  assert.deepEqual(installs, ['wsl'])
+  status = { ...status, bootId: '2026-11-01T02:00:00.000Z', wslReady: true }
+  await Promise.all([h.setup.resume(), h.setup.resume()])
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'ready')
+  assert.deepEqual(installs, ['wsl', 'engine'])
+  assert.equal(opens, 1)
+})
+
+test('cancelled restart waiting does not resume; changing engines needs new installation consent', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  let status = { bootId: '2026-11-01T01:00:00.000Z', wslReady: false }
+  let installs = 0
+  h.runtime.systemStatus = async () => status
+  h.runtime.installSystem = async () => { installs++ }
+  await h.setup.prepare({ botId: 'a', installSystem: true, installConsent: true })
+  await h.settled()
+  const { job } = await h.setup.state()
+  await assert.rejects(h.setup.prepare({ botId: 'a', jobId: job.id, engineKind: 'podman' }), /Confirm/)
+  await h.setup.cancel({ jobId: job.id })
+  status = { ...status, bootId: '2026-11-01T02:00:00.000Z', wslReady: true }
+  await h.setup.resume()
+  assert.equal((await h.setup.state()).job.phase, 'cancelled')
+  assert.equal(installs, 1)
+})
+
+test('host restart reconciles an uncertain engine installer without replay or premature image preparation', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  await mkdir(join(h.home, 'computers'))
+  await writeFile(join(h.home, 'computers/setup.json'), JSON.stringify({ version: 1,
+    job: { id: 'saved', botId: 'a', engineKind: 'docker', phase: 'installing-system',
+      installSystem: true, resumeAfterRestart: true, systemStep: 'engine' } }))
+  let installed = false, opens = 0
+  h.runtime.systemStatus = async () => ({ bootId: '2026-11-01T01:00:00.000Z', wslReady: true, engineInstalled: installed })
+  h.runtime.installSystem = async () => assert.fail('Uncertain installation must not replay')
+  h.runtime.openEngine = async () => { opens++ }
+  await h.setup.restore()
+  assert.equal((await h.setup.state()).job.phase, 'interrupted')
+  assert.equal(h.calls.includes('build'), false)
+  installed = true
+  await h.setup.resume()
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'ready')
+  assert.equal(opens, 1)
+})
+
+test('waiting for Docker never repeatedly opens it and missing winget produces a useful failure', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  let installed = false, opens = 0
+  h.runtime.systemStatus = async () => ({ bootId: '2026-11-01T01:00:00.000Z', wslReady: true, engineInstalled: installed, wingetAvailable: false })
+  h.runtime.openEngine = async () => { opens++ }
+  await h.setup.prepare({ botId: 'a', installSystem: true, installConsent: true })
+  await h.settled()
+  assert.match((await h.setup.state()).job.error, /App Installer/)
+  installed = true
+  h.discoveryError('engine is starting')
+  await h.setup.prepare({ botId: 'a', installSystem: true, installConsent: true })
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'waiting-runtime')
+  await h.setup.resume()
+  assert.equal(opens, 1)
+  h.discoveryError(null)
+  await h.setup.resume()
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'ready')
+  assert.equal(opens, 1)
+})

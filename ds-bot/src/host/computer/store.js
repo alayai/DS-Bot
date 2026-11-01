@@ -2,6 +2,7 @@ import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { checkId, refused } from './contract.js'
+import { resourceLimits } from '../../shared/computer-resources.js'
 
 const empty = () => ({ version: 1, revision: 0, computers: {}, operations: {} })
 
@@ -11,9 +12,13 @@ function validate(value) {
     || !value.operations || Array.isArray(value.operations) || typeof value.operations !== 'object') {
     throw refused('store-invalid', 'Computer metadata is invalid; it has not been overwritten.')
   }
+  if (value.limits !== undefined) {
+    try { resourceLimits(value.limits) } catch { throw refused('store-invalid', 'Invalid desktop resource limits.') }
+  }
   for (const [id, record] of Object.entries(value.computers)) {
     checkId(id)
     if (record?.id !== id || !['off', 'observe', 'operate'].includes(record.grant)
+      || (record.homeQuotaBytes !== undefined && (!Number.isSafeInteger(record.homeQuotaBytes) || record.homeQuotaBytes < 1024 ** 3 || record.homeQuotaBytes > 1024 ** 4))
       || (record.approvalMode !== undefined && !['required', 'yolo'].includes(record.approvalMode))
       || !['assisted'].includes(record.executionPolicy) || !Number.isSafeInteger(record.generation) || record.generation < 1
       || (record.runtimeImage !== undefined && !/^sha256:[a-f0-9]{64}$/.test(record.runtimeImage))

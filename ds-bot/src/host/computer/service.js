@@ -1,4 +1,5 @@
 import { checkTransfer, CHUNK_SIZE } from '../../shared/computer-files.js'
+import { DEFAULT_RESOURCE_LIMITS, resourceLimits, resourceWarnings } from '../../shared/computer-resources.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { checkActions, checkFrame, checkId, checkProvider, refused } from './contract.js'
@@ -31,12 +32,11 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   const held = new Map()
   const managing = new Set()
   const touched = new Map()
-  const maxRunning = rt.config.computer?.maxRunning ?? 2
-  const idleStopMs = rt.config.computer?.idleStopMs ?? 900_000
-  if (!Number.isInteger(maxRunning) || maxRunning < 1 || maxRunning > 8
-    || !Number.isSafeInteger(idleStopMs) || (idleStopMs !== 0 && idleStopMs < 60_000)) {
-    throw refused('invalid', 'Desktop limits require maxRunning 1–8 and idleStopMs 0 or at least 60000.')
-  }
+  const defaults = resourceLimits({ ...DEFAULT_RESOURCE_LIMITS,
+    maxRunning: rt.config.computer?.maxRunning ?? DEFAULT_RESOURCE_LIMITS.maxRunning,
+    idleStopMs: rt.config.computer?.idleStopMs ?? DEFAULT_RESOURCE_LIMITS.idleStopMs })
+  const measurements = new Map()
+  let sampling
   let closed = false
   let initializing
   let recovery = { version: randomUUID(), status: 'idle', stage: null, completed: 0, total: 0 }
@@ -51,6 +51,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (rt.readOnly() !== undefined) throw refused('read-only', 'This host does not own the Bot team.')
   }
   const store = createComputerStore(join(rt.home, 'computers', 'registry.json'), { writable })
+  const limits = () => store.snapshot()?.limits ?? defaults
   async function ready(allowRecovery = false) {
     await rt.load()
     writable()
@@ -166,7 +167,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     available(current)
     return current
   }
-  function exclusive(record, signal, work) {
+  function exclusive(record, signal, work, touch = true) {
     operational()
     if (active.has(record.id)) throw refused('busy', 'A desktop operation is still settling.')
     const controller = new AbortController()
@@ -175,10 +176,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     active.set(record.id, entry)
     entry.promise = Promise.resolve().then(() => {
       combined.throwIfAborted()
-      touched.set(record.id, clock())
+      if (touch) touched.set(record.id, clock())
       return work(combined, entry)
     }).finally(() => {
-      touched.set(record.id, clock())
+      if (touch) touched.set(record.id, clock())
       if (active.get(record.id) === entry) active.delete(record.id)
     })
     return entry.promise
@@ -227,13 +228,15 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       computers.push({
         id: record.id, botId: record.botId, generation: record.generation, grant: record.grant,
         archived: record.archived, executionPolicy: record.executionPolicy, approvalMode: record.approvalMode ?? 'required',
-        runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {},
+        runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {}, homeQuotaBytes: record.homeQuotaBytes ?? 0,
         previousHomes: record.previousHomes ?? [], recoveryPending: Boolean(stored.lifecycle?.[record.id]),
         provider: provider.kind, phase, control: controls.get(record.id) ?? 'none',
         humanExpired: controls.get(record.id) === 'human' && (!humans.has(record.id) || humans.get(record.id).expires <= clock()),
+        resources: measurements.get(record.id)?.generation === record.generation ? { ...measurements.get(record.id),
+          warnings: resourceWarnings(measurements.get(record.id).storage, limits()) } : null,
       })
     }
-    return { revision: stored.revision, computers, images: provider.images ?? [], limits: { maxRunning, idleStopMs }, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list(),
+    return { revision: stored.revision, computers, images: provider.images ?? [], limits: limits(), quotaBackend: provider.quotaBackend ?? null, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list(),
       recovery: { ...recovery, supported: recoverySupported, disconnected: provider.connectionState?.() === 'disconnected' } }
   }
   async function drainOperations(operations, signal) {
@@ -324,13 +327,68 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     })
     return state()
   }
-  async function diagnostics(args) {
+  async function diagnostics(args, background = false) {
     await ready()
     const record = await assigned(args.botId)
     if (record.generation !== args.expectedGeneration) throw refused('stale-generation', 'Refresh before checking storage.')
     if (typeof provider.diagnostics !== 'function') throw refused('unavailable', 'Storage diagnostics are unavailable.')
     if (store.snapshot()?.lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before checking storage.')
-    return exclusive(record, undefined, signal => provider.diagnostics(record, { signal }))
+    try {
+      // A periodic disk scan is not user activity and must not postpone idle stop.
+      const value = await exclusive(record, undefined, signal => provider.diagnostics(record, { signal }), !background)
+      if (!value?.storage || !['bytes', 'freeBytes', 'totalBytes'].every(key =>
+        Number.isSafeInteger(value.storage[key]) && value.storage[key] >= 0)) throw refused('unavailable', 'Storage diagnostics returned invalid measurements.')
+      if (!closed) measurements.set(record.id, { storage: value.storage, generation: record.generation, at: clock(), checkedAt: clock(), error: false })
+      return value
+    } catch (error) {
+      const previous = measurements.get(record.id)
+      if (!closed) measurements.set(record.id, { ...(previous?.generation === record.generation ? previous : {}),
+        generation: record.generation, checkedAt: clock(), error: true })
+      throw error
+    }
+  }
+  async function setResourceLimits({ expectedRevision, limits: requested, botId, expectedGeneration }) {
+    await ready()
+    let next
+    try { next = resourceLimits(requested) } catch (error) { throw refused('invalid', error.message) }
+    return administration('runtime-start', async () => {
+      const snapshot = await store.load()
+      if (snapshot.revision !== expectedRevision) throw refused('conflict', 'Desktop resource settings changed. Refresh before saving.')
+      if (next.newHomeQuotaBytes && next.newHomeQuotaBytes !== limits().newHomeQuotaBytes) {
+        if (provider.quotaBackend !== 'podman-xfs' || typeof provider.checkQuota !== 'function') throw refused('unsupported', 'This engine cannot enforce persistent home quotas. Use Podman on XFS with project quotas.')
+        const record = await assigned(botId)
+        if (record.generation !== expectedGeneration) throw refused('stale-generation', 'The desktop binding changed. Refresh before managing it.')
+        const result = await exclusive(record, undefined, signal => provider.checkQuota(record, { signal }))
+        if (result?.enforced !== true) throw refused('unsupported', 'The kernel did not confirm home quota enforcement.')
+      }
+      if (next.maxRunning < limits().maxRunning) {
+        let running = 0
+        for (const record of Object.values(snapshot.computers)) {
+          if ((await provider.inspect(record)).phase !== 'stopped') running++
+        }
+        if (running > next.maxRunning) throw refused('resource-limit', 'Stop desktops before lowering the running limit.')
+      }
+      await store.update(draft => {
+        if (draft.revision !== expectedRevision) throw refused('conflict', 'Desktop resource settings changed. Refresh before saving.')
+        draft.limits = next
+      })
+      return { limits: next }
+    })
+  }
+  async function sampleResources() {
+    if (closed || !initializing || sampling || typeof provider.diagnostics !== 'function'
+      || ['running', 'failed'].includes(recovery.status)) return
+    sampling = (async () => {
+      await ready()
+      for (const record of Object.values((await store.load()).computers)) {
+        if (closed) break
+        if (record.archived || active.has(record.id) || managing.has(record.botId)
+          || store.snapshot()?.lifecycle?.[record.id]
+          || (measurements.get(record.id)?.generation === record.generation && clock() - measurements.get(record.id).checkedAt < 60_000)) continue
+        try { await diagnostics({ botId: record.botId, expectedGeneration: record.generation }, true) } catch {}
+      }
+    })()
+    try { await sampling } finally { sampling = undefined }
   }
   async function bind(args) {
     await ready()
@@ -362,6 +420,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         ...(existing?.homeRevision ? { homeRevision: existing.homeRevision } : {}),
         ...(existing?.previousHomes ? { previousHomes: existing.previousHomes } : {}),
         ...(existing?.previousImages ? { previousImages: existing.previousImages } : {}),
+        ...((existing?.homeQuotaBytes ?? (!existing ? limits().newHomeQuotaBytes : 0)) ? { homeQuotaBytes: existing?.homeQuotaBytes ?? limits().newHomeQuotaBytes } : {}),
         id, botId, grant, executionPolicy, approvalMode, generation: (existing?.generation ?? 0) + 1, archived: false,
       }
       draft.computers[id] = record
@@ -534,7 +593,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         if (other.id === record.id) continue
         if ((await provider.inspect(other)).phase !== 'stopped') running++
       }
-      if (running >= maxRunning) throw refused('resource-limit', 'The running desktop limit was reached. Stop another desktop first.')
+      if (running >= limits().maxRunning) throw refused('resource-limit', 'The running desktop limit was reached. Stop another desktop first.')
       return work()
     })
   }
@@ -865,6 +924,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     }
   }
   async function reapIdle() {
+    const { idleStopMs } = limits()
     if (closed || !initializing || idleStopMs === 0 || ['running', 'failed'].includes(recovery.status)) return
     await ready()
     for (const record of Object.values((await store.load()).computers)) {
@@ -888,6 +948,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     for (const operation of active.values()) operation.controller.abort()
     try {
       await recoveryTask
+      await sampling?.catch(() => {})
       if (initializing) {
         await initializing.catch(() => {})
         const state = await store.load()
@@ -898,5 +959,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, diagnostics, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }

@@ -5,10 +5,14 @@ import { importDesktopFiles, validateDesktopFiles, exportDesktopFile } from './c
 import { FILE_LIMIT } from '../shared/computer-files.js'
 
 import { ComputerScreen } from './computer-stream.js'
+import { ComputerResources } from './computer-resources.js'
 const KEYS = ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space']
 const PHASE = { ready: 'Running', stopped: 'Stopped', starting: 'Starting', error: 'Needs recovery', unavailable: 'Unavailable' }
 
 const SETUP_PHASE = {
+  'installing-system': 'Installing Windows desktop components',
+  'waiting-restart': 'Restart Windows, then reopen DSH to continue',
+  'waiting-runtime': 'Waiting for the desktop engine',
   checking: 'Checking the desktop environment', 'preparing-runtime': 'Preparing the Podman machine', 'preparing-image': 'Preparing the desktop image',
   'verifying-image': 'Verifying the desktop image', configuring: 'Saving desktop settings',
   'starting-desktop': 'Starting the private desktop', 'checking-desktop': 'Waiting for a desktop screenshot',
@@ -22,6 +26,7 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
   const [busy, setBusy] = useState(false)
   const [showDesktop, setShowDesktop] = useState(false)
   const [engineKind, setEngineKind] = useState(null)
+  const [installConfirmation, setInstallConfirmation] = useState(false)
   const session = useRef({ mounted: false, pending: false })
   const ready = Boolean(state?.enabled && state?.job?.phase === 'ready' && !state?.busy)
   async function request(method, args = {}) {
@@ -54,7 +59,7 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
   const blocked = state?.disabled || state?.explicit
   return h('section', { className: 'bt-computer', 'aria-label': t('Private desktop setup') },
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t('Not configured'))),
-    h('p', null, t('Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.')),
+    h('p', null, t('Prepare a private Linux desktop on the machine running DSH. The first preparation downloads the published image, or builds the bundled recipe when no image is published.')),
     h('p', { className: 'bt-muted' }, t('Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop can reach the internet; its traffic is not filtered.')),
     h('label', null, t('Container engine'), ' ', h('select', {
       value: state?.engine ?? engineKind ?? state?.environment?.engine ?? 'docker',
@@ -72,14 +77,26 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
     job?.error ? h('p', { className: 'bt-error' }, t(job.error)) : null,
     error ? h('p', { className: 'bt-error', role: 'alert' }, t(error)) : null,
     h('div', { className: 'bt-computer-actions' },
+      state?.canInstallSystem && state.environment?.ready === false && !blocked ? h('button', {
+        type: 'button', className: 'bt-soft', disabled: preparing || leaving,
+        onClick: () => setInstallConfirmation(true),
+      }, t('Install desktop environment')) : null,
       state?.canPrepareRuntime && state.environment?.ready === false && !blocked ? h('button', { type: 'button', className: 'bt-soft', disabled: preparing || leaving,
         onClick: () => request('setup-prepare', { prepareRuntime: true, engineKind: 'podman' }) }, t('Prepare Podman machine and desktop')) : null,
       h('button', { type: 'button', className: 'bt-soft', disabled: preparing || blocked || !state || leaving,
         onClick: () => request(job ? 'setup-retry' : 'setup-prepare', job ? { jobId: job.id } : {}) }, t(job ? 'Retry preparation' : 'Prepare and start')),
       h('button', { type: 'button', className: 'bt-soft', disabled: preparing || leaving, onClick: () => request('setup-state', { check: true }) }, t('Check again')),
-      state?.busy && job ? h('button', { type: 'button', className: 'bt-soft', disabled: busy || job.phase === 'cancelling' || leaving,
+      job && (state?.busy || (job.resumeAfterRestart && ['waiting-restart', 'waiting-runtime', 'interrupted'].includes(job.phase))) ? h('button', { type: 'button', className: 'bt-soft', disabled: busy || job.phase === 'cancelling' || leaving,
         onClick: () => request('setup-cancel', { jobId: job.id }) }, t('Cancel preparation')) : null,
       state?.enabled && !preparing ? h('button', { type: 'button', className: 'bt-soft', onClick: () => setShowDesktop(true) }, t('Open desktop controls')) : null),
+    installConfirmation ? h('div', { className: 'bt-computer-help', role: 'group', 'aria-label': t('Confirm system installation') },
+      h('p', null, t('Install WSL and the selected engine on the Windows machine running DSH? This accepts the Windows Package Manager source and package agreements. Review the engine licensing terms and complete any Windows permission or installer prompts.')),
+      h('p', { className: 'bt-muted' }, t('Windows may need a restart. DSH will not restart your computer. Reopen DSH afterward to continue the approved preparation; completed system steps are not repeated.')),
+      h('p', { className: 'bt-muted' }, t('Windows App Installer must be available. Cancelling stops DSH preparation; an elevated Windows installer may continue and installed components are kept.')),
+      h('div', { className: 'bt-computer-row' },
+        h('button', { type: 'button', className: 'bt-soft', disabled: preparing || leaving,
+          onClick: () => { setInstallConfirmation(false); void request('setup-prepare', { installSystem: true, installConsent: true }) } }, t('Accept and install')),
+        h('button', { type: 'button', className: 'bt-soft', disabled: preparing, onClick: () => setInstallConfirmation(false) }, t('Cancel')))) : null,
     job?.log ? h('details', { className: 'bt-computer-help' }, h('summary', null, t('Preparation log')),
       h('pre', { className: 'bt-computer-log' }, job.log)) : null,
     h('p', { className: 'bt-muted' }, t('You can close this panel during preparation. Reopen it to see progress.')))
@@ -349,6 +366,9 @@ export function ComputerView({ bot, actions, leaving }) {
   const button = (label, onClick, disabled = false, recoveryAction = false) => h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || disabled || leaving || (serviceBlocked && !recoveryAction), onClick }, t(label))
   return h('div', { ref: panel, className: 'bt-computer', 'data-tick': tick },
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t(PHASE[record?.phase] ?? 'Not assigned'))),
+    h(ComputerResources, { key: bot.id, state, record, busy: busy || leaving || serviceBlocked,
+      save: (args, done) => run(async () => { await call('resource-limits', args); done() }),
+      measure: () => run(async () => setDiagnostics(await call('diagnostics'))) }),
     h('p', { className: 'bt-muted' }, t('Linux container with open internet access. Other Bot tools still run with their existing permissions.')),
     h('label', { className: 'bt-computer-row' }, t('Bot access'),
       h('select', { value: record?.grant ?? 'off', disabled: busy || !state || leaving || serviceBlocked, onChange: event => { void bind(event.target.value) } },
@@ -453,7 +473,9 @@ export function ComputerView({ bot, actions, leaving }) {
       h('div', { className: 'bt-computer-row' }, button('Check storage', () => run(async () => setDiagnostics(await call('diagnostics'))), !record || record.recoveryPending)),
       diagnostics?.storage ? h('div', { className: 'bt-computer-help', role: 'status' },
         h('span', null, `${t('Home size')}: ${(diagnostics.storage.bytes / 1048576).toFixed(1)} MiB · ${t('Disk available')}: ${(diagnostics.storage.freeBytes / 1073741824).toFixed(1)} GiB`),
-        h('p', { className: 'bt-muted' }, t('Storage is measured in the desktop runtime. A hard disk quota is not enforced.')),
+        h('p', { className: 'bt-muted' }, diagnostics.storage.hardQuota
+          ? `${t('Current home hard quota')}: ${(diagnostics.storage.quotaBytes / 1073741824).toFixed(1)} GiB`
+          : t('Storage is measured in the desktop runtime. A hard disk quota is not enforced.')),
         diagnostics.storage.freeBytes < diagnostics.storage.reserveBytes ? h('p', { className: 'bt-error' }, t('Storage is low. Free space before copying or upgrading.')) : null) : null,
       upgradeImages.length > 0 ? h('div', { className: 'bt-computer-help' },
         h('label', { className: 'bt-computer-row' }, t('Desktop image'),

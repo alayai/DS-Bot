@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { assertVolume, assertHomeImage } from './boundary.mjs'
+import { assertVolume, assertHomeImage, quotaArguments } from './boundary.mjs'
 import { engineCommand, engineEnvironment } from '../engine.mjs'
 
 export const homeVolume = record => `dsbot-${record.id}-home${record.homeRevision ? `-${record.homeRevision}` : ''}`
@@ -33,6 +33,7 @@ export async function checkpoint(method, value, options, { docker, image, signal
   try {
     await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`,
       '--label', `org.ds-bot.computer.checkpoint=${id}`, '--label', `org.ds-bot.computer.image=${destinationImage}`,
+      ...(method === 'restore' ? quotaArguments(record.homeQuotaBytes, engine) : []),
       '--label', `org.ds-bot.computer.storage=${method === 'checkpoint' ? 'checkpoint' : 'staged-home'}`, destination], signal)
     created = true
     const code = await readFile(new URL('./checkpoint.py', import.meta.url), 'utf8')
@@ -100,6 +101,7 @@ export async function storageUsage(value, { docker, image, signal }) {
       '--memory', '256m', '--memory-swap', '256m', '--cpus', '1', '--pids-limit', '32',
       '--mount', `type=volume,source=${value.volume},target=/source,readonly`, '--entrypoint', 'python3', image,
       '-c', `${code.split("if __name__ == '__main__':")[0]}\nprint(json.dumps(usage(Path('/source'))))`], signal)
-    return JSON.parse(result.stdout)
+    return { ...JSON.parse(result.stdout), hardQuota: Boolean(value.record.homeQuotaBytes),
+      quotaBytes: value.record.homeQuotaBytes ?? null, quotaScope: value.record.homeQuotaBytes ? 'current-home' : null }
   } finally { await docker(['rm', '-f', name]).catch(() => {}) }
 }

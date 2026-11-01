@@ -3,16 +3,19 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyComputerRuntime } from './runtime-bundle.js'
+import { windowsSystemStatus, installWindowsComponent, openWindowsEngine } from './windows-install.js'
+import { archiveSource, loadImageArchive } from './image-archive.js'
 
 export async function loadSetupRuntime() {
   // Container CLIs cannot read Electron's virtual ASAR filesystem.
   const directory = fileURLToPath(new URL('../../../computer-runtime/', import.meta.url)).replace(/\.asar([/\\])/g, '.asar.unpacked$1')
   verifyComputerRuntime(directory)
   const runtime = await import(pathToFileURL(join(directory, 'runtime.mjs')).href)
-  const { discoverEngine, runEngine, buildDesktop, runEngineTask, validateEngine, preparePodmanMachine } = await import(pathToFileURL(join(directory, 'engine.mjs')).href)
+  const { discoverEngine, runEngine, buildDesktop, runEngineTask, validateEngine, preparePodmanMachine, dockerExecutable, podmanExecutable } = await import(pathToFileURL(join(directory, 'engine.mjs')).href)
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   const lock = await runtime.validateLock()
   const published = runtime.publishedImage(lock)
+  const archive = archiveSource(lock)
   const recipe = createHash('sha256').update(JSON.stringify(
     ['runtime.lock.json', 'desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py'].map(name => [name, manifest.files[name]]),
   )).digest('hex')
@@ -22,18 +25,22 @@ export async function loadSetupRuntime() {
   })
   return {
     recipe,
+    systemStatus: kind => windowsSystemStatus(kind, { engineExecutable: kind === 'docker' ? dockerExecutable() : podmanExecutable() }),
+    installSystem: (kind, component, options) => installWindowsComponent(kind, component, options),
+    openEngine: kind => openWindowsEngine(kind),
     startRuntime: (engine, options) => preparePodmanMachine(engine, options),
     validate: validateEngine,
     discover: (engine, kind) => discoverEngine(engine, { kind: kind ?? engine?.kind ?? 'docker' }),
     async image(engine, pinned) {
-      const metadata = JSON.parse((await runEngine(engine, ['image', 'inspect', pinned ?? published ?? tag])).stdout)[0]
+      const metadata = JSON.parse((await runEngine(engine, ['image', 'inspect', pinned ?? published ?? (archive ? lock.publishedImageId : tag)])).stdout)[0]
       // Existing homes retain their original image when the plugin is updated.
-      if (!pinned && published) runtime.checkPublishedImage(lock, metadata.Id)
+      if (!pinned && (published || archive)) runtime.checkPublishedImage(lock, metadata.Id)
       await check(engine, metadata.Id)
       return metadata.Id
     },
     async prepare(engine, options) {
       if (published) await runEngineTask(engine, ['pull', published], options)
+      else if (archive) await loadImageArchive(engine, lock, options, { task: runEngineTask })
       else await buildDesktop(engine, join(directory, 'desktop'), tag, options)
       return this.image(engine)
     },

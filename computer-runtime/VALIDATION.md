@@ -966,3 +966,39 @@ Source version remains 0.2.4. Logs:
 `/tmp/cua12-{targeted,tests,panel,build,lint,package}.log`.
 Browser tests ran on Linux/WSL; Windows native dialog acceptance remains with
 the user. No user DSH data or existing desktops were changed.
+
+## 2026-11-01 — High-priority runtime and resource delivery
+
+Windows setup now records approved fixed system-install steps, the Windows boot
+identity, cancellation and uncertain installer outcomes. Reopening DSH can resume
+approved preparation after a reboot or engine startup, without replaying uncertain
+installers. The Windows command/boot/retry/cancellation tests use injected fixtures;
+no system installer or restart was executed on the user's Windows machine.
+Windows App Installer remains a prerequisite for the winget engine-install step.
+
+The desktop resource panel persists host-wide running/idle/warning settings with
+revision fencing and measures real guest disk usage. Periodic scans do not refresh
+idle activity, and failed or stale readings are labelled. New-home hard quotas are
+limited to Podman rootful/XFS: the kernel probe requires EDQUOT, all volume metadata
+is checked and restore/upgrade preserve the quota. Docker ordinary named volumes
+remain warning-only. Actual Podman/XFS enforcement is not certified in this Linux
+Docker environment; backups and root layers are outside the per-home quota.
+
+Validation before publication:
+
+- Unit suite: 1496 passed, 2 skipped, 0 failed.
+- Build, generated client/runtime checks and lint: passed (existing warnings).
+- Real browser/Host/Broker/guest: resource settings saved and real disk usage read;
+  1,048,607-byte file roundtrip SHA-256 matched; multiple Unicode/empty-file selection,
+  cancellation, no-overwrite and confirmed deletion passed; no browser exceptions.
+- Isolated mock Bot smoke: all 52 steps passed; owned processes and data cleaned.
+- Archive tests: current-recipe packing, installed loader, substituted image ID,
+  malformed manifest, checksum/length errors, low disk, cancellation and cleanup.
+- Quota tests: unsupported engines, kernel-probe refusal, interrupted creation,
+  foreign-resource cleanup refusal and exact metadata; existing home never resized.
+
+The archive workflow builds from a committed recipe, publishes bounded parts,
+verifies anonymous download on a second runner and repeats the actual desktop
+smoke. Its publication outcome is recorded separately; these local checks alone
+are not evidence of an available public image. Logs: `/tmp/cua13-{tests-final,
+recheck,panel,smoke,build-final,lint-final}.log`.

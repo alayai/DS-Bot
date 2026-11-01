@@ -1,0 +1,114 @@
+name: Publish desktop image archive
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/cua-image-release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: computer-image-archive
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build and exercise the actual desktop
+        run: |
+          node ds-bot/scripts/build-computer-runtime.mjs
+          docker build --platform linux/amd64 --progress=plain -t ds-bot-cua:release computer-runtime/desktop
+          image="$(docker image inspect ds-bot-cua:release --format '{{.Id}}')"
+          node computer-runtime/runtime.mjs check "$image" > image-build.json
+          node ds-bot/dev/computer-setup-smoke.mjs "$image" --report=image-smoke.json
+          node computer-runtime/runtime.mjs inventory "$image" > guest-sbom.cdx.json
+          docker save "$image" | gzip -1 > "$RUNNER_TEMP/desktop-image.tar.gz"
+          node ds-bot/scripts/computer-image-archive.mjs pack "$RUNNER_TEMP/desktop-image.tar.gz" image-release "$image"
+          node ds-bot/scripts/computer-image-archive.mjs lock image-release/desktop-manifest.json "$GITHUB_REPOSITORY" "$GITHUB_SHA" > image-release/runtime.lock.json
+      - name: Publish the tested archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="cua-desktop-$GITHUB_SHA"
+          printf 'Pinned Linux amd64 desktop image for DS Bot. Source commit: %s. See the smoke report and inventory; this is a technical preview.\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release download "$tag" --pattern desktop-manifest.json --dir "$RUNNER_TEMP/existing-release"
+            cmp image-release/desktop-manifest.json "$RUNNER_TEMP/existing-release/desktop-manifest.json"
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title "CUA desktop $GITHUB_SHA" --notes-file "$RUNNER_TEMP/release-notes.md" image-release/* image-build.json image-smoke.json guest-sbom.cdx.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: computer-image-archive-evidence
+          path: |
+            image-build.json
+            image-smoke.json
+            guest-sbom.cdx.json
+            image-release/desktop-manifest.json
+            image-release/runtime.lock.json
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: computer-image-archive-evidence
+      - name: Verify anonymous delivery on a fresh runner
+        run: |
+          node --input-type=module <<'JS'
+          import {readFile, writeFile} from 'node:fs/promises';
+          import {execFile} from 'node:child_process';
+          import {promisify} from 'node:util';
+          import {loadImageArchive} from './ds-bot/src/host/computer/image-archive.js';
+          const lock=JSON.parse(await readFile('image-release/runtime.lock.json'));
+          const run=promisify(execFile);
+          const images=await run('docker',['image','ls','-q','--no-trunc']);
+          if(images.stdout.includes(lock.publishedImageId))throw Error('Verification requires an empty image cache');
+          await loadImageArchive({},lock,{}, {task:async(_engine,args)=>run('docker',args,{timeout:1800000,maxBuffer:1048576})});
+          const {stdout}=await run('docker',['image','inspect',lock.publishedImageId,'--format','{{.Id}}']);
+          if(stdout.trim()!==lock.publishedImageId)throw Error('Anonymous archive image mismatch');
+          await writeFile('computer-runtime/runtime.lock.json',JSON.stringify(lock,null,2)+'\n');
+          JS
+          node computer-runtime/runtime.mjs check "$(node -p "require('./computer-runtime/runtime.lock.json').publishedImageId")"
+          node ds-bot/scripts/build-computer-runtime.mjs
+          node ds-bot/dev/computer-setup-smoke.mjs "$(node -p "require('./computer-runtime/runtime.lock.json').publishedImageId")" --report=anonymous-smoke.json
+          git config user.name "$(git log -1 --format=%an)"
+          git config user.email "$(git log -1 --format=%ae)"
+          git add computer-runtime/runtime.lock.json
+          git commit -m "Pin the anonymously verified desktop image archive"
+          git push origin "HEAD:refs/heads/codex/cua-image-evidence-$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: computer-image-anonymous-verification
+          path: anonymous-smoke.json
+  result:
+    if: always()
+    needs: [publish, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record delivery result for SSH-only operators
+        env:
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          node -e 'require("fs").writeFileSync("image-delivery-result.json", JSON.stringify({source:process.env.GITHUB_SHA,publish:process.env.PUBLISH_RESULT,verify:process.env.VERIFY_RESULT,run:process.env.GITHUB_RUN_ID},null,2)+"\n")'
+          git config user.name "$(git log -1 --format=%an)"
+          git config user.email "$(git log -1 --format=%ae)"
+          git add image-delivery-result.json
+          git commit -m "Record desktop image delivery result"
+          git push origin "HEAD:refs/heads/codex/cua-image-result-$GITHUB_SHA-$GITHUB_RUN_ID"

@@ -5,8 +5,8 @@ import { replaceFile } from '../files.js'
 import { refused, checkId } from './contract.js'
 import { loadSetupRuntime } from './setup-runtime.js'
 
-const ACTIVE = new Set(['checking', 'preparing-runtime', 'preparing-image', 'verifying-image', 'configuring', 'starting-desktop', 'checking-desktop', 'cancelling'])
-const PHASES = new Set([...ACTIVE, 'ready', 'failed', 'cancelled', 'interrupted'])
+const ACTIVE = new Set(['checking', 'installing-system', 'preparing-runtime', 'preparing-image', 'verifying-image', 'configuring', 'starting-desktop', 'checking-desktop', 'cancelling'])
+const PHASES = new Set([...ACTIVE, 'ready', 'failed', 'cancelled', 'interrupted', 'waiting-restart', 'waiting-runtime'])
 const safeLog = text => String(text).replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/[\x00-\x08\x0b-\x1f]/g, '')
   .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[redacted]@')
   .replace(/((?:token|password|authorization|api[_-]?key)\s*[:=]\s*)\S+/gi, '$1[redacted]').slice(-16000)
@@ -38,13 +38,18 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
         || !/^[a-f0-9]{64}$/.test(value.config.recipe ?? '')))
         || (value.job && (!PHASES.has(value.job.phase) || typeof value.job.id !== 'string' || typeof value.job.botId !== 'string'
           || (value.job.engineKind !== undefined && !['docker', 'podman'].includes(value.job.engineKind))
-          || (value.job.prepareRuntime !== undefined && typeof value.job.prepareRuntime !== 'boolean')))) {
+          || (value.job.prepareRuntime !== undefined && typeof value.job.prepareRuntime !== 'boolean')
+          || (value.job.installSystem !== undefined && typeof value.job.installSystem !== 'boolean')
+          || (value.job.resumeAfterRestart !== undefined && typeof value.job.resumeAfterRestart !== 'boolean')
+          || (value.job.systemStep !== undefined && !['wsl', 'engine', 'done'].includes(value.job.systemStep))
+          || (value.job.bootId !== undefined && (typeof value.job.bootId !== 'string' || !/^[0-9T:.Z+-]{15,48}$/.test(value.job.bootId)))))) {
         throw refused('setup-storage', 'Desktop setup metadata is invalid; it has not been overwritten.')
       }
       if (value.config) (await payload()).validate(value.config.engine)
       if (value.selection) (await payload()).validate(value.selection)
       data = value
       if (data.job && ACTIVE.has(data.job.phase)) {
+        data.job.interruptedPhase = data.job.phase
         data.job.phase = 'interrupted'
         data.job.error = 'Preparation was interrupted. Retry to check existing resources and continue.'
       }
@@ -70,7 +75,8 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
   async function restore() {
     if (disabled() || explicit() || disposed || stopping) return
     await load()
-    if (!data.config || rt.readOnly() !== undefined) return
+    if (rt.readOnly() !== undefined) return
+    if (!data.config) { await resume(); return }
     restoring ??= (async () => {
       const tools = await payload()
       writable()
@@ -104,7 +110,8 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       inspectedAt = now()
     }
     const selected = data.config?.engine ?? data.selection
-    return { ...view(), environment, canPrepareRuntime: platform === 'win32' && kind === 'podman'
+    return { ...view(), environment, canInstallSystem: platform === 'win32' && !data.config && !data.selection && !explicit() && !disabled(),
+      canPrepareRuntime: platform === 'win32' && kind === 'podman'
       && (!selected || selected.machine?.name === 'ds-bot') }
   }
   async function update(phase, error) {
@@ -115,13 +122,56 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     let service, record, startingDesktop = false
     try {
       const tools = await payload()
+      if (data.job.installSystem) {
+        const kind = data.job.engineKind
+        const status = await tools.systemStatus(kind)
+        signal.throwIfAborted()
+        if (data.job.systemStep === 'wsl' && data.job.bootId === status.bootId) {
+          await update('waiting-restart')
+          return
+        }
+        if (!status.wslReady) {
+          if (data.job.systemStep === 'wsl') throw new Error('WSL is still unavailable after restarting. Check Windows virtualization settings before retrying.')
+          data.job.systemStep = 'wsl'
+          data.job.bootId = status.bootId
+          await update('installing-system')
+          await tools.installSystem(kind, 'wsl', { signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) } })
+          await update('waiting-restart')
+          return
+        }
+        if (!status.engineInstalled) {
+          if (data.job.systemStep === 'engine') {
+            await update('waiting-runtime', 'The installer may still be running. Check Windows before starting another installation.')
+            return
+          }
+          if (!status.wingetAvailable) throw new Error('Install or update Windows App Installer to enable Windows Package Manager, then retry.')
+          data.job.systemStep = 'engine'
+          await update('installing-system')
+          await tools.installSystem(kind, 'engine', { signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) } })
+        }
+        data.job.systemStep = 'done'
+        if (!data.job.engineOpened && kind === 'docker') {
+          data.job.engineOpened = true
+          await save()
+          await tools.openEngine(kind)
+        }
+        await save()
+      }
       if (data.job.prepareRuntime) {
         await update('preparing-runtime')
         await tools.startRuntime(data.config?.engine ?? data.selection, {
           signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) },
         })
       }
-      const engine = await tools.discover(data.config?.engine ?? data.selection, data.job.engineKind)
+      let engine
+      try { engine = await tools.discover(data.config?.engine ?? data.selection, data.job.engineKind) }
+      catch (error) {
+        if (data.job.installSystem) {
+          await update('waiting-runtime', safeLog(error.message).slice(0, 500))
+          return
+        }
+        throw error
+      }
       signal.throwIfAborted()
       data.selection = engine
       await save()
@@ -169,15 +219,27 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
         try { await service.manage('stop', { botId, expectedGeneration: record.generation }) }
         catch { message = 'Preparation was cancelled, but stopping the new desktop could not be confirmed. Review its state before retrying.' }
       }
-      await update(signal.aborted ? 'cancelled' : 'failed', safeLog(message).slice(0, 500))
+      if (signal.aborted && stopping) data.job.interruptedPhase = data.job.phase
+      await update(signal.aborted ? (stopping ? 'interrupted' : 'cancelled') : 'failed', safeLog(message).slice(0, 500))
     }
   }
-  async function prepare({ botId, jobId, engineKind, prepareRuntime } = {}) {
+  async function prepare({ botId, jobId, engineKind, prepareRuntime, installSystem, installConsent } = {}, automatic = false) {
     await load()
     writable()
     if (stopping) throw refused('unavailable', 'Desktop setup is stopping.')
     if (explicit()) throw refused('configured', 'This profile already has an explicit desktop runtime. Use its desktop controls.')
     const kind = selectedKind(engineKind)
+    const previous = jobId && jobId === data.job?.id ? data.job : null
+    installSystem ??= previous?.installSystem ?? false
+    if (typeof installSystem !== 'boolean') throw refused('invalid', 'Choose whether to install the desktop environment.')
+    if (installSystem && (platform !== 'win32' || data.config || data.selection)) {
+      // Once an installation reached the selected engine, ordinary retry only
+      // continues image preparation; it must not modify system components again.
+      if (previous?.systemStep === 'done') installSystem = false
+      else throw refused('unsupported', 'System installation is only available before selecting a Windows desktop engine.')
+    }
+    if (installSystem && !previous?.installSystem && installConsent !== true) throw refused('confirmation-required', 'Confirm system installation and package agreements before continuing.')
+    if (installSystem && previous?.engineKind !== undefined && kind !== previous.engineKind && installConsent !== true) throw refused('confirmation-required', 'Confirm installation before changing the selected engine.')
     prepareRuntime ??= jobId && jobId === data.job?.id ? data.job.prepareRuntime ?? false : false
     if (typeof prepareRuntime !== 'boolean') throw refused('invalid', 'Choose whether to prepare the Podman machine.')
     if (prepareRuntime && (kind !== 'podman' || platform !== 'win32')) throw refused('unsupported', 'Runtime preparation is available for Podman on Windows.')
@@ -198,7 +260,12 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
         catch (error) { if (error.code !== 'ENOENT') throw error }
         if (Object.keys(registry?.computers ?? {}).length) throw refused('configured', 'Existing desktops require their original runtime configuration. Restore it before using setup.')
       }
-      data.job = { id: randomUUID(), botId, engineKind: kind, prepareRuntime: Boolean(prepareRuntime), phase: 'checking', updatedAt: now(), log: '' }
+      const continuing = automatic || (previous && installConsent !== true)
+      data.job = { id: randomUUID(), botId, engineKind: kind,
+        prepareRuntime: Boolean(prepareRuntime || (installSystem && kind === 'podman')),
+        installSystem, resumeAfterRestart: true,
+        ...(continuing && previous ? { systemStep: previous.systemStep, bootId: previous.bootId, engineOpened: previous.engineOpened } : {}),
+        phase: 'checking', updatedAt: now(), log: continuing ? previous?.log ?? '' : '' }
       await save()
       if (stopping) return view()
       const controller = new AbortController()
@@ -215,12 +282,33 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
   async function cancel({ jobId } = {}) {
     await load()
     writable()
-    if (!operation) return view()
+    if (!data.job) return view()
     if (jobId !== data.job?.id) throw refused('conflict', 'The preparation task changed. Refresh before cancelling.')
+    data.job.resumeAfterRestart = false
+    if (!operation) { await update('cancelled'); return view() }
     const entry = operation
     entry.controller.abort(new Error('Desktop preparation was cancelled. Downloaded layers can be reused.'))
     if (operation === entry && ACTIVE.has(data.job.phase)) await update('cancelling')
     return view()
+  }
+  async function resume() {
+    if (disposed || stopping || explicit() || disabled() || starting || operation || rt.readOnly() !== undefined) return
+    await load()
+    const job = data.job
+    if (!job?.resumeAfterRestart || data.config || !rt.botOf(job.botId)
+      || !['waiting-restart', 'waiting-runtime', 'interrupted'].includes(job.phase)) return
+    if (job.phase === 'interrupted' && !['checking', 'installing-system', 'preparing-runtime', 'preparing-image', 'verifying-image'].includes(job.interruptedPhase)) return
+    const tools = await payload()
+    if (job.installSystem) {
+      const status = await tools.systemStatus(job.engineKind)
+      if (job.systemStep === 'wsl' && (status.bootId === job.bootId || !status.wslReady)) return
+      if (job.systemStep === 'engine' && !status.engineInstalled) return
+      if (job.systemStep === 'done' && job.engineKind === 'docker') {
+        try { await tools.discover(data.selection, job.engineKind) } catch { return }
+      }
+    }
+    if (data.job !== job || starting || operation || stopping) return
+    await prepare({ botId: job.botId, jobId: job.id, engineKind: job.engineKind }, true)
   }
   async function dispose() {
     stopping = true
@@ -229,5 +317,5 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     await writing
     disposed = true
   }
-  return { state, restore, prepare, cancel, pending, dispose }
+  return { state, restore, prepare, cancel, resume, pending, dispose }
 }

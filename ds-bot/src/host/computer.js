@@ -24,7 +24,9 @@ export function install(rt) {
   }, 'ds-bot: computer viewer')
   rt.ctx.effect(() => {
     void setup.restore().catch(() => {})
-    return async () => { await setup.dispose(); await computer?.dispose() }
+    const timer = setInterval(() => { void setup.resume().catch(() => {}) }, 15_000)
+    timer.unref?.()
+    return async () => { clearInterval(timer); await setup.dispose(); await computer?.dispose() }
   }, 'ds-bot: computers')
   if (rt.config.computer?.enabled === true) activate(rt.config.computer.broker)
 }
@@ -108,7 +110,10 @@ function installTools(rt, provider, computer) {
     void computer.endTurn(session.id, event.data?.turn).catch(() => rt.warn('ds-bot: desktop release failed; the desktop remains blocked'))
   })
   rt.ctx.effect(() => {
-    const timer = setInterval(() => { void computer?.reapIdle().catch(() => rt.warn('ds-bot: idle desktop shutdown failed')) }, 30_000)
+    const timer = setInterval(() => {
+      void computer?.reapIdle().catch(() => rt.warn('ds-bot: idle desktop shutdown failed'))
+      void computer?.sampleResources().catch(() => rt.warn('ds-bot: desktop resource measurement failed'))
+    }, 30_000)
     timer.unref?.()
     return () => clearInterval(timer)
   }, 'ds-bot: computer idle')

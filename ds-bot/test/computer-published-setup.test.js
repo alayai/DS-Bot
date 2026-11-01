@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { bundleRuntime, imageRecipe } from '../../computer-runtime/runtime.mjs'
 
-test('installed setup pulls the published digest, refuses substituted IDs and preserves existing pinned images', async t => {
+for (const delivery of ['registry', 'archive']) test(`installed setup uses ${delivery}, refuses substituted IDs and preserves existing pinned images`, async t => {
   const root = await mkdtemp(join(tmpdir(), 'cua-published-setup-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const directory = join(root, 'computer-runtime')
@@ -15,14 +15,27 @@ test('installed setup pulls the published digest, refuses substituted IDs and pr
   const host = join(root, 'src/host/computer')
   await mkdir(host, { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')
-  for (const name of ['setup-runtime.js', 'runtime-bundle.js']) {
+  for (const name of ['setup-runtime.js', 'runtime-bundle.js', 'windows-install.js', 'image-archive.js']) {
     await copyFile(new URL(`../src/host/computer/${name}`, import.meta.url), join(host, name))
   }
   const image = `sha256:${'a'.repeat(64)}`
   const reference = `ghcr.io/example/image@sha256:${'b'.repeat(64)}`
   const lock = JSON.parse(await readFile(join(directory, 'runtime.lock.json')))
+  delete lock.publishedArchive
   Object.assign(lock, { publishedImage: reference, publishedImageId: image,
     publishedImageRecipe: await imageRecipe(directory, lock) })
+  if (delivery === 'archive') {
+    const bytes = Buffer.from('verified archive fixture')
+    const hash = data => createHash('sha256').update(data).digest('hex')
+    const manifest = Buffer.from(JSON.stringify({ version: 1, image, recipe: lock.publishedImageRecipe,
+      platform: 'linux/amd64', compression: 'gzip', bytes: bytes.length,
+      parts: [{ name: 'desktop-image.part-000', bytes: bytes.length, sha256: hash(bytes) }] }))
+    delete lock.publishedImage
+    lock.publishedArchive = { url: `https://github.com/example/repo/releases/download/cua-desktop-${'a'.repeat(40)}/desktop-manifest.json`, sha256: hash(manifest) }
+    const original = globalThis.fetch
+    globalThis.fetch = async url => new Response(url.endsWith('desktop-manifest.json') ? manifest : bytes)
+    t.after(() => { globalThis.fetch = original })
+  }
   await writeFile(join(directory, 'runtime.lock.json'), JSON.stringify(lock))
   // Only the engine boundary is replaced. The installed loader, manifest checks,
   // recipe validation and image compatibility checks run as shipped.
@@ -41,7 +54,7 @@ test('installed setup pulls the published digest, refuses substituted IDs and pr
     export async function runEngine(engine, args) {
       calls.push({ args })
       if (args[0] === 'info') return { stdout: JSON.stringify({ OSType: 'linux', Architecture: 'amd64' }) }
-      const id = args[2].startsWith('sha256:') ? args[2] : state.image
+      const id = args[2].startsWith('sha256:') && args[2] !== ${JSON.stringify(image)} ? args[2] : state.image
       return { stdout: JSON.stringify([{ Id: id, Os: 'linux', Architecture: 'amd64',
         Config: { User: '1000:1000', Labels: { 'org.ds-bot.computer.protocol': '1', 'org.ds-bot.computer.driver': '0.37.0' } } }]) }
     }
@@ -55,7 +68,11 @@ test('installed setup pulls the published digest, refuses substituted IDs and pr
   const engine = { endpoint: process.platform === 'win32' ? 'npipe:////./pipe/docker_engine' : 'unix:///var/run/docker.sock' }
   const controller = new AbortController()
   assert.equal(await runtime.prepare(engine, { signal: controller.signal }), image)
-  assert.deepEqual(calls[0], { args: ['pull', reference], signal: controller.signal })
+  if (delivery === 'registry') assert.deepEqual(calls[0], { args: ['pull', reference], signal: controller.signal })
+  else {
+    assert.deepEqual(calls[0].args.slice(0, 2), ['load', '--input'])
+    assert.ok(calls[0].signal instanceof AbortSignal)
+  }
   state.image = `sha256:${'c'.repeat(64)}`
   await assert.rejects(runtime.image(engine), /tested published image ID/)
   assert.equal(await runtime.image(engine, state.image), state.image)

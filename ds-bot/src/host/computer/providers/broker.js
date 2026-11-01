@@ -245,6 +245,8 @@ export function createBrokerProvider(config = {}) {
       }
     },
     diagnostics: (record, options) => call('diagnostics', record, options),
+    quotaBackend: launch.engine?.kind === 'podman' ? 'podman-xfs' : null,
+    checkQuota: (record, options) => call('quota-check', record, options),
     upgrade: (record, options) => call('upgrade', record, options),
     checkpoint: (record, options) => call('checkpoint', record, options),
     restore: (record, options) => call('restore', record, options),

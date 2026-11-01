@@ -583,6 +583,9 @@ export function install(rt) {
         case 'computer-diagnostics':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.diagnostics(body))
+        case 'computer-resource-limits':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.setResourceLimits(body))
         case 'computer-upgrade':
         case 'computer-recover':
         case 'computer-rollback':

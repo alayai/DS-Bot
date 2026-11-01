@@ -1369,7 +1369,7 @@ test('storage diagnostics refuse stale generations and pending recovery without 
   const h = await setup(t)
   const record = await h.start()
   let scans = 0
-  h.provider.diagnostics = async () => { scans++; return { storage: { bytes: 7, hardQuota: false } } }
+  h.provider.diagnostics = async () => { scans++; return { storage: { bytes: 7, freeBytes: 100, totalBytes: 200, hardQuota: false } } }
   await assert.rejects(h.service.diagnostics({ botId: 'a', expectedGeneration: 0 }), fails('stale-generation'))
   assert.equal(scans, 0)
   assert.equal((await h.service.diagnostics({ botId: 'a', expectedGeneration: record.generation })).storage.bytes, 7)
@@ -1497,4 +1497,68 @@ test('a viewer opening concurrently with stop cannot outlive revocation', async 
   finish(stream)
   await rejected
   assert.equal(stream.closed, true)
+})
+
+test('resource settings persist, fence stale revisions and apply to admission without stopping desktops', async t => {
+  const h = await setup(t)
+  await h.start('a')
+  await h.start('b')
+  const initial = await h.service.state()
+  const limits = { ...initial.limits, maxRunning: 1, idleStopMs: 60_000 }
+  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('resource-limit'))
+  assert.equal((await h.service.state()).computers.filter(item => item.phase === 'ready').length, 2)
+  await h.manage('stop', 'b')
+  await h.service.setResourceLimits({ expectedRevision: (await h.service.state()).revision, limits })
+  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('conflict'))
+  await assert.rejects(h.manage('start', 'b'), fails('resource-limit'))
+  const second = createComputerService(h.rt, h.provider)
+  t.after(() => second.dispose())
+  assert.deepEqual((await second.state()).limits, limits)
+  h.readOnly('another host')
+  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('read-only'))
+})
+
+test('background resource samples retain failures, detect warnings and do not postpone idle shutdown', async t => {
+  let clock = 0, scans = 0, failed = false
+  const h = await setup(t, { options: { now: () => clock } })
+  await h.start()
+  h.provider.diagnostics = async () => {
+    scans++
+    if (failed) throw Error('scan failed')
+    return { storage: { bytes: 12 * 1024 ** 3, freeBytes: 1, totalBytes: 100 * 1024 ** 3 } }
+  }
+  const initial = await h.service.state()
+  await h.service.setResourceLimits({ expectedRevision: initial.revision, limits: { ...initial.limits, idleStopMs: 60_000 } })
+  clock = 30_000
+  await h.service.sampleResources()
+  const sample = (await h.service.state()).computers[0].resources
+  assert.deepEqual(sample.warnings, ['low-space', 'large-home'])
+  await h.service.sampleResources()
+  assert.equal(scans, 1)
+  clock = 65_000
+  await h.service.reapIdle()
+  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
+  clock = 100_000; failed = true
+  await h.service.sampleResources()
+  assert.equal((await h.service.state()).computers[0].resources.error, true)
+  assert.equal((await h.service.state()).computers[0].resources.at, sample.at)
+  await h.bind()
+  assert.equal((await h.service.state()).computers[0].resources, null)
+})
+
+test('hard quota defaults require a verified backend and never resize an existing home', async t => {
+  const h = await setup(t)
+  const a = await h.bind()
+  const initial = await h.service.state()
+  const limits = { ...initial.limits, newHomeQuotaBytes: 4 * 1024 ** 3 }
+  const args = { expectedRevision: initial.revision, limits, botId: 'a', expectedGeneration: a.generation }
+  await assert.rejects(h.service.setResourceLimits(args), fails('unsupported'))
+  h.provider.quotaBackend = 'podman-xfs'
+  h.provider.checkQuota = async () => ({ enforced: false })
+  await assert.rejects(h.service.setResourceLimits(args), fails('unsupported'))
+  h.provider.checkQuota = async () => ({ enforced: true })
+  await assert.rejects(h.service.setResourceLimits({ ...args, expectedGeneration: 0 }), fails('stale-generation'))
+  await h.service.setResourceLimits(args)
+  assert.equal((await h.bind()).homeQuotaBytes, undefined)
+  assert.equal((await h.bind('b')).homeQuotaBytes, limits.newHomeQuotaBytes)
 })

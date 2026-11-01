@@ -24,7 +24,7 @@ export const runtimeText = bytes => Buffer.from(bytes.toString('utf8').replace(/
 export async function imageRecipe(directory = root, lock) {
   const source = { ...(lock ?? JSON.parse(await readFile(join(directory, 'runtime.lock.json'), 'utf8'))) }
   // Publication metadata cannot be part of the recipe it identifies.
-  for (const name of ['publishedImage', 'publishedImageId', 'publishedImageRecipe']) delete source[name]
+  for (const name of ['publishedImage', 'publishedArchive', 'publishedImageId', 'publishedImageRecipe']) delete source[name]
   const inputs = [['runtime.lock.json', JSON.stringify(source)]]
   for (const name of ['desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py']) {
     inputs.push([name, createHash('sha256').update(runtimeText(await readFile(join(directory, name)))).digest('hex')])
@@ -46,6 +46,14 @@ export function checkPublishedImage(lock, image) {
 export async function validateLock() {
   const lock = JSON.parse(await readFile(join(root, 'runtime.lock.json'), 'utf8'))
   publishedImage(lock)
+  if (lock.publishedArchive !== undefined) {
+    const archive = lock.publishedArchive
+    if (!archive || typeof archive !== 'object' || lock.publishedImage !== undefined
+      || !/^https:\/\/github\.com\/[a-zA-Z0-9][a-zA-Z0-9_.-]*\/[a-zA-Z0-9][a-zA-Z0-9_.-]*\/releases\/download\/cua-desktop-[a-f0-9]{40}\/desktop-manifest\.json$/.test(archive.url ?? '')
+      || !/^[a-f0-9]{64}$/.test(archive.sha256 ?? '') || !lock.publishedImageId || !lock.publishedImageRecipe) {
+      throw new Error('Invalid published desktop archive evidence.')
+    }
+  }
   const recipe = (await readFile(join(root, 'desktop/Dockerfile'), 'utf8')).replace(/\r\n/g, '\n')
   const requirements = await readFile(join(root, 'desktop/requirements.txt'), 'utf8')
   if (lock.platform !== 'linux/amd64' || lock.protocolVersion !== 1
@@ -55,7 +63,7 @@ export async function validateLock() {
     throw new Error('Runtime recipe does not match runtime.lock.json.')
   }
   if (lock.publishedImageId !== undefined || lock.publishedImageRecipe !== undefined) {
-    if (!lock.publishedImage || !/^sha256:[a-f0-9]{64}$/.test(lock.publishedImageId ?? '')
+    if (!(lock.publishedImage || lock.publishedArchive) || !/^sha256:[a-f0-9]{64}$/.test(lock.publishedImageId ?? '')
       || lock.publishedImageRecipe !== await imageRecipe(root, lock)) {
       throw new Error('Published image evidence does not match this runtime recipe.')
     }

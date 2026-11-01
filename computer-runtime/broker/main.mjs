@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
-import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from './boundary.mjs'
+import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, quotaArguments, probeHomeQuota } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
 import { createTransfers } from './transfers.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
@@ -68,6 +68,7 @@ function target(record) {
     || !Number.isSafeInteger(record.generation) || record.generation < 1
     || (record.homeRevision !== undefined && !/^[a-f0-9-]{36}$/.test(record.homeRevision))) fail('Invalid desktop identity.')
   if (record.runtimeImage !== undefined && !allowedImages.includes(record.runtimeImage)) fail('This desktop is pinned to another image. Restore the original runtime configuration.')
+  quotaArguments(record.homeQuotaBytes, engine)
   let value = targets.get(record.id)
   if (!value) {
     value = {
@@ -77,6 +78,7 @@ function target(record) {
     targets.set(record.id, value)
   }
   if (record.botId !== value.record.botId || record.generation < value.record.generation) fail('Stale desktop identity.')
+  if ((record.homeQuotaBytes ?? 0) !== (value.record.homeQuotaBytes ?? 0)) fail('Home quotas cannot be changed on an existing desktop.')
   if (record.generation === value.record.generation && (homeVolume(record) !== value.volume || (record.runtimeImage && value.record.runtimeImage && record.runtimeImage !== value.record.runtimeImage))) fail('Stale home identity.')
   if (record.generation > value.record.generation) {
     if (value.busy || value.fence) fail('Revoke the old desktop generation first.')
@@ -359,6 +361,7 @@ async function start(value, signal) {
   if (metadata.Id !== image || metadata.Os !== 'linux' || metadata.Architecture !== 'amd64' || metadata.Config?.User !== '1000:1000'
     || metadata.Config?.Labels?.['org.ds-bot.computer.protocol'] !== '1'
     || metadata.Config?.Labels?.['org.ds-bot.computer.driver'] !== '0.37.0') fail('Unsupported desktop image.')
+  if (record.homeQuotaBytes) await probeHomeQuota(docker, image, engine, signal)
   let info = await inspect(value, signal)
   if (!info) {
     let volume
@@ -367,7 +370,7 @@ async function start(value, signal) {
     if (volume) {
       try { assertVolume(volume, value); assertHomeImage(volume, record, image) } catch (error) { fail(error.message) }
     }
-    if (!volume) await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.image=${image}`, value.volume], signal)
+    if (!volume) await docker(['volume', 'create', ...quotaArguments(record.homeQuotaBytes, engine), '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.image=${image}`, value.volume], signal)
     await docker(createArgs(value), signal)
     info = await inspect(value, signal)
   }
@@ -432,6 +435,7 @@ async function dispatch(method, record, options, signal) {
       if (info?.State.Running) await docker(['stop', '--time', '5', value.name], signal)
       return null
     }
+    if (method === 'quota-check') return probeHomeQuota(docker, image, engine, signal)
     if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: 'open', isolation: 'container' }
     if (method === 'cleanup') {
       if (options.targetImage && options.staged) await retireCandidate(value, options, signal)
@@ -445,6 +449,7 @@ async function dispatch(method, record, options, signal) {
       // A blank desktop must pass image, driver and screenshot checks before any home is copied.
       await ownedVolume(candidate.volume, value, docker, signal, { missing: true }).then(data => { if (data) fail('Staging storage already exists.') })
       await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`,
+        ...quotaArguments(record.homeQuotaBytes, engine),
         '--label', `org.ds-bot.computer.image=${options.targetImage}`, '--label', 'org.ds-bot.computer.storage=staged-home', candidate.volume], signal)
       try { await start(candidate, signal); await preview(candidate, signal) }
       finally { await retireCandidate(value, options, undefined, candidate) }
