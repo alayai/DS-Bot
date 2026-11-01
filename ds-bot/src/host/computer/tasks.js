@@ -4,11 +4,14 @@ const ACTIVE = ['sending', 'running', 'unknown']
 const HELD = ['paused', 'interrupted', 'needs-review', 'unknown']
 const DONE = ['completed', 'failed', 'cancelled']
 const prefix = 'cua-task-'
+const MAX_DELAY_MS = 366 * 24 * 60 * 60 * 1000
+const queueOrder = (a, b) => (a.runAt ?? a.at) - (b.runAt ?? b.at) || a.at - b.at
 export function validateTasks(tasks, computers) {
   if (!tasks || typeof tasks !== 'object' || Array.isArray(tasks) || Object.keys(tasks).length > 500) throw refused('store-invalid', 'Invalid desktop task queue.')
   for (const [id, item] of Object.entries(tasks)) {
     if (!item || item.id !== id || !/^[a-f0-9-]{36}$/.test(id) || !computers[item.computerId] || computers[item.computerId].botId !== item.botId
       || !Number.isSafeInteger(item.generation) || item.generation < 1 || !Number.isFinite(item.at)
+      || (item.runAt !== undefined && (!Number.isSafeInteger(item.runAt) || item.runAt < item.at || item.runAt > item.at + MAX_DELAY_MS))
       || !['queued', ...ACTIVE, ...HELD, ...DONE].includes(item.status)
       || typeof item.goal !== 'string' || !item.goal.trim() || item.goal.length > 4000
       || (item.note !== undefined && (typeof item.note !== 'string' || item.note.length > 2000))
@@ -19,7 +22,7 @@ export function validateTasks(tasks, computers) {
       || (item.turnId !== undefined && !Number.isSafeInteger(item.turnId))) throw refused('store-invalid', 'Invalid desktop task record.')
   }
 }
-export function createDesktopTasks(rt, { store, ready, assigned, owner, administration, barrier, controls, provider }) {
+export function createDesktopTasks(rt, { store, ready, assigned, owner, administration, barrier, controls, provider, now = Date.now }) {
   let recovered = false, ticking = false, closed = false
   const all = () => Object.values(store.snapshot()?.tasks ?? {})
   async function initialize() {
@@ -39,7 +42,10 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
     const blocking = all().find(item => item.botId === who.botId && [...ACTIVE, ...HELD].includes(item.status))
     if (blocking && (blocking.id !== item?.id || blocking.status !== 'running')) throw refused('task-paused', 'The desktop task queue is paused or owned by another turn. Review it in Private desktop.')
   }
-  async function list(botId) { await initialize(); return all().filter(item => item.botId === botId).sort((a, b) => a.at - b.at) }
+  async function list(botId) {
+    await initialize()
+    return all().filter(item => item.botId === botId).sort(queueOrder)
+  }
   async function stopDelivery(item) {
     if (!item.sessionId || !item.attempt) return
     const agent = await rt.resolveAgent(item.sessionId)
@@ -59,7 +65,13 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
       if (method === 'add') {
         if (typeof args.goal !== 'string' || !args.goal.trim() || args.goal.length > 4000) throw refused('invalid', 'Enter a desktop task of at most 4000 characters.')
         if (all().length >= 500) throw refused('resource-limit', 'Clear completed desktop tasks before adding another.')
-        const entry = { id: randomUUID(), computerId: record.id, botId: record.botId, generation: record.generation, goal: args.goal.trim(), status: 'queued', at: Date.now() }
+        const at = now(), runAt = args.runAt
+        if (runAt !== undefined) {
+          if (!Number.isSafeInteger(runAt) || runAt <= at || runAt > at + MAX_DELAY_MS) {
+            throw refused('invalid', 'Choose a future time within one year.')
+          }
+        }
+        const entry = { id: randomUUID(), computerId: record.id, botId: record.botId, generation: record.generation, goal: args.goal.trim(), status: 'queued', at, ...(runAt === undefined ? {} : { runAt }) }
         await store.update(draft => { draft.tasks ??= {}; draft.tasks[entry.id] = entry })
         return
       }
@@ -105,8 +117,10 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
       for (const botId of new Set(all().filter(item => item.status === 'queued').map(item => item.botId))) {
         const delivery = await administration(botId, async () => {
           if (all().some(item => item.botId === botId && [...ACTIVE, ...HELD].includes(item.status))) return
-          const item = all().find(item => item.botId === botId && item.status === 'queued'), record = await assigned(botId)
+          const item = all().filter(item => item.botId === botId && item.status === 'queued' && (item.runAt === undefined || item.runAt <= now()))
+            .sort(queueOrder)[0]
           if (!item) return
+          const record = await assigned(botId)
           if (record.id !== item.computerId || record.generation !== item.generation) { await store.update(draft => { draft.tasks[item.id].status = 'interrupted' }); return }
           const sessionId = rt.chatOf(botId)
           if (!sessionId || rt.live.get(sessionId)?.turn !== undefined || record.grant === 'off' || controls.get(record.id) !== 'none' || store.snapshot()?.lifecycle?.[record.id]) return

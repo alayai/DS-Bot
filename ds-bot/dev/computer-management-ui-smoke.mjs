@@ -17,20 +17,21 @@ const provider = Object.assign(createFakeComputer(), {
   }, portableImport: async (_record, { path }) => { const bytes = await readFile(path); assert.equal(bytes.length, size); assert.ok(bytes.every(value => value === 7)) },
 })
 let service, browser, server, record
+const deliveries = []
 const rt = { home, config: {}, load: async () => {}, readOnly: () => undefined, botOf: id => id === 'ui-test' ? { id } : undefined,
   chatOf: () => 'ui-chat', live: new Map(), groupOwners: new Map(), isBotSession: id => id === 'ui-chat', selfOf: () => 'ui-test',
   ctx: { sessions: { flush: async () => {} } }, resolveAgent: async () => ({ session: { id: 'ui-chat' }, inbox: { nextTurn: [], nextStep: [], remove() {} }, cancel() {} }),
-  deliver: async args => { (await service.tasks.validateDelivery(args.computerTask, args.sessionId))() },
+  deliver: async args => { (await service.tasks.validateDelivery(args.computerTask, args.sessionId))(); deliveries.push(args) },
 }
 service = createComputerService(rt, provider)
 const errors = []
 try {
   await service.bind({ botId: 'ui-test', grant: 'observe', expectedRevision: 0 })
   record = (await service.state()).computers[0]
-  const output = await build({ stdin: { contents: `import React,{useState} from 'react';import{createRoot}from'react-dom/client';
+  const output = await build({ stdin: { contents: `import React,{useState,useEffect} from 'react';import{createRoot}from'react-dom/client';
 import{ComputerPortable}from'./src/client/computer-portable.js';import{ComputerPolicy}from'./src/client/computer-policy.js';import{ComputerTasks}from'./src/client/computer-tasks.js';
 const initial=${JSON.stringify(record)};window.showSaveFilePicker=async()=>{throw new DOMException('Native picker denied in this fixture','SecurityError')};
-function App(){const[record,setRecord]=useState(initial);const call=async(method,args={})=>{const r=await fetch('/control',{method:'POST',body:JSON.stringify({method,args:{botId:record.botId,expectedGeneration:record.generation,...args}})});const v=await r.json();if(v.error)throw Error(v.error);return v};const changed=async()=>setRecord((await call('state')).computers[0]);return React.createElement('main',{'data-generation':record.generation},React.createElement(ComputerPortable,{record,call,changed}),React.createElement(ComputerPolicy,{record,call,changed}),React.createElement(ComputerTasks,{record,call}));}createRoot(document.getElementById('root')).render(React.createElement(App));`,
+function App(){const[record,setRecord]=useState(initial);const call=async(method,args={})=>{const r=await fetch('/control',{method:'POST',body:JSON.stringify({method,args:{botId:record.botId,expectedGeneration:record.generation,...args}})});const v=await r.json();if(v.error)throw Error(v.error);return v};const changed=async()=>setRecord((await call('state')).computers[0]);useEffect(()=>{void changed()},[]);return React.createElement('main',{'data-generation':record.generation},React.createElement(ComputerPortable,{record,call,changed}),React.createElement(ComputerPolicy,{record,call,changed}),React.createElement(ComputerTasks,{record,call}));}createRoot(document.getElementById('root')).render(React.createElement(App));`,
       resolveDir: resolve(import.meta.dirname, '..'), loader: 'js' }, bundle: true, write: false, format: 'iife', platform: 'browser',
     alias: { react: require.resolve('react'), 'react-dom/client': require.resolve('react-dom/client') }, define: { 'process.env.NODE_ENV': '"production"' } })
   server = createServer(async (req, res) => {
@@ -84,8 +85,43 @@ function App(){const[record,setRecord]=useState(initial);const call=async(method
   await page.getByText('Task status: paused', { exact: true }).waitFor()
   await page.reload(); await page.getByText('Desktop task queue', { exact: true }).click(); await page.getByText('Task status: paused', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'Cancel task', exact: true }).click(); await page.getByText('Task status: cancelled', { exact: true }).waitFor()
+  record = (await service.state()).computers[0]
+  await service.manage('start', { botId: record.botId, expectedGeneration: record.generation })
+  for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
+    const scheduledPage = await browser.newPage({ locale: 'en-US', timezoneId })
+    scheduledPage.on('pageerror', error => errors.push(error.message))
+    try {
+      await scheduledPage.goto(`http://127.0.0.1:${server.address().port}`)
+      await scheduledPage.getByText('Desktop task queue', { exact: true }).click()
+      const expected = await scheduledPage.evaluate(() => {
+        const date = new Date(Date.now() + 3600_000); date.setSeconds(0, 0)
+        const pad = n => String(n).padStart(2, '0')
+        return { timestamp: date.getTime(), local: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}` }
+      })
+      const goal = `Scheduled desktop check in ${timezoneId}`
+      await scheduledPage.getByLabel('Desktop task goal', { exact: true }).fill(goal)
+      await scheduledPage.getByLabel('Run at (optional)', { exact: true }).fill(expected.local)
+      assert.equal(await scheduledPage.getByLabel('Run at (optional)', { exact: true }).evaluate(el => el.checkValidity()), true)
+      await scheduledPage.getByRole('button', { name: 'Add desktop task', exact: true }).click()
+      const row = scheduledPage.locator('section').filter({ has: scheduledPage.getByText(goal, { exact: true }) })
+      await row.getByText('Task status: queued', { exact: true }).waitFor()
+      let task = (await service.tasks.list(record.botId)).find(item => item.goal === goal)
+      assert.equal(task.runAt, expected.timestamp)
+      await service.tasks.tick(); assert.equal(deliveries.length, 0)
+      await scheduledPage.reload()
+      await scheduledPage.getByText('Desktop task queue', { exact: true }).click()
+      await row.getByText('Task status: queued', { exact: true }).waitFor()
+      await row.getByText('Scheduled for', { exact: false }).waitFor()
+      await row.getByRole('button', { name: 'Cancel task', exact: true }).click()
+      await row.getByText('Task status: cancelled', { exact: true }).waitFor()
+      task = (await service.tasks.list(record.botId)).find(item => item.id === task.id)
+      assert.equal(task.status, 'cancelled')
+      assert.equal(task.runAt, expected.timestamp)
+    } finally { await scheduledPage.close() }
+  }
   assert.deepEqual(errors, [])
   console.log('PASS: CPU/RAM confirmation, persistent queue pause/cancel and panel reload without browser errors')
+  console.log('PASS: scheduled time in Shanghai/Los Angeles, absolute timestamp persistence, reload, no early dispatch and cancellation')
 } finally {
   await browser?.close(); await new Promise(resolve => server ? server.close(resolve) : resolve()); await service.dispose(); await rm(home, { recursive: true, force: true })
 }

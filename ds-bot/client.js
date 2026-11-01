@@ -17600,6 +17600,10 @@ var ZH = {
   "Desktop task queue": "桌面任务队列",
   "Tasks run in order when the desktop is running and the Bot chat is idle. A restart or uncertain result requires review. Pausing only controls Computer tools; other tools remain in assisted mode.": "桌面运行且 Bot 聊天空闲时，任务会按顺序执行。重启或结果不明后需要核验。暂停只控制 Computer 工具；其他工具仍处于辅助模式。",
   "Desktop task goal": "桌面任务目标",
+  "Run at (optional)": "执行时间（可选）",
+  "Scheduled for {time}": "计划执行时间：{time}",
+  "Choose a future time within one year.": "请选择一年以内的未来时间。",
+  "The optional time uses your local time zone. Keep DSH and the desktop running. Due tasks wait until the Bot is available; future tasks do not block ready tasks.": "可选执行时间使用本机时区。请保持 DSH 和桌面运行；到期任务会等待 Bot 空闲，未到期任务不会阻挡可执行的任务。",
   "Add desktop task": "添加桌面任务",
   "Task status": "任务状态",
   "Pause task": "暂停任务",
@@ -37173,8 +37177,12 @@ function ComputerScreen({ live, botId, generation, frame, controlToken, onContro
 
 // src/client/computer-tasks.js
 var import_react49 = require("react");
+var localDateTime = (date) => {
+  const pad2 = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+};
 function ComputerTasks({ record, call: call2 }) {
-  const [items, setItems] = (0, import_react49.useState)([]), [goal, setGoal] = (0, import_react49.useState)(""), [error, setError] = (0, import_react49.useState)(""), [busy, setBusy] = (0, import_react49.useState)(false), [confirm, setConfirm] = (0, import_react49.useState)(null);
+  const [items, setItems] = (0, import_react49.useState)([]), [goal, setGoal] = (0, import_react49.useState)(""), [runAt, setRunAt] = (0, import_react49.useState)(""), [error, setError] = (0, import_react49.useState)(""), [busy, setBusy] = (0, import_react49.useState)(false), [confirm, setConfirm] = (0, import_react49.useState)(null);
   const alive = (0, import_react49.useRef)(true), pending = (0, import_react49.useRef)(false), polling = (0, import_react49.useRef)(null);
   (0, import_react49.useEffect)(() => {
     alive.current = true;
@@ -37202,11 +37210,22 @@ function ComputerTasks({ record, call: call2 }) {
     setError("");
     try {
       await polling.current;
-      const value = await call2("tasks", { method, id, goal, confirm: method === "resume" });
+      const scheduled = method === "add" && runAt ? Date.parse(runAt) : void 0;
+      if (scheduled !== void 0 && (!Number.isSafeInteger(scheduled) || scheduled <= Date.now() || localDateTime(new Date(scheduled)) !== runAt)) throw Error("Choose a future time within one year.");
+      const value = await call2("tasks", {
+        method,
+        id,
+        goal,
+        confirm: method === "resume",
+        ...scheduled === void 0 ? {} : { runAt: scheduled }
+      });
       if (alive.current) {
         setItems(value);
         setConfirm(null);
-        if (method === "add") setGoal("");
+        if (method === "add") {
+          setGoal("");
+          setRunAt("");
+        }
       }
     } catch (e) {
       if (alive.current) setError(e.message);
@@ -37222,6 +37241,7 @@ function ComputerTasks({ record, call: call2 }) {
     { className: "bt-computer-help" },
     (0, import_react49.createElement)("summary", null, t("Desktop task queue")),
     (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Tasks run in order when the desktop is running and the Bot chat is idle. A restart or uncertain result requires review. Pausing only controls Computer tools; other tools remain in assisted mode.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("The optional time uses your local time zone. Keep DSH and the desktop running. Due tasks wait until the Bot is available; future tasks do not block ready tasks.")),
     (0, import_react49.createElement)(
       "form",
       { onSubmit: (e) => {
@@ -37229,6 +37249,13 @@ function ComputerTasks({ record, call: call2 }) {
         void command("add");
       } },
       (0, import_react49.createElement)("textarea", { value: goal, maxLength: 4e3, disabled: busy, "aria-label": t("Desktop task goal"), onChange: (e) => setGoal(e.target.value) }),
+      (0, import_react49.createElement)("label", { className: "bt-computer-row" }, t("Run at (optional)"), (0, import_react49.createElement)("input", {
+        type: "datetime-local",
+        value: runAt,
+        disabled: busy,
+        min: localDateTime(new Date(Date.now() + 6e4)),
+        onChange: (e) => setRunAt(e.target.value)
+      })),
       (0, import_react49.createElement)("button", { type: "submit", className: "bt-soft bt-soft-sm", disabled: busy || !goal.trim() }, t("Add desktop task"))
     ),
     error ? (0, import_react49.createElement)("p", { role: "alert", className: "bt-error" }, t(error)) : null,
@@ -37237,6 +37264,7 @@ function ComputerTasks({ record, call: call2 }) {
       { key: item.id, className: "bt-computer-help" },
       (0, import_react49.createElement)("p", null, item.goal),
       (0, import_react49.createElement)("p", { role: "status" }, `${t("Task status")}: ${t(item.status)}`),
+      item.runAt ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Scheduled for {time}", { time: new Date(item.runAt).toLocaleString() })) : null,
       item.note ? (0, import_react49.createElement)("p", null, item.note) : null,
       (0, import_react49.createElement)(
         "div",

@@ -816,3 +816,13 @@ queue. A restart, uncertain delivery or changed generation waits for review;
 confirmed resume sends a new observation-first instruction and rejects old
 attempts. It never replays recorded desktop inputs. Finished entries can be
 removed. This remains assisted mode, not `computer-only` isolation.
+
+**Run at (optional)** adds a one-time start time in the viewer's local time zone,
+up to 366 days ahead. Leaving it blank queues work immediately. Times are saved as
+absolute timestamps and survive a host restart. Only due tasks are eligible, ordered
+by scheduled time (or creation time for immediate tasks); future tasks do not block
+ready work. DSH and the desktop must be running, and the Bot must be idle. Dispatch
+uses the existing 30-second queue check, so the chosen time is the earliest eligible
+time, not an exact start guarantee. Missed queued tasks remain due when service
+returns; previously running or uncertain attempts still require explicit review.
+This does not wake Windows, start a stopped desktop, or repeat a task periodically.

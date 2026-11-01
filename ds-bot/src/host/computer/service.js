@@ -222,7 +222,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     store, ready, owner, assigned, available, barrier, administration, human, controls, stillOwns,
     hasHuman: id => humans.has(id), claim: (record, who) => leases.acquire(record, who),
   })
-  const tasks = createDesktopTasks(rt, { store, ready, assigned, owner, administration, barrier, controls, provider })
+  const tasks = createDesktopTasks(rt, { store, ready, assigned, owner, administration, barrier, controls, provider, now: clock })
   const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits })
   const storage = storageManager.run
   const portable = createPortableBackups({ directory: join(rt.home, 'computers', 'portable'), ready, assigned, run: storage, limits, supported: () => provider.portableSupported === true,

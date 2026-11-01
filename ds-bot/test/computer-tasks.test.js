@@ -8,7 +8,8 @@ import { createDesktopTasks } from '../src/host/computer/tasks.js'
 async function fixture(t) {
   const home = await mkdtemp(join(tmpdir(), 'dsbot-tasks-test-'))
   t.after(() => rm(home, { recursive: true, force: true }))
-  const store = createComputerStore(join(home, 'queue.json'), { writable() {} })
+  const path = join(home, 'queue.json')
+  let store = createComputerStore(path, { writable() {} }), now = Date.now()
   const record = { id: 'cmp_test', botId: 'a', generation: 1, grant: 'operate', executionPolicy: 'assisted', archived: false }
   await store.update(draft => { draft.computers[record.id] = record })
   const controls = new Map([[record.id, 'none']]), sent = [], removed = [], cancelled = []
@@ -16,13 +17,14 @@ async function fixture(t) {
   const rt = { readOnly: () => undefined, chatOf: () => 'chat', live: new Map(), resolveAgent: async () => agent,
     ctx: { sessions: { flush: async () => {} } }, deliver: async value => { (await tasks.validateDelivery(value.computerTask, value.sessionId))(); sent.push(value) } }
   let barriers = 0
-  const deps = { store, ready: async () => {}, assigned: async () => (await store.load()).computers[record.id], owner: () => ({ botId: 'a', sessionId: 'chat', turnId: rt.live.get('chat').turn }),
+  const deps = { store, now: () => now, ready: () => store.load(), assigned: async () => (await store.load()).computers[record.id], owner: () => ({ botId: 'a', sessionId: 'chat', turnId: rt.live.get('chat').turn }),
     administration: async (_id, work) => work(), barrier: async () => { barriers++ }, controls, provider: { inspect: async () => ({ phase: 'ready' }) } }
   let tasks = createDesktopTasks(rt, deps)
   const command = (method, args = {}) => tasks.command(method, { botId: 'a', expectedGeneration: 1, ...args })
   const start = async () => { await command('add', { goal: 'Inspect the desktop and report evidence.' }); await tasks.tick(); const item = (await tasks.list('a'))[0]; rt.live.set('chat', { turn: 1, info: { exchangeId: item.attempt } }); await tasks.enter(agent); return item }
-  return { store, rt, agent, sent, removed, cancelled, command, start, get tasks() { return tasks }, barriers: () => barriers,
-    reload: () => { tasks.dispose(); tasks = createDesktopTasks(rt, deps); return tasks } }
+  return { get store() { return store }, rt, agent, sent, removed, cancelled, command, start, get tasks() { return tasks }, barriers: () => barriers,
+    now: () => now, advance: ms => { now += ms },
+    reload: () => { tasks.dispose(); store = createComputerStore(path, { writable() {} }); tasks = createDesktopTasks(rt, { ...deps, store }); return tasks } }
 }
 test('queued desktop tasks dispatch once and require an explicit result', async t => {
   const h = await fixture(t), item = await h.start()
@@ -32,6 +34,51 @@ test('queued desktop tasks dispatch once and require an explicit result', async 
   assert.equal((await h.tasks.list('a'))[0].status, 'needs-review')
   await h.tasks.tick(); assert.equal(h.sent.length, 1)
   assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+})
+test('scheduled desktop tasks remain queued until their durable run time', async t => {
+  const h = await fixture(t)
+  const runAt = h.now() + 60_000
+  await h.command('add', { goal: 'Run later', runAt })
+  await h.tasks.tick()
+  assert.equal(h.sent.length, 0)
+  assert.equal((await h.tasks.list('a'))[0].runAt, runAt)
+  await assert.rejects(h.command('add', { goal: 'Too far', runAt: h.now() + 367 * 24 * 60 * 60 * 1000 }), /within one year/)
+  await assert.rejects(h.command('add', { goal: 'In the past', runAt: h.now() - 1 }), /future/)
+  h.reload()
+  assert.equal((await h.tasks.list('a'))[0].runAt, runAt)
+  await h.tasks.tick(); assert.equal(h.sent.length, 0)
+  h.advance(60_000)
+  await h.tasks.tick()
+  assert.equal(h.sent.length, 1)
+  await h.tasks.tick(); assert.equal(h.sent.length, 1)
+})
+test('future tasks do not block immediate work and due tasks use their scheduled order', async t => {
+  const h = await fixture(t)
+  await h.command('add', { goal: 'Later', runAt: h.now() + 120_000 })
+  await h.command('add', { goal: 'Earlier', runAt: h.now() + 60_000 })
+  await h.command('add', { goal: 'Immediate' })
+  await h.tasks.tick()
+  assert.match(h.sent[0].text, /Immediate/)
+  let item = (await h.tasks.list('a')).find(item => item.goal === 'Immediate')
+  await h.command('cancel', { id: item.id })
+  h.advance(120_000); await h.tasks.tick()
+  assert.match(h.sent[1].text, /Earlier/)
+  item = (await h.tasks.list('a')).find(item => item.goal === 'Earlier')
+  await h.command('cancel', { id: item.id }); await h.tasks.tick()
+  assert.match(h.sent[2].text, /Later/)
+})
+test('invalid explicit times cannot silently enqueue immediate work', async t => {
+  const h = await fixture(t)
+  for (const runAt of [null, '', true, {}, [], String(h.now() + 1000), NaN, Infinity, 1.5, h.now()]) {
+    await assert.rejects(h.command('add', { goal: 'Invalid', runAt }), /future/)
+  }
+  assert.equal((await h.tasks.list('a')).length, 0)
+  const [item] = await h.command('add', { goal: 'Scheduled', runAt: h.now() + 60_000 })
+  await assert.rejects(h.store.update(draft => { draft.tasks[item.id].runAt = h.now() - 1 }), /Invalid desktop task/)
+  await h.command('pause', { id: item.id }); h.advance(60_000)
+  await h.tasks.tick(); assert.equal(h.sent.length, 0)
+  await h.command('cancel', { id: item.id }); await h.tasks.tick()
+  assert.equal(h.sent.length, 0)
 })
 test('pause cancels only the matching task and resume creates a fresh fenced delivery', async t => {
   const h = await fixture(t), item = await h.start()

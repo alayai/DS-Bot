@@ -1167,3 +1167,33 @@ SHA-256: `8bdb50e8a4eff2bcde9ae111961d840f427009c3815e6f9135cb4fc01bcac0f2`. Ind
 the installed loader, new host modules and exact generated client bytes.
 Only the staged package version is 0.2.5-cua.16; source remains 0.2.4.
 Packaging log: `/tmp/cua16-package.log`.
+
+## cua.17 — one-time scheduled desktop tasks
+
+- Optional absolute `runAt` timestamps persist in the desktop registry. Times
+  must be numeric integers in the next 366 days; explicit null, strings and
+  malformed values are refused rather than queued immediately.
+- Queue tests reopen the actual store from disk, advance a controlled clock,
+  check no early/duplicate dispatch, verify ready work bypasses future entries
+  and due tasks sort by time, and retain pause/cancel/unknown-result fencing.
+- Real Chromium/React with actual host managers and a fake desktop verifies
+  Shanghai and Los Angeles time entry, saved epoch values, page reload, no
+  premature delivery and cancellation. The existing portable-backup fallback,
+  multi-part import and resource-setting regression also passed.
+- Full unit suite: **1544 passed, 2 skipped, 0 failed**. Client/runtime generated
+  checks and lint passed (existing warnings). A Windows mount rename lock
+  prevented ordinary runtime directory replacement; runtime files were generated
+  in a temporary directory, verified, copied with the manifest last, and checked
+  again with the repository verifier (30 files).
+- Logs: `/tmp/cua17-tests.log`, `/tmp/cua17-ui.log`, `/tmp/cua17-lint.log`.
+  Windows native GUI and real vision-model evaluation were not performed.
+  Times are earliest eligibility, checked on the existing 30-second timer;
+  this does not wake the host, start stopped desktops or schedule repeats.
+- Isolated mock DSH smoke passed **52/52** and stopped its mock/Web processes;
+  temporary team data was removed. Log: `/tmp/cua17-smoke.log`.
+
+Preview: `artifacts/ds-bot-0.2.5-cua.17.tgz`, 1,133,948 bytes.
+SHA-256: `489672725c5d136f1d9720bee1f8f0f3b5caa85e133017bd117011187f8a304e`.
+Independent extraction verified all 30 runtime files, installed setup loader,
+the host task implementation and generated client. Only the staged package version
+is `0.2.5-cua.17`; source remains `0.2.4`. Log: `/tmp/cua17-package.log`.
