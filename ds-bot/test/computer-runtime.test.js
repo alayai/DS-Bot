@@ -103,6 +103,7 @@ test('published lock evidence rejects stale recipes and incomplete image identit
   const lockPath = join(output, 'runtime.lock.json')
   const lock = JSON.parse(await readFile(lockPath, 'utf8'))
   lock.publishedImage = `ghcr.io/example/image@sha256:${'a'.repeat(64)}`
+  delete lock.publishedArchive
   lock.publishedImageId = `sha256:${'b'.repeat(64)}`
   lock.publishedImageRecipe = await imageRecipe(output, lock)
   await writeFile(lockPath, JSON.stringify(lock))

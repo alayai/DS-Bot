@@ -41,6 +41,8 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
           || (value.job.prepareRuntime !== undefined && typeof value.job.prepareRuntime !== 'boolean')
           || (value.job.installSystem !== undefined && typeof value.job.installSystem !== 'boolean')
           || (value.job.resumeAfterRestart !== undefined && typeof value.job.resumeAfterRestart !== 'boolean')
+          || (value.job.restartRequired !== undefined && typeof value.job.restartRequired !== 'boolean')
+          || (value.job.engineOpened !== undefined && typeof value.job.engineOpened !== 'boolean')
           || (value.job.systemStep !== undefined && !['wsl', 'engine', 'done'].includes(value.job.systemStep))
           || (value.job.bootId !== undefined && (typeof value.job.bootId !== 'string' || !/^[0-9T:.Z+-]{15,48}$/.test(value.job.bootId)))))) {
         throw refused('setup-storage', 'Desktop setup metadata is invalid; it has not been overwritten.')
@@ -126,7 +128,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
         const kind = data.job.engineKind
         const status = await tools.systemStatus(kind)
         signal.throwIfAborted()
-        if (data.job.systemStep === 'wsl' && data.job.bootId === status.bootId) {
+        if ((data.job.systemStep === 'wsl' || data.job.restartRequired) && data.job.bootId === status.bootId) {
           await update('waiting-restart')
           return
         }
@@ -136,6 +138,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
           data.job.bootId = status.bootId
           await update('installing-system')
           await tools.installSystem(kind, 'wsl', { signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) } })
+          signal.throwIfAborted()
           await update('waiting-restart')
           return
         }
@@ -146,10 +149,18 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
           }
           if (!status.wingetAvailable) throw new Error('Install or update Windows App Installer to enable Windows Package Manager, then retry.')
           data.job.systemStep = 'engine'
+          data.job.bootId = status.bootId
           await update('installing-system')
-          await tools.installSystem(kind, 'engine', { signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) } })
+          const result = await tools.installSystem(kind, 'engine', { signal, log: text => { data.job.log = safeLog((data.job.log ?? '') + text) } })
+          signal.throwIfAborted()
+          if (result?.restartRequired) {
+            data.job.restartRequired = true
+            await update('waiting-restart')
+            return
+          }
         }
         data.job.systemStep = 'done'
+        data.job.restartRequired = false
         if (!data.job.engineOpened && kind === 'docker') {
           data.job.engineOpened = true
           await save()
@@ -264,7 +275,8 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       data.job = { id: randomUUID(), botId, engineKind: kind,
         prepareRuntime: Boolean(prepareRuntime || (installSystem && kind === 'podman')),
         installSystem, resumeAfterRestart: true,
-        ...(continuing && previous ? { systemStep: previous.systemStep, bootId: previous.bootId, engineOpened: previous.engineOpened } : {}),
+        ...(continuing && previous ? { systemStep: previous.systemStep, bootId: previous.bootId,
+          engineOpened: previous.engineOpened, restartRequired: previous.restartRequired } : {}),
         phase: 'checking', updatedAt: now(), log: continuing ? previous?.log ?? '' : '' }
       await save()
       if (stopping) return view()
@@ -301,6 +313,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     const tools = await payload()
     if (job.installSystem) {
       const status = await tools.systemStatus(job.engineKind)
+      if (job.restartRequired && status.bootId === job.bootId) return
       if (job.systemStep === 'wsl' && (status.bootId === job.bootId || !status.wslReady)) return
       if (job.systemStep === 'engine' && !status.engineInstalled) return
       if (job.systemStep === 'done' && job.engineKind === 'docker') {

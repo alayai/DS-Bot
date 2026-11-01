@@ -354,3 +354,23 @@ test('waiting for Docker never repeatedly opens it and missing winget produces a
   assert.equal((await h.setup.state()).job.phase, 'ready')
   assert.equal(opens, 1)
 })
+
+test('engine installer reboot is persisted and resumes only on a different boot without another install', async t => {
+  const h = await fixture(t, {}, { platform: 'win32' })
+  let status = { bootId: '2026-11-01T01:00:00.000Z', wslReady: true, engineInstalled: false, wingetAvailable: true }
+  let installs = 0, opens = 0
+  h.runtime.systemStatus = async () => status
+  h.runtime.installSystem = async () => { installs++; status.engineInstalled = true; return { restartRequired: true } }
+  h.runtime.openEngine = async () => { opens++ }
+  await h.setup.prepare({ botId: 'a', installSystem: true, installConsent: true })
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'waiting-restart')
+  await h.setup.resume()
+  assert.equal(opens, 0)
+  status = { ...status, bootId: '2026-11-01T02:00:00.000Z' }
+  await h.setup.resume()
+  await h.settled()
+  assert.equal((await h.setup.state()).job.phase, 'ready')
+  assert.equal(installs, 1)
+  assert.equal(opens, 1)
+})

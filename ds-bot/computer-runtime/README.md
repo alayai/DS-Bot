@@ -21,14 +21,15 @@ cross-browser-version compatibility and complete disk quotas remain incomplete.
 CUA plugin builds include a verified runtime payload. On Windows x64, start
 Docker Desktop in Linux-container mode; on Linux x64, start local Docker.
 Open a Bot's **Private desktop**, then choose **Prepare and start**. The Host
-checks its local engine, builds the fixed recipe, saves the exact engine and
+checks its local engine, downloads the pinned archive, saves the exact engine and
 image identity, starts an observe-only desktop, and waits for a real screenshot.
 No source checkout or separate WSL Node installation is needed on this path.
 
 Progress and bounded, redacted logs are saved under the plugin's own
 `computers/setup.json`. Closing the panel does not cancel the job. A Host restart
-marks incomplete work interrupted; **Retry preparation** checks existing state
-before continuing. Cancellation retains reusable image layers and desktop data.
+reconciles approved early preparation steps and continues when the saved boot/engine
+conditions are met; uncertain desktop mutations remain interrupted for review.
+**Retry preparation** checks existing state before continuing. Cancellation retains reusable image layers and desktop data.
 The selected engine is pinned even if image preparation fails. A changed Docker
 engine identity is refused instead of silently creating desktops in another store.
 
@@ -39,8 +40,12 @@ the user's DSH profile. The operation runs on the DSH server, not necessarily th
 machine where its browser is open.
 
 Windows uses a native Node/Electron Broker and a local Docker named pipe.
-Docker and Windows virtualization prerequisites still need installation through
-the normal system flow. The engine selector also offers **Podman (experimental)**.
+The **Install desktop environment** action requests explicit confirmation before
+running fixed WSL and winget engine-install commands on the DSH host. Windows App
+Installer must be available. Complete the system prompts and restart Windows if
+requested; DSH never initiates a reboot. Reopen DSH to resume approved preparation.
+Cancelling cannot undo an elevated installer already running. The engine selector
+also offers **Podman (experimental)**.
 On Windows, **Prepare Podman machine and desktop** explicitly creates/starts the
 fixed `ds-bot` machine (rootful, Linux x64) before preparing the image. It does not
 install Podman or Windows features, restart Windows, remove a machine, or change
@@ -56,14 +61,14 @@ does not fill in missing resource or security settings. A configured engine cann
 be switched from the selector; migration remains a separate operation. Real
 Podman lifecycle acceptance is still outstanding; Docker remains the tested path.
 
-The manual `Computer image candidate` workflow builds the pinned recipe, exercises
-an actual desktop and collects its package inventory. Publishing is off by default.
-A published candidate produces `image-candidate.json`; after release acceptance,
-its `publishedImage` may be added to `runtime.lock.json`. Only digest-pinned GHCR
-references are accepted. The setup job then pulls that exact image and validates
-its local immutable ID and runtime labels. There is no published reference in the
-current lock, so this version still builds locally. No registry publication or
-signed-installer release has been performed.
+The source lock pins a published GitHub Release archive, a tested immutable image
+ID and the desktop recipe. The installer verifies a bounded manifest and every
+part's size/SHA-256 before loading the archive; it does not extract it on the host.
+A clean independent CI runner verified anonymous download and exercised the
+actual desktop. Download failures stay visible instead of changing the source.
+Existing desktop image pins are retained. The GHCR candidate workflow remains an
+alternative delivery route; see `docs/dev/cua-image-release.md`. No signed desktop
+installer release was made by the image workflow.
 
 ## Supported development setup
 
@@ -249,6 +254,19 @@ serialized. `idleStopMs` defaults to 900000 (15 minutes), can be 0 to disable, o
 at least 60000. The 30-second sweep excludes active operations, held turn leases
 and human-controlled desktops. Viewing counts as activity. Idle stop keeps files;
 starting again is explicit. These are not machine-wide Docker or disk quotas.
+
+The **Desktop resources** panel persists these limits with revision checks,
+rejects a running limit below the active count, and offers free-space/home-size
+warnings. Disk sampling is at most once per minute and does not count as activity;
+readings older than two minutes or failed scans are marked stale.
+
+Only rootful Podman on XFS project-quota storage can enable a hard quota for new
+homes. A temporary labelled probe must demonstrate kernel EDQUOT enforcement
+before the default is saved. Existing homes are never resized; restore/upgrade
+preserve their quota. Docker ordinary named volumes expose warning thresholds
+only. Backup copies and engine root layers are outside the per-home quota; this
+is not a whole-engine disk limit. Actual Podman/XFS acceptance is still pending.
+
 
 Stop the desktop before **Save checkpoint**, **Restore checkpoint** or
 **Recreate container**. Checkpoints are local named volumes containing a copied

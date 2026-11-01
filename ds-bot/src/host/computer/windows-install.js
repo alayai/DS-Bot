@@ -49,8 +49,9 @@ export async function installWindowsComponent(kind, component, { signal, log = (
       '--accept-package-agreements', '--accept-source-agreements', '--interactive', '--disable-interactivity'], {
       env: environment(), windowsHide: true, signal, timeout: 45 * 60_000, maxBuffer: 512 * 1024,
     })
-  } catch {
+  } catch (error) {
     if (signal?.aborted) throw signal.reason
+    if ([3010, 1641].includes(error.code)) return { restartRequired: true }
     // An installer may have committed changes before winget loses its result.
     throw new Error('The installer result could not be confirmed. Check Windows before retrying; installed components will not be removed.')
   }

@@ -47,6 +47,9 @@ test('denied or uncertain installers do not report success and cancellation neve
   const deps = { platform: 'win32', execute }
   await assert.rejects(installWindowsComponent('docker', 'engine', {}, deps), error =>
     /could not be confirmed/.test(error.message) && !error.message.includes('private'))
+  assert.equal((await installWindowsComponent('docker', 'engine', {}, {
+    ...deps, execute: async () => { throw Object.assign(Error('restart'), { code: 3010 }) },
+  })).restartRequired, true)
   await assert.rejects(installWindowsComponent('docker', 'wsl', {}, {
     ...deps, execute: async () => ({ stdout: '{"exitCode":5}' }),
   }), /did not complete/)

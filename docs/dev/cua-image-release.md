@@ -1,8 +1,9 @@
 # Publish and promote a CUA desktop image
 
-The source lock currently has no published image. First-time setup still builds
-the pinned recipe locally. These steps prepare a release; they do not upgrade
-existing desktops or publish anything automatically.
+The source lock now pins a tested GitHub Release archive. First-time setup
+downloads and verifies it; existing desktops retain their original image.
+The GHCR process below remains available for a later release. The archive
+process is described at the end. Promotion never upgrades an existing home.
 
 ## 1. Build a candidate from committed source
 

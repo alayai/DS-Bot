@@ -1002,3 +1002,30 @@ verifies anonymous download on a second runner and repeats the actual desktop
 smoke. Its publication outcome is recorded separately; these local checks alone
 are not evidence of an available public image. Logs: `/tmp/cua13-{tests-final,
 recheck,panel,smoke,build-final,lint-final}.log`.
+
+Publication completed in GitHub Actions run `41285990416`:
+
+- Source: `c4ac3e9d2b713c7ca492b6258ef1ecd8f5fbb4cf`.
+- Publish, independent fresh-runner anonymous download, desktop smoke and result
+  jobs all succeeded. Public preview release contains three archive parts,
+  627,774,939 compressed bytes, manifest, lock, build/smoke evidence and inventory.
+- Verified image: `sha256:3da1065e532b906f78b404df1909e7a17722cdd239acfcb5bda9202271ce3c4a`.
+- Manifest SHA-256: `8a583718e830d2f85bbc518949b82969dd172be7005480bc42c9fc6252188f4f`.
+- Evidence commit: `47f8ef37b7d87a043041015989c4a7062c093a6e`; its parent and sole
+  changed lock file were checked before import. Current recipe equals its recipe.
+- The source and bundled lock now use the actual published archive. Existing
+  installations keep their old image. No GHCR package or signed app was released.
+- After importing the real lock and adding the engine-reboot regression, the unit
+  suite passed 1497 tests, skipped 2 and failed 0; build/check/lint passed.
+
+The fixed `RedHat.Podman` package identifier was checked against the official
+Microsoft winget manifest directory. Windows install commands themselves remain
+fixture-tested; no WSL/engine installation or reboot was performed locally.
+
+Final preview: `artifacts/ds-bot-0.2.5-cua.13.tgz`, 1,093,176 bytes.
+SHA-256: `23b3eb582c9a82e753654efb848853c85dd6c9309de51b69c136310977e4ccf3`.
+Independent extraction verified the runtime manifest, installed setup loader,
+published image lock, current host modules and exact generated client bytes.
+Only the staged package version is 0.2.5-cua.13; source remains 0.2.4.
+Final logs: `/tmp/cua13-final-{build,tests,lint}.log`,
+`/tmp/cua13-windows-final.log` and `/tmp/cua13-package.log`.

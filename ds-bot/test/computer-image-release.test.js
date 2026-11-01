@@ -50,6 +50,7 @@ test('image promotion binds the source recipe, public digest, smoke and inventor
   await promoteCandidate(...f.args)
   const lock = JSON.parse(await readFile(join(f.project, 'computer-runtime/runtime.lock.json')))
   assert.equal(lock.publishedImage, reference)
+  assert.equal(lock.publishedArchive, undefined)
   assert.equal(lock.publishedImageId, image)
   assert.equal(lock.publishedImageRecipe, before)
   assert.equal(await imageRecipe(join(f.project, 'computer-runtime')), before)

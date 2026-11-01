@@ -11,24 +11,33 @@ Tested with dsh `0.2.1-rc.4` (Web) and `0.2.0-rc.2` (Web and Desktop).
 CUA builds include the Broker and a **Prepare and start** flow in each Bot's
 **Private desktop** panel. On Windows x64, install and start Docker Desktop with
 Linux containers; on Linux x64, start a local Docker Engine. Setup checks the
-engine, downloads/builds the pinned image, saves its connection, creates the
+engine, downloads the pinned image, saves its connection, creates the
 Bot's desktop and waits for a real screenshot. No source checkout, separate
 Linux Node, Broker path or image ID is needed for this flow.
 
 Preparation runs on the **DSH host**, including when you open DSH Web remotely.
-You can close the panel and return to its progress, cancel preparation, or retry
-an interrupted task. Downloaded layers are reusable. System prerequisites such
-as virtualization, Docker installation and a Windows restart remain guided
-manual steps. **Podman (experimental)** can be selected before first preparation.
-On Windows, its separate **Prepare Podman machine and desktop** button creates or
-starts a dedicated rootful `ds-bot` machine; install Podman first. Linux Podman
-requires a local rootful socket service and cgroup v2. The selected engine is locked
-after preparation starts, so existing desktops cannot silently move between stores.
-Real Podman acceptance and automatic system installation remain unfinished.
+On Windows, **Install desktop environment** requests confirmation before enabling
+WSL and installing the chosen engine through Windows Package Manager. Windows
+App Installer must be available; handle its installer/UAC prompts and any restart.
+Reopen DSH after restarting to continue approved preparation. Cancelling stops
+DSH's next steps; an elevated system installer may continue and installed
+components are retained. Uncertain installation results are never blindly replayed.
 
-The plugin can use a released OCI image only when its package lock includes an
-approved immutable digest. The current lock has none and continues to build the
-fixed recipe locally. The candidate release workflow does not publish by default.
+**Podman (experimental)** can be selected before first preparation. Windows uses
+a dedicated rootful `ds-bot` machine; Linux requires a local rootful socket service
+and cgroup v2. The selected engine stays pinned to protect existing desktops.
+Actual Podman acceptance and Windows GUI/system-install acceptance remain pending.
+
+The package lock now pins a published GitHub Release image archive. First setup
+downloads its checked parts, verifies their SHA-256 hashes and loads the tested
+immutable image. A separate clean CI runner verified anonymous delivery and actual
+desktop operations. Existing desktops retain their original image after an update.
+
+**Desktop resources** saves running-desktop and idle-stop limits, free-space and
+home-size warning levels, and displays measured disk usage. Hard home quotas are
+available only for Podman on XFS with verified kernel enforcement, and only for new
+homes. Docker named volumes provide warnings; backup copies and engine root layers
+are outside the per-home quota. This is not a Windows Docker disk-size limit.
 
 Installing the plugin alone does not start or download anything. An explicit
 `computer.enabled: false` in the DSH profile disables preparation. Existing

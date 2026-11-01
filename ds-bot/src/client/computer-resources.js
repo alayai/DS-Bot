@@ -19,7 +19,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
   const stale = resource?.error || !resource?.at || Date.now() - resource.at > 120_000
   return h('details', { className: 'bt-computer-help' },
     h('summary', null, t('Desktop resources')),
-    h('p', { className: 'bt-muted' }, t('These settings apply to every Bot desktop on this DSH host. Lowering a limit never stops a desktop automatically.')),
+    h('p', { className: 'bt-muted' }, t('These settings apply to every Bot desktop on this DSH host. Changing the running desktop limit never forcibly stops a desktop.')),
     input('Maximum running desktops', 'maxRunning', 1, 8),
     input('Idle stop after minutes (0 disables)', 'idleMinutes', 0, 10080),
     input('Warn below free space (GiB)', 'freeGiB', 0.25, 1024, 0.25),

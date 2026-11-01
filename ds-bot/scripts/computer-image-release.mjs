@@ -93,6 +93,7 @@ export async function verifyCandidate(directory, repository, commit, { project =
   if (!candidate.evidence || Object.keys(candidate.evidence).length !== evidenceFiles.length
     || evidenceFiles.some(name => candidate.evidence[name] !== hashes[name])) throw new Error('Release evidence checksum mismatch.')
   if (validateEvidence(values, reference, lock) !== candidate.image) throw new Error('Candidate image ID does not match release evidence.')
+  delete lock.publishedArchive
   return { candidate, original, lockPath, lock: { ...lock, publishedImage: reference,
     publishedImageId: candidate.image, publishedImageRecipe: candidate.recipe } }
 }
