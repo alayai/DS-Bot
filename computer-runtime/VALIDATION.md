@@ -897,3 +897,72 @@ Source version remains 0.2.4. Logs:
 `/tmp/cua10-{tests,broker-final,panel,build,lint,package,smoke}.log`.
 Both owned guest containers and volumes were removed. Existing user containers
 were left untouched.
+
+## 2026-11-01 — Prebuilt image release evidence and promotion
+
+The workflow now separates the build/publish runner from anonymous download on a
+fresh runner. A promotable candidate binds repository, full commit, normalized
+recipe, tested image ID, registry digest and hashes of build/pull/smoke/inventory
+evidence. Explicit promotion verifies these against the current recipe before
+atomically changing the source lock. This is consistency checking, not a signed
+provenance claim; artifacts must come from a trusted workflow run.
+
+| Check | Result |
+|---|---|
+| Plugin unit suite | 1470 passed, 2 skipped, 0 failed |
+| Full mock Bot regression | 52/52 passed; isolated bench stopped and removed |
+| Release tests | Dirty/wrong source, stale recipe, changed evidence, substituted image, invalid registry reference, missing smoke coverage and mismatched inventory rejected; promotion leaves recipe identity stable |
+| Installed loader fixture | Real manifest/lock/loader with engine boundary fixture: fixed digest pull, tested ID enforcement, retained pinned images, registry failure and cancellation passed |
+| Real native setup smoke | Existing cached image; screenshot, file roundtrip, checkpoint, stop and restart passed; structured report written after owned-resource cleanup |
+| Build, generated files and lint | Passed; no new warnings in changed files; runtime CLI lint passed |
+| Workflow | YAML parsed; actual remote workflow was not executed |
+| Extracted preview | 23 runtime hashes and client matched; extracted loader validated the actual local engine and immutable image |
+
+One full-suite invocation omitted the Linux esbuild override and failed on the
+existing Windows native dependency. It was rerun with the isolated Linux binary;
+the successful result above includes all tests. The user's dependencies were not
+replaced.
+
+Preview: `artifacts/ds-bot-0.2.5-cua.11.tgz`, 1,080,868 bytes.
+SHA-256: `fef81280db118158317d9c664163b6c452c0b5a70574672109d0164c0f62f28f`.
+Source version remains 0.2.4. Logs:
+`/tmp/cua11-{tests-final,image-final,native-smoke,smoke,build,lint-final,runtime-lint,package}.log`.
+
+No image was pushed or made public. The source and preview locks still have no
+published reference; first-time setup therefore still builds locally. Actual
+GHCR publication, independent anonymous pull, clean-engine first download and
+Windows Desktop acceptance remain unverified. The release procedure is in
+`docs/dev/cua-image-release.md`. No user desktops or DSH data were modified.
+
+## 2026-11-01 — Native file selection and multiple uploads
+
+The file picker is now a visible button backed by the browser/Electron native
+multiple-file input. Selecting local files works before takeover; uploading is
+an explicit separate operation requiring current desktop control. The selection
+is validated before any file is read or sent. Each file is limited to 200 MiB,
+with no 200 MiB limit on the sum of a batch. Transfers run serially, show each
+file's result and stop the remaining queue on cancellation or failure.
+
+| Check | Result |
+|---|---|
+| Plugin unit suite | 1475 passed, 2 skipped, 0 failed |
+| Selection/UI checks | Picker enabled before takeover, multiple attribute, selection sends no files, cancelled picker retains selection, oversized selection disables upload |
+| Batch checks | Per-file boundary and larger batch totals admitted; over-limit byte, duplicate names and invalid names rejected before reads; serial commit, cancellation and lost receipt refusal passed |
+| Real browser → Host → guest | Actual filechooser event; 1,048,607-byte roundtrip with matching SHA-256; native multi-selection uploaded Unicode-name and empty files |
+| Existing file operations | Cancelling a batch left no partial file and never started the next file; no-overwrite and confirmed deletion checks passed |
+| Build, generated client/runtime and lint | Passed; no new warnings in changed files |
+| Extracted preview | All 23 runtime hashes, generated client bytes and new upload UI strings verified |
+
+An initial browser test had an ambiguous text locator after errors appeared in
+both the queue and global alert. The locator was scoped to the alert and the
+complete browser scenario passed on rerun. Owned test resources were cleaned.
+No Host or Broker behavior changed, and the general Bot smoke was not repeated.
+The previous full-size 200 MiB transfer evidence remains applicable; this round
+tested its per-file boundary without repeating the full-size transfer.
+
+Preview: `artifacts/ds-bot-0.2.5-cua.12.tgz`, 1,081,818 bytes.
+SHA-256: `6c71e99a6f4e483215b19afe21e74e38fa657dbc51ad3de36495a2f22f87e159`.
+Source version remains 0.2.4. Logs:
+`/tmp/cua12-{targeted,tests,panel,build,lint,package}.log`.
+Browser tests ran on Linux/WSL; Windows native dialog acceptance remains with
+the user. No user DSH data or existing desktops were changed.

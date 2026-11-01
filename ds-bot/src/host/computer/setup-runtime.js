@@ -11,7 +11,8 @@ export async function loadSetupRuntime() {
   const runtime = await import(pathToFileURL(join(directory, 'runtime.mjs')).href)
   const { discoverEngine, runEngine, buildDesktop, runEngineTask, validateEngine, preparePodmanMachine } = await import(pathToFileURL(join(directory, 'engine.mjs')).href)
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
-  const published = runtime.publishedImage(await runtime.validateLock())
+  const lock = await runtime.validateLock()
+  const published = runtime.publishedImage(lock)
   const recipe = createHash('sha256').update(JSON.stringify(
     ['runtime.lock.json', 'desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py'].map(name => [name, manifest.files[name]]),
   )).digest('hex')
@@ -26,6 +27,8 @@ export async function loadSetupRuntime() {
     discover: (engine, kind) => discoverEngine(engine, { kind: kind ?? engine?.kind ?? 'docker' }),
     async image(engine, pinned) {
       const metadata = JSON.parse((await runEngine(engine, ['image', 'inspect', pinned ?? published ?? tag])).stdout)[0]
+      // Existing homes retain their original image when the plugin is updated.
+      if (!pinned && published) runtime.checkPublishedImage(lock, metadata.Id)
       await check(engine, metadata.Id)
       return metadata.Id
     },

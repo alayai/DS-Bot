@@ -1,7 +1,7 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { imagePoint, freshFrame } from './computer-model.js'
 import { t } from './i18n.js'
-import { importDesktopFile, exportDesktopFile } from './computer-files.js'
+import { importDesktopFiles, validateDesktopFiles, exportDesktopFile } from './computer-files.js'
 import { FILE_LIMIT } from '../shared/computer-files.js'
 
 import { ComputerScreen } from './computer-stream.js'
@@ -101,6 +101,9 @@ export function ComputerView({ bot, actions, leaving }) {
   const [fileDeletion, setFileDeletion] = useState(null)
   const [transfer, setTransfer] = useState(null)
   const transferring = useRef(null)
+  const filePicker = useRef(null)
+  const selectedFiles = useRef(null)
+  const [uploads, setUploads] = useState([])
   const [streamFailed, setStreamFailed] = useState(false)
   const [streamProblem, setStreamProblem] = useState(null)
   const [tick, setTick] = useState(0)
@@ -203,6 +206,10 @@ export function ComputerView({ bot, actions, leaving }) {
       // Closing a viewer never silently hands control back to an automatic agent.
     }
   }, [bot.id, leaving])
+  useEffect(() => {
+    selectedFiles.current = null
+    setUploads([])
+  }, [bot.id])
   const manage = method => run(async () => {
     const result = await call(method)
     session.current.token = result.controlToken ?? null
@@ -278,7 +285,7 @@ export function ComputerView({ bot, actions, leaving }) {
     }
     const progress = (bytes, total) => {
       check()
-      setTransfer({ bytes, total, phase: bytes === total ? 'Verifying file…' : 'Transferring file…' })
+      setTransfer(value => ({ ...value, bytes, total, phase: bytes === total ? 'Verifying file…' : 'Transferring file…' }))
     }
     try { await work(request, { check, progress }); check() }
     finally {
@@ -286,14 +293,37 @@ export function ComputerView({ bot, actions, leaving }) {
       if (session.current.mounted) setTransfer(null)
     }
   })
-  const upload = event => {
-    const file = event.target.files?.[0]
+  const chooseFiles = event => {
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!file) return
+    if (!files.length || busy || leaving) return
+    try { validateDesktopFiles(files) } catch (reason) {
+      selectedFiles.current = null
+      setUploads([])
+      setError(`${reason.fileName}: ${t(reason.message)}`)
+      return
+    }
+    selectedFiles.current = files
+    setUploads(files.map(file => ({ name: file.name, bytes: file.size, status: 'Waiting to upload' })))
+    setError('')
+    setNotice('')
+  }
+  const upload = () => {
+    const files = selectedFiles.current
+    if (!files?.length || !owned || !ready) return
     void transferFile(async (request, options) => {
-      await importDesktopFile(request, file, options)
+      // Consume once. An interrupted batch must not replay completed files.
+      if (selectedFiles.current !== files) return
+      selectedFiles.current = null
+      await importDesktopFiles(request, files, {
+        ...options,
+        current: (file, index, count) => setTransfer({ name: file.name, index: index + 1, count, bytes: 0, total: file.size, phase: 'Preparing file…' }),
+        status: (index, status, problem) => {
+          if (session.current.mounted) setUploads(rows => rows.map((row, offset) => offset === index ? { ...row, status, problem } : row))
+        },
+      })
       await loadFiles()
-      setNotice(t('File imported. Existing files are never overwritten.'))
+      setNotice(t('Selected files uploaded. Existing files are never overwritten.'))
     })
   }
   const download = name => transferFile(async (request, options) => {
@@ -448,15 +478,27 @@ export function ComputerView({ bot, actions, leaving }) {
           button('Delete', () => run(async () => { await call(confirmation.method, confirmation.args); setConfirmation(null) })),
           button('Cancel', () => setConfirmation(null)))) : null) : null,
     h('strong', null, t('Transfer files')),
-    h('p', { className: 'bt-muted' }, t('Use /home/cua/DSBot inside the desktop. Files up to 200 MiB; folders and overwrites are not supported.')),
+    h('p', { className: 'bt-muted' }, t('Choose files from this computer. Each file can be up to 200 MiB. Files are uploaded one at a time to /home/cua/DSBot; folders and overwrites are not supported.')),
     transfer ? h('div', { className: 'bt-computer-row' },
-      h('span', { role: 'status', 'aria-live': 'polite' }, t(transfer.phase), ` ${transfer.bytes} / ${transfer.total} B`),
+      h('span', { role: 'status', 'aria-live': 'polite' },
+        transfer.name ? `${transfer.index} / ${transfer.count} · ${transfer.name} · ` : '',
+        t(transfer.phase), ` ${transfer.bytes} / ${transfer.total} B`),
       h('progress', { value: transfer.bytes, max: transfer.total || 1, 'aria-label': t('File transfer progress') }),
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: transfer.phase === 'Cancelling transfer…',
         onClick: () => { if (transferring.current) transferring.current.cancelled = true; setTransfer(value => ({ ...value, phase: 'Cancelling transfer…' })) } }, t('Cancel transfer'))) : null,
     h('div', { className: 'bt-computer-row' },
-      h('label', null, t('Import file'), h('input', { type: 'file', 'aria-label': t('Import file'), disabled: busy || !owned || !ready, onChange: upload })),
+      h('input', { ref: filePicker, type: 'file', multiple: true, hidden: true, 'aria-label': t('Choose files'),
+        disabled: busy || leaving, onChange: chooseFiles }),
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || leaving,
+        onClick: () => filePicker.current?.click() }, t('Choose files')),
+      button('Upload selected files', upload, !selectedFiles.current?.length || !owned || !ready),
       button('List files', () => run(loadFiles), !owned || !ready)),
+    uploads.length && !owned ? h('p', { className: 'bt-muted' }, t('Take control to upload the selected files.')) : null,
+    uploads.length ? h('ul', { className: 'bt-computer-uploads', 'aria-label': t('Upload queue') }, uploads.map((file, index) =>
+      h('li', { key: `${index}:${file.name}` },
+        h('span', { className: 'bt-computer-name' }, file.name),
+        ` · ${(file.bytes / 1048576).toFixed(1)} MiB · ${t(file.status)}`,
+        file.problem ? h('div', { className: 'bt-error' }, t(file.problem)) : null))) : null,
     fileStorage ? h('p', { className: 'bt-muted', role: 'status' },
       `${t('Listed files')}: ${files.length} · ${(fileStorage.bytes / 1048576).toFixed(1)} MiB · ${t('Disk available')}: ${(fileStorage.freeBytes / 1073741824).toFixed(1)} GiB`) : null,
     fileDeletion ? h('div', { className: 'bt-computer-help', role: 'group', 'aria-label': t('Confirm file deletion') },
@@ -480,7 +522,8 @@ export const COMPUTER_CSS = `
 .bt-computer-head{justify-content:space-between}
 .bt-computer select,.bt-computer input:not([type=file]){min-height:32px;min-width:0;max-width:100%;border:1px solid var(--bt-line);border-radius:8px;padding:6px 8px;background:var(--bt-card);color:var(--bt-ink);font:inherit}
 .bt-computer input:not([type=file]){flex:1}
-.bt-computer input[type=file]{display:block;max-width:240px;font:inherit;margin-top:4px}
+.bt-computer input[type=file][hidden]{display:none}
+.bt-computer-uploads{margin:4px 0;padding-left:20px;max-height:180px;overflow:auto;overflow-wrap:anywhere}
 .bt-computer-screen{position:relative;flex:none;border:1px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card);min-height:120px;aspect-ratio:16 / 10;display:flex;align-items:center;justify-content:center}
 .bt-computer-screen[data-control] canvas{cursor:crosshair}
 .bt-computer-display{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}

@@ -19,6 +19,8 @@ jobs:
   candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      reference: ${{ steps.publish.outputs.reference }}
     permissions:
       contents: read
       packages: write
@@ -38,9 +40,10 @@ jobs:
           node -e 'const fs = require("node:fs"); const r = JSON.parse(fs.readFileSync("image-build.json")); if (!/^sha256:[a-f0-9]{64}$/.test(r.image)) throw Error("Invalid image"); fs.appendFileSync(process.env.GITHUB_ENV, `CUA_IMAGE=${r.image}\n`)'
       - name: Exercise the actual image and collect its inventory
         run: |
-          node ds-bot/dev/computer-setup-smoke.mjs "$CUA_IMAGE"
+          node ds-bot/dev/computer-setup-smoke.mjs "$CUA_IMAGE" --report=image-smoke.json
           node computer-runtime/runtime.mjs inventory "$CUA_IMAGE" > guest-sbom.cdx.json
       - name: Publish the candidate only when explicitly selected
+        id: publish
         if: inputs.publish
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -53,16 +56,52 @@ jobs:
           docker push "$reference"
           docker image inspect "$reference" --format '{{json .RepoDigests}}' > image-digests.json
           CUA_REPOSITORY="$repository" node --input-type=module -e '
-            import { readFileSync, writeFileSync } from "node:fs";
+            import { readFileSync, appendFileSync } from "node:fs";
             const values = JSON.parse(readFileSync("image-digests.json"));
-            const publishedImage = values.find(value => value.startsWith(`${process.env.CUA_REPOSITORY}@sha256:`));
+            const publishedImage = values.find(value => value.startsWith(`${process.env.CUA_REPOSITORY}@sha256:`) && /@sha256:[a-f0-9]{64}$/.test(value));
             if (!publishedImage) throw Error("Published digest missing");
-            writeFileSync("image-candidate.json", JSON.stringify({ commit: process.env.GITHUB_SHA, publishedImage }, null, 2) + "\n");
+            appendFileSync(process.env.GITHUB_OUTPUT, `reference=${publishedImage}\n`);
           '
       - uses: actions/upload-artifact@v4
         with:
-          name: computer-image-evidence
+          name: computer-image-build-evidence
+          if-no-files-found: error
           path: |
             image-build.json
+            image-smoke.json
+            guest-sbom.cdx.json
+
+  anonymous-download:
+    if: inputs.publish
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: computer-image-build-evidence
+      - name: Download on a fresh runner without registry credentials
+        env:
+          CUA_REFERENCE: ${{ needs.candidate.outputs.reference }}
+        run: |
+          anonymous_config="$(mktemp -d)"
+          docker --config "$anonymous_config" pull --platform linux/amd64 "$CUA_REFERENCE"
+          docker --config "$anonymous_config" image inspect "$CUA_REFERENCE" > image-pull.json
+          node ds-bot/scripts/computer-image-release.mjs record . "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          node ds-bot/scripts/computer-image-release.mjs verify . "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: computer-image-evidence
+          if-no-files-found: error
+          path: |
+            image-build.json
+            image-smoke.json
+            image-pull.json
             guest-sbom.cdx.json
             image-candidate.json

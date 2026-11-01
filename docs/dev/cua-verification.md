@@ -130,3 +130,10 @@ python3 -m unittest discover -s computer-runtime/test -p files_test.py
 面板确认服务恢复后，要求两台都停止、旧接管凭据被拒绝，再显式启动并读取原文件。
 结束时清理两台测试容器、volume 和临时入口，不接触用户 Broker 或容器。
 该测试是原生 Linux Node 链路，不能替代 Windows Electron GUI 或旧 WSL 桥接验收。
+
+## 预构建镜像发行证据
+
+候选发布、独立匿名下载与显式导入 lock，见
+[镜像发行操作说明](cua-image-release.md)。本地 fixture 和缓存镜像 smoke
+不能证明已有可公开下载的镜像，也不能代替 Windows 全新安装的首次下载验收；
+这些结果必须分别记录。

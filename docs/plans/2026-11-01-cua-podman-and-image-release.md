@@ -64,3 +64,28 @@ Windows Podman 的实际创建、输入、备份/恢复和重启验收。测试�
 manifest 仍校验真实发行字节，不能在运行时通过规范化来放过被修改文件。源码与生成
 文件校验也使用同一规范化规则，避免 Windows checkout 导致假校验失败。
 现有 pinned image 保留原 recipe 记录，不因插件升级被标成新 recipe 构建的镜像。
+
+## 后续：候选验收与发行导入
+
+预构建镜像交付继续补齐以下流程，不自动发布或修改用户已有桌面：
+
+1. 构建 job 输出 image ID、真实桌面 smoke 的结构化结果和 CycloneDX 清单。
+   smoke 覆盖截图、文件往返、checkpoint、停止与重新启动，清理成功后才写成功记录。
+2. 显式 publish 之后，独立 runner 使用空 Docker 配置匿名拉取固定 digest。
+   私有镜像、失效权限或错误 digest 不生成可导入候选；不自动修改 GHCR 包可见性。
+3. 候选绑定仓库、完整 commit、recipe、image ID、registry digest 及四份证据的
+   SHA-256。生成时要求构建/运行时源码已跟踪且干净，禁止用未提交源码冒充旧 commit。
+4. `computer-image-release.mjs verify` 只读检查；`promote` 要求操作者明确提供
+   预期仓库及 commit，再检查证据、当前配方、镜像 user/platform/protocol/driver。
+   全部匹配后原子替换源码 lock；不提交、不推送，不触碰任何 DSH 数据或容器。
+5. 发行 lock 增加 `publishedImageId` 与 `publishedImageRecipe`。首次准备除了 digest
+   拉取与原有运行时检查，还核对本地 ID。旧安装继续使用原来的 pinned image。
+   无 `publishedImage` 仍使用本地构建；拉取失败不会暗中改用另一配方构建。
+
+recipe 对 LF/CRLF 归一化，包含除发行字段外的 lock 与 Dockerfile、requirements、
+launch 的内容；不包含发行 digest 自身，避免循环。新发布元数据不改变已有 home。
+
+候选 JSON 和 SHA-256 是一致性检查，不是独立签名或来源证明。只接受本仓库
+可信 workflow run 的 artifact，并由操作者核对其 commit；未知来源的文件不能
+因本地 verify 通过就视作可信。真实 OCI 发布、GHCR 公开可见性及首次无缓存下载
+仍须实际执行验证，不能把本地 fixture 或缓存 smoke 当作完成。

@@ -101,8 +101,7 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto(`http://127.0.0.1:${server.address().port}`)
-  await page.getByRole('button', { name: 'Take control', exact: true }).click()
-  const upload = page.getByLabel('Import file', { exact: true })
+  const upload = page.getByLabel('Choose files', { exact: true })
   await page.waitForFunction(() => !document.querySelector('input[type=file]').disabled)
   const source = join(home, 'panel.bin')
   const file = await open(source, 'wx')
@@ -113,8 +112,15 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
     }
   } finally { await file.close() }
   const expectedHash = await fileHash(source)
-  await upload.setInputFiles(source)
-  await page.getByText('File imported. Existing files are never overwritten.', { exact: true }).waitFor({ timeout: 900_000 })
+  const chooserEvent = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Choose files', exact: true }).click()
+  const chooser = await chooserEvent
+  assert.equal(chooser.isMultiple(), true)
+  await chooser.setFiles(source)
+  assert.equal(await page.getByRole('button', { name: 'Upload selected files', exact: true }).isDisabled(), true)
+  await page.getByRole('button', { name: 'Take control', exact: true }).click()
+  await page.getByRole('button', { name: 'Upload selected files', exact: true }).click()
+  await page.getByText('Selected files uploaded. Existing files are never overwritten.', { exact: true }).waitFor({ timeout: 900_000 })
   const downloadEvent = page.waitForEvent('download', { timeout: 900_000 })
   await page.getByRole('button', { name: 'Download', exact: true }).click()
   const download = await downloadEvent
@@ -127,13 +133,17 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
   chunkSeen = seen.resolve
   holdChunk = true
   await page.waitForFunction(() => !document.querySelector('input[type=file]').disabled)
-  await upload.setInputFiles({ name: 'cancel.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(1024 * 1024 + 31, 91) })
+  await upload.setInputFiles([
+    { name: 'cancel.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(1024 * 1024 + 31, 91) },
+    { name: 'never-started.txt', mimeType: 'text/plain', buffer: Buffer.from('must not upload') },
+  ])
+  await page.getByRole('button', { name: 'Upload selected files', exact: true }).click()
   const chunkTimeout = setTimeout(() => seen.reject(new Error('The upload did not dispatch a chunk.')), 30_000)
   try { await seen.promise } finally { clearTimeout(chunkTimeout) }
   assert.equal(await page.getByRole('progressbar').getAttribute('value'), '0', 'queued chunks are not acknowledged progress')
   await page.getByRole('button', { name: 'Cancel transfer', exact: true }).click()
   releaseChunk()
-  await page.getByText('Transfer stopped. Check the destination before retrying.', { exact: true }).waitFor()
+  await page.getByRole('alert').filter({ hasText: 'Transfer stopped. Check the destination before retrying.' }).waitFor()
   const container = `dsbot-${record.id}`
   const files = JSON.parse((await run('docker', ['exec', container, 'python3', '-c', 'import os,json;print(json.dumps(os.listdir("/home/cua/DSBot")))'])).stdout)
   assert.deepEqual(files, ['panel.bin'])
@@ -142,6 +152,7 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
   // Reusing a destination must leave the previously published bytes intact.
   await page.waitForFunction(() => !document.querySelector('input[type=file]').disabled)
   await upload.setInputFiles({ name: 'panel.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('replace') })
+  await page.getByRole('button', { name: 'Upload selected files', exact: true }).click()
   await page.getByRole('alert').filter({ hasText: 'A file with this name already exists.' }).waitFor()
   const sha256 = (await run('docker', ['exec', container, 'sha256sum', '/home/cua/DSBot/panel.bin'])).stdout.split(' ')[0]
   assert.equal(sha256, expectedHash)
@@ -164,6 +175,21 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
   assert.deepEqual(JSON.parse((await run('docker', ['exec', container, 'python3', '-c', 'import os,json;print(json.dumps(os.listdir("/home/cua/DSBot")))'])).stdout), [])
   assert.equal(await page.getByRole('button', { name: 'Delete file', exact: true }).count(), 0)
   console.log('PASS: confirmed deletion removes only the selected file and refreshes the list')
+  const batch = [
+    { name: '批量文件.txt', mimeType: 'text/plain', buffer: Buffer.from('multi-file upload') },
+    { name: 'empty.txt', mimeType: 'text/plain', buffer: Buffer.alloc(0) },
+  ]
+  const multiEvent = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Choose files', exact: true }).click()
+  await (await multiEvent).setFiles(batch)
+  await page.getByRole('button', { name: 'Upload selected files', exact: true }).click()
+  await page.getByText('Selected files uploaded. Existing files are never overwritten.', { exact: true }).waitFor()
+  for (const file of batch) {
+    assert.equal((await run('docker', ['exec', container, 'sha256sum', `/home/cua/DSBot/${file.name}`])).stdout.split(' ')[0],
+      createHash('sha256').update(file.buffer).digest('hex'))
+  }
+  assert.equal(await page.getByRole('list', { name: 'Upload queue', exact: true }).getByText('Uploaded', { exact: false }).count(), 2)
+  console.log('PASS: native chooser allows multiple files before takeover; explicit upload delivers Unicode and empty files serially')
   if (testRecovery) {
     secondRecord = await service.bind({ botId: 'second-test', grant: 'observe', expectedRevision: (await service.state()).revision })
     await service.manage('start', { botId: secondRecord.botId, expectedGeneration: secondRecord.generation })

@@ -21,6 +21,7 @@ const setup = createComputerSetup(rt, config => {
 let engine, record, phase
 const cancelOnly = process.argv.includes('--cancel')
 const cachedImage = process.argv.slice(2).find(value => value.startsWith('sha256:'))
+const reportPath = process.argv.find(value => value.startsWith('--report='))?.slice('--report='.length)
 const engineKind = process.argv.includes('--engine=podman') ? 'podman' : 'docker'
 try {
   if (process.argv.includes('--prepare-runtime')) {
@@ -97,4 +98,10 @@ try {
     }
   } catch (error) { if (error.code !== 'ENOENT') throw error }
   await rm(home, { recursive: true, force: true })
+}
+if (reportPath) {
+  assert.equal(cancelOnly, false, 'A cancelled setup cannot produce passing image evidence.')
+  assert.ok(cachedImage, 'Release smoke evidence requires an explicit immutable image ID.')
+  await writeFile(reportPath, `${JSON.stringify({ version: 1, passed: true, image: cachedImage,
+    checks: ['screenshot', 'file-roundtrip', 'checkpoint', 'restart'] }, null, 2)}\n`, { flag: 'wx' })
 }

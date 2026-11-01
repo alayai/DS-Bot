@@ -21,6 +21,17 @@ const payload = [
 // not change the published payload hashes or the recipe cache key.
 export const runtimeText = bytes => Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'), 'utf8')
 
+export async function imageRecipe(directory = root, lock) {
+  const source = { ...(lock ?? JSON.parse(await readFile(join(directory, 'runtime.lock.json'), 'utf8'))) }
+  // Publication metadata cannot be part of the recipe it identifies.
+  for (const name of ['publishedImage', 'publishedImageId', 'publishedImageRecipe']) delete source[name]
+  const inputs = [['runtime.lock.json', JSON.stringify(source)]]
+  for (const name of ['desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py']) {
+    inputs.push([name, createHash('sha256').update(runtimeText(await readFile(join(directory, name)))).digest('hex')])
+  }
+  return createHash('sha256').update(JSON.stringify(inputs)).digest('hex')
+}
+
 export function publishedImage(lock) {
   if (lock.publishedImage === undefined) return null
   if (typeof lock.publishedImage !== 'string'
@@ -28,6 +39,9 @@ export function publishedImage(lock) {
     throw new Error('The published desktop image must be a digest-pinned GHCR reference.')
   }
   return lock.publishedImage
+}
+export function checkPublishedImage(lock, image) {
+  if (lock.publishedImageId && image !== lock.publishedImageId) throw new Error('The downloaded image does not match the tested published image ID.')
 }
 export async function validateLock() {
   const lock = JSON.parse(await readFile(join(root, 'runtime.lock.json'), 'utf8'))
@@ -39,6 +53,12 @@ export async function validateLock() {
     || !recipe.includes(`cua-driver ${lock.driver.version}`)
     || !requirements.includes(lock.driver.sha256) || !requirements.includes(`cua-driver==${lock.driver.version}`)) {
     throw new Error('Runtime recipe does not match runtime.lock.json.')
+  }
+  if (lock.publishedImageId !== undefined || lock.publishedImageRecipe !== undefined) {
+    if (!lock.publishedImage || !/^sha256:[a-f0-9]{64}$/.test(lock.publishedImageId ?? '')
+      || lock.publishedImageRecipe !== await imageRecipe(root, lock)) {
+      throw new Error('Published image evidence does not match this runtime recipe.')
+    }
   }
   return lock
 }

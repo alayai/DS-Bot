@@ -171,6 +171,34 @@ test('service recovery confirms its global effect and polling never repeats the 
   view.unmount()
 })
 
+test('the native multi-file picker works before takeover and selection alone sends no files', async () => {
+  const view = viewer()
+  view.render()
+  await tick()
+  const picker = find(view.render(), node => node.type === 'input' && node.props.type === 'file')
+  assert.equal(picker.props.multiple, true)
+  assert.equal(Boolean(view.button('Choose files').props.disabled), false)
+  let opened = 0
+  picker.props.ref.current = { click: () => { opened++ } }
+  view.button('Choose files').props.onClick()
+  assert.equal(opened, 1)
+  const target = { files: [{ name: 'first.txt', size: 1 }, { name: 'second.txt', size: 209715200 }], value: 'selected' }
+  picker.props.onChange({ target })
+  assert.equal(target.value, '')
+  assert.ok(find(view.render(), node => node.props['aria-label'] === 'Upload queue'))
+  assert.equal(view.button('Upload selected files').props.disabled, true)
+  assert.equal(view.calls.some(call => call.method === 'files'), false)
+  await view.own()
+  assert.equal(Boolean(view.button('Upload selected files').props.disabled), false)
+  picker.props.onChange({ target: { files: [], value: '' } })
+  assert.equal(Boolean(view.button('Upload selected files').props.disabled), false, 'cancelling the picker keeps the existing selection')
+  picker.props.onChange({ target: { files: [{ name: 'oversized.bin', size: 209715201 }], value: '' } })
+  assert.equal(view.button('Upload selected files').props.disabled, true)
+  assert.ok(find(view.render(), node => node.props.children.includes('oversized.bin: Files must be at most 200 MiB.')))
+  assert.equal(view.calls.some(call => call.method === 'files'), false)
+  view.unmount()
+})
+
 test('file deletion consumes explicit confirmation, binds its identity and never retries a lost reply', async () => {
   const view = viewer()
   await view.own()

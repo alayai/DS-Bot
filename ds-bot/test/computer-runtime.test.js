@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bundleRuntime, verifyBundle, checkRuntime, inventoryImage, publishedImage, runtimeText } from '../../computer-runtime/runtime.mjs'
+import { pathToFileURL } from 'node:url'
+import { bundleRuntime, verifyBundle, checkRuntime, inventoryImage, publishedImage, runtimeText, imageRecipe } from '../../computer-runtime/runtime.mjs'
 import { verifyComputerRuntime } from '../src/host/computer/runtime-bundle.js'
 
 test('standalone runtime bundle verifies its inventory and refuses overwrites or modified payloads', async t => {
@@ -91,4 +92,29 @@ test('runtime payload text and recipe keys are independent of Windows checkout l
   const windows = Buffer.from('FROM pinned@sha256:fixture\r\nUSER 1000:1000\r\n')
   assert.deepEqual(runtimeText(windows), linux)
   assert.deepEqual(runtimeText(linux), linux)
+})
+
+test('published lock evidence rejects stale recipes and incomplete image identity', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'cua-published-lock-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const output = join(dir, 'runtime')
+  await bundleRuntime(output)
+  const runtime = await import(pathToFileURL(join(output, 'runtime.mjs')).href)
+  const lockPath = join(output, 'runtime.lock.json')
+  const lock = JSON.parse(await readFile(lockPath, 'utf8'))
+  lock.publishedImage = `ghcr.io/example/image@sha256:${'a'.repeat(64)}`
+  lock.publishedImageId = `sha256:${'b'.repeat(64)}`
+  lock.publishedImageRecipe = await imageRecipe(output, lock)
+  await writeFile(lockPath, JSON.stringify(lock))
+  assert.equal((await runtime.validateLock()).publishedImageId, lock.publishedImageId)
+  const launch = join(output, 'desktop/launch.py')
+  const original = await readFile(launch, 'utf8')
+  await writeFile(launch, original.replace(/\r?\n/g, '\r\n'))
+  assert.equal((await runtime.validateLock()).publishedImageRecipe, lock.publishedImageRecipe)
+  await writeFile(launch, `${original}\n# changed\n`)
+  await assert.rejects(runtime.validateLock(), /Published image evidence/)
+  await writeFile(launch, original)
+  delete lock.publishedImageId
+  await writeFile(lockPath, JSON.stringify(lock))
+  await assert.rejects(runtime.validateLock(), /Published image evidence/)
 })

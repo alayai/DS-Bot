@@ -476,8 +476,26 @@ Run `verify` before deploying it, then configure the absolute
 it still requires Linux Node, Docker and the separately built image. The manifest
 detects changed files; it is neither a signature nor a complete guest OS SBOM.
 Electron builds include this payload as `resources/computer-runtime`; see the
-app README for `broker.bundled` configuration. Signed installer acceptance and
-automatic image downloads/upgrades remain pending.
+app README for `broker.bundled` configuration. Signed installer acceptance,
+prebuilt image publication and automatic image upgrades remain pending.
+
+### Prebuilt image release candidates
+
+First-time plugin setup can pull an optional digest-pinned `publishedImage` from
+the shipped lock. The current source lock has no published image and still builds
+locally. A promoted release also records `publishedImageId` and
+`publishedImageRecipe`: setup refuses a downloaded ID that differs from the tested
+image, and lock validation rejects stale recipe evidence. Existing desktops retain
+their original image; plugin installation does not migrate their homes.
+
+The image workflow now requires an independent anonymous pull on a fresh runner
+before issuing a promotable candidate. Evidence binds the source commit, recipe,
+registry digest, smoke results and package inventory. The repository's
+`ds-bot/scripts/computer-image-release.mjs` supports read-only `verify` and explicit
+`promote`; promotion changes only the source lock. See
+`docs/dev/cua-image-release.md` in the source repository for the release procedure.
+Evidence checksums are not signatures; use artifacts from a trusted workflow run.
+Actual publication and first-download acceptance remain separate release steps.
 
 ## Storage recovery and cleanup
 

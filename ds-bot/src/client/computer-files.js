@@ -1,5 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js'
-import { uploadFile, downloadFile, FILE_LIMIT, CHUNK_SIZE } from '../shared/computer-files.js'
+import { uploadFile, downloadFile, checkTransfer, FILE_LIMIT, CHUNK_SIZE } from '../shared/computer-files.js'
 
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 async function readChunk(file, start, end, check) {
@@ -32,6 +32,38 @@ export async function importDesktopFile(call, file, options) {
       return btoa(binary)
     },
   })
+}
+export function validateDesktopFiles(files) {
+  const names = new Set()
+  for (const file of files) {
+    try {
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT) throw new Error('Files must be at most 200 MiB.')
+      checkTransfer({ operation: 'begin-read', name: file.name })
+      if (names.has(file.name)) throw new Error('Choose files with different names.')
+      names.add(file.name)
+    } catch (error) {
+      error.fileName = file.name
+      throw error
+    }
+  }
+}
+export async function importDesktopFiles(call, files, options) {
+  // Check the whole selection before reading or publishing any of its files.
+  validateDesktopFiles(files)
+  for (let index = 0; index < files.length; index++) {
+    try {
+      options.check()
+      options.current?.(files[index], index, files.length)
+      options.status?.(index, 'Uploading')
+      await importDesktopFile(call, files[index], options)
+      options.check()
+      options.status?.(index, 'Uploaded')
+    } catch (error) {
+      options.status?.(index, 'Check destination', error.message)
+      for (let remaining = index + 1; remaining < files.length; remaining++) options.status?.(remaining, 'Not uploaded')
+      throw error
+    }
+  }
 }
 export async function exportDesktopFile(call, name, options) {
   const chunks = []

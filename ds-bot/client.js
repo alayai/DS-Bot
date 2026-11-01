@@ -17696,6 +17696,18 @@ var ZH = {
   "Type text": "输入文字",
   "Transfer files": "传输文件",
   "Import file": "导入文件",
+  "Choose files": "选择文件",
+  "Upload selected files": "上传所选文件",
+  "Upload queue": "上传队列",
+  "Waiting to upload": "等待上传",
+  "Uploading": "正在上传",
+  "Uploaded": "已上传",
+  "Check destination": "已停止，请检查目标文件",
+  "Not uploaded": "未上传",
+  "Choose files with different names.": "请选择名称不同的文件。",
+  "Take control to upload the selected files.": "请先接管桌面，再上传所选文件。",
+  "Selected files uploaded. Existing files are never overwritten.": "所选文件已上传，不会覆盖已有文件。",
+  "Choose files from this computer. Each file can be up to 200 MiB. Files are uploaded one at a time to /home/cua/DSBot; folders and overwrites are not supported.": "从本机选择文件，支持多选。单个文件最大 200 MiB，依次上传到桌面的 /home/cua/DSBot 目录；不支持文件夹或覆盖已有文件。",
   "List files": "列出文件",
   "Listed files": "列表文件",
   "Delete file": "删除文件",
@@ -36418,6 +36430,37 @@ async function importDesktopFile(call2, file, options) {
     }
   });
 }
+function validateDesktopFiles(files) {
+  const names = /* @__PURE__ */ new Set();
+  for (const file of files) {
+    try {
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT) throw new Error("Files must be at most 200 MiB.");
+      checkTransfer({ operation: "begin-read", name: file.name });
+      if (names.has(file.name)) throw new Error("Choose files with different names.");
+      names.add(file.name);
+    } catch (error) {
+      error.fileName = file.name;
+      throw error;
+    }
+  }
+}
+async function importDesktopFiles(call2, files, options) {
+  validateDesktopFiles(files);
+  for (let index = 0; index < files.length; index++) {
+    try {
+      options.check();
+      options.current?.(files[index], index, files.length);
+      options.status?.(index, "Uploading");
+      await importDesktopFile(call2, files[index], options);
+      options.check();
+      options.status?.(index, "Uploaded");
+    } catch (error) {
+      options.status?.(index, "Check destination", error.message);
+      for (let remaining = index + 1; remaining < files.length; remaining++) options.status?.(remaining, "Not uploaded");
+      throw error;
+    }
+  }
+}
 async function exportDesktopFile(call2, name, options) {
   const chunks = [];
   const hash = sha256.create();
@@ -37114,6 +37157,9 @@ function ComputerView({ bot, actions, leaving }) {
   const [fileDeletion, setFileDeletion] = (0, import_react49.useState)(null);
   const [transfer, setTransfer] = (0, import_react49.useState)(null);
   const transferring = (0, import_react49.useRef)(null);
+  const filePicker = (0, import_react49.useRef)(null);
+  const selectedFiles = (0, import_react49.useRef)(null);
+  const [uploads, setUploads] = (0, import_react49.useState)([]);
   const [streamFailed, setStreamFailed] = (0, import_react49.useState)(false);
   const [streamProblem, setStreamProblem] = (0, import_react49.useState)(null);
   const [tick, setTick] = (0, import_react49.useState)(0);
@@ -37235,6 +37281,10 @@ function ComputerView({ bot, actions, leaving }) {
       if (transferring.current) transferring.current.cancelled = true;
     };
   }, [bot.id, leaving]);
+  (0, import_react49.useEffect)(() => {
+    selectedFiles.current = null;
+    setUploads([]);
+  }, [bot.id]);
   const manage = (method) => run2(async () => {
     const result = await call2(method);
     session.current.token = result.controlToken ?? null;
@@ -37312,7 +37362,7 @@ function ComputerView({ bot, actions, leaving }) {
     };
     const progress = (bytes, total) => {
       check();
-      setTransfer({ bytes, total, phase: bytes === total ? "Verifying file…" : "Transferring file…" });
+      setTransfer((value) => ({ ...value, bytes, total, phase: bytes === total ? "Verifying file…" : "Transferring file…" }));
     };
     try {
       await work(request, { check, progress });
@@ -37322,14 +37372,38 @@ function ComputerView({ bot, actions, leaving }) {
       if (session.current.mounted) setTransfer(null);
     }
   });
-  const upload = (event) => {
-    const file = event.target.files?.[0];
+  const chooseFiles = (event) => {
+    const files2 = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!file) return;
+    if (!files2.length || busy || leaving) return;
+    try {
+      validateDesktopFiles(files2);
+    } catch (reason) {
+      selectedFiles.current = null;
+      setUploads([]);
+      setError(`${reason.fileName}: ${t(reason.message)}`);
+      return;
+    }
+    selectedFiles.current = files2;
+    setUploads(files2.map((file) => ({ name: file.name, bytes: file.size, status: "Waiting to upload" })));
+    setError("");
+    setNotice("");
+  };
+  const upload = () => {
+    const files2 = selectedFiles.current;
+    if (!files2?.length || !owned || !ready) return;
     void transferFile(async (request, options) => {
-      await importDesktopFile(request, file, options);
+      if (selectedFiles.current !== files2) return;
+      selectedFiles.current = null;
+      await importDesktopFiles(request, files2, {
+        ...options,
+        current: (file, index, count) => setTransfer({ name: file.name, index: index + 1, count, bytes: 0, total: file.size, phase: "Preparing file…" }),
+        status: (index, status, problem) => {
+          if (session.current.mounted) setUploads((rows2) => rows2.map((row, offset) => offset === index ? { ...row, status, problem } : row));
+        }
+      });
       await loadFiles();
-      setNotice(t("File imported. Existing files are never overwritten."));
+      setNotice(t("Selected files uploaded. Existing files are never overwritten."));
     });
   };
   const download2 = (name) => transferFile(async (request, options) => {
@@ -37593,11 +37667,17 @@ function ComputerView({ bot, actions, leaving }) {
       ) : null
     ) : null,
     (0, import_react49.createElement)("strong", null, t("Transfer files")),
-    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Use /home/cua/DSBot inside the desktop. Files up to 200 MiB; folders and overwrites are not supported.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Choose files from this computer. Each file can be up to 200 MiB. Files are uploaded one at a time to /home/cua/DSBot; folders and overwrites are not supported.")),
     transfer ? (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
-      (0, import_react49.createElement)("span", { role: "status", "aria-live": "polite" }, t(transfer.phase), ` ${transfer.bytes} / ${transfer.total} B`),
+      (0, import_react49.createElement)(
+        "span",
+        { role: "status", "aria-live": "polite" },
+        transfer.name ? `${transfer.index} / ${transfer.count} · ${transfer.name} · ` : "",
+        t(transfer.phase),
+        ` ${transfer.bytes} / ${transfer.total} B`
+      ),
       (0, import_react49.createElement)("progress", { value: transfer.bytes, max: transfer.total || 1, "aria-label": t("File transfer progress") }),
       (0, import_react49.createElement)("button", {
         type: "button",
@@ -37612,9 +37692,32 @@ function ComputerView({ bot, actions, leaving }) {
     (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
-      (0, import_react49.createElement)("label", null, t("Import file"), (0, import_react49.createElement)("input", { type: "file", "aria-label": t("Import file"), disabled: busy || !owned || !ready, onChange: upload })),
+      (0, import_react49.createElement)("input", {
+        ref: filePicker,
+        type: "file",
+        multiple: true,
+        hidden: true,
+        "aria-label": t("Choose files"),
+        disabled: busy || leaving,
+        onChange: chooseFiles
+      }),
+      (0, import_react49.createElement)("button", {
+        type: "button",
+        className: "bt-soft bt-soft-sm",
+        disabled: busy || leaving,
+        onClick: () => filePicker.current?.click()
+      }, t("Choose files")),
+      button("Upload selected files", upload, !selectedFiles.current?.length || !owned || !ready),
       button("List files", () => run2(loadFiles), !owned || !ready)
     ),
+    uploads.length && !owned ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Take control to upload the selected files.")) : null,
+    uploads.length ? (0, import_react49.createElement)("ul", { className: "bt-computer-uploads", "aria-label": t("Upload queue") }, uploads.map((file, index) => (0, import_react49.createElement)(
+      "li",
+      { key: `${index}:${file.name}` },
+      (0, import_react49.createElement)("span", { className: "bt-computer-name" }, file.name),
+      ` · ${(file.bytes / 1048576).toFixed(1)} MiB · ${t(file.status)}`,
+      file.problem ? (0, import_react49.createElement)("div", { className: "bt-error" }, t(file.problem)) : null
+    ))) : null,
     fileStorage ? (0, import_react49.createElement)(
       "p",
       { className: "bt-muted", role: "status" },
@@ -37651,7 +37754,8 @@ var COMPUTER_CSS = `
 .bt-computer-head{justify-content:space-between}
 .bt-computer select,.bt-computer input:not([type=file]){min-height:32px;min-width:0;max-width:100%;border:1px solid var(--bt-line);border-radius:8px;padding:6px 8px;background:var(--bt-card);color:var(--bt-ink);font:inherit}
 .bt-computer input:not([type=file]){flex:1}
-.bt-computer input[type=file]{display:block;max-width:240px;font:inherit;margin-top:4px}
+.bt-computer input[type=file][hidden]{display:none}
+.bt-computer-uploads{margin:4px 0;padding-left:20px;max-height:180px;overflow:auto;overflow-wrap:anywhere}
 .bt-computer-screen{position:relative;flex:none;border:1px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card);min-height:120px;aspect-ratio:16 / 10;display:flex;align-items:center;justify-content:center}
 .bt-computer-screen[data-control] canvas{cursor:crosshair}
 .bt-computer-display{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}

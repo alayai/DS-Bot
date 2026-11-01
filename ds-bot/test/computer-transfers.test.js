@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { createHash } from 'node:crypto'
 import { createTransfers, FILE_LIMIT, CHUNK_SIZE } from '../../computer-runtime/broker/transfers.mjs'
 import { uploadFile, downloadFile, checkTransfer, FILE_LIMIT as CLIENT_FILE_LIMIT } from '../src/shared/computer-files.js'
-import { importDesktopFile, exportDesktopFile } from '../src/client/computer-files.js'
+import { importDesktopFile, importDesktopFiles, validateDesktopFiles, exportDesktopFile } from '../src/client/computer-files.js'
 import { checkActions } from '../src/host/computer/contract.js'
 import { driverInput } from '../../computer-runtime/broker/input.mjs'
 
@@ -189,4 +189,60 @@ test('an export snapshot gets a full idle lease after slow preparation', async (
   const chunk = await broker.call({ operation: 'read-chunk', transferId: transfer.transferId, offset: 0 })
   assert.equal(chunk.offset, 1)
   await broker.clear()
+})
+
+test('multi-file selection limits each file, admits larger batch totals and rejects the whole invalid batch before reading', async () => {
+  validateDesktopFiles([{ name: 'first.bin', size: FILE_LIMIT }, { name: 'second.bin', size: FILE_LIMIT }])
+  const oversized = { name: 'too-large.bin', size: FILE_LIMIT + 1, slice() { assert.fail('Must not read an oversized selection') } }
+  await assert.rejects(importDesktopFiles(() => assert.fail('Must not contact the guest'), [
+    new File(['valid'], 'valid.txt'), oversized,
+  ], { check() {} }), error => error.fileName === 'too-large.bin' && /200 MiB/.test(error.message))
+  assert.throws(() => validateDesktopFiles([{ name: 'same.txt', size: 0 }, { name: 'same.txt', size: 1 }]), /different names/)
+  assert.throws(() => validateDesktopFiles([{ name: '../outside', size: 1 }]), /plain file name/)
+})
+
+test('multiple files publish serially, including Unicode names and empty files', async () => {
+  const h = fixture(), statuses = [], completed = [], current = []
+  await importDesktopFiles(args => h.broker.call(args), [new File(['first'], '中文.txt'), new File([], 'empty.txt')], {
+    check() {},
+    current: (file, index, count) => current.push([file.name, index, count]),
+    status: (index, status) => {
+      statuses.push([index, status])
+      if (status === 'Uploaded') completed.push(Buffer.from(h.published))
+    },
+  })
+  assert.deepEqual(current, [['中文.txt', 0, 2], ['empty.txt', 1, 2]])
+  assert.deepEqual(statuses, [[0, 'Uploading'], [0, 'Uploaded'], [1, 'Uploading'], [1, 'Uploaded']])
+  assert.deepEqual(completed, [Buffer.from('first'), Buffer.alloc(0)])
+  assert.deepEqual(h.calls.filter(call => ['begin-write', 'commit'].includes(call.operation)).map(call => call.operation),
+    ['begin-write', 'commit', 'begin-write', 'commit'])
+})
+
+test('cancelling a batch keeps completed files and never starts the remaining transfers', async () => {
+  const h = fixture(), statuses = []
+  let cancelled = false
+  await assert.rejects(importDesktopFiles(args => h.broker.call(args), [
+    new File(['keep'], 'first.txt'), new File(['skip'], 'second.txt'), new File([], 'third.txt'),
+  ], {
+    check() { if (cancelled) throw new Error('cancelled') },
+    status(index, status) { statuses.push([index, status]); if (status === 'Uploaded') cancelled = true },
+  }), /cancelled/)
+  assert.equal(h.calls.filter(call => call.operation === 'begin-write').length, 1)
+  assert.deepEqual(h.published, Buffer.from('keep'))
+  assert.deepEqual(statuses.slice(-2), [[1, 'Check destination'], [2, 'Not uploaded']])
+})
+
+test('a lost batch commit reply stops the queue without replay or false completion', async () => {
+  const h = fixture(), statuses = []
+  await assert.rejects(importDesktopFiles(async args => {
+    const result = await h.broker.call(args)
+    if (args.operation === 'commit') throw new Error('lost reply')
+    return result
+  }, [new File(['published'], 'first.txt'), new File(['skip'], 'second.txt')], {
+    check() {}, status: (index, status) => statuses.push([index, status]),
+  }), /lost reply/)
+  assert.deepEqual(h.published, Buffer.from('published'))
+  assert.equal(h.calls.filter(call => call.operation === 'begin-write').length, 1)
+  assert.equal(h.calls.filter(call => call.operation === 'commit').length, 1)
+  assert.deepEqual(statuses, [[0, 'Uploading'], [0, 'Check destination'], [1, 'Not uploaded']])
 })
