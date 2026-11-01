@@ -1029,3 +1029,57 @@ published image lock, current host modules and exact generated client bytes.
 Only the staged package version is 0.2.5-cua.13; source remains 0.2.4.
 Final logs: `/tmp/cua13-final-{build,tests,lint}.log`,
 `/tmp/cua13-windows-final.log` and `/tmp/cua13-package.log`.
+
+## Large checkpoints and image updates — 2026-11-01, cua.14
+
+The two selected high-priority features are implemented. Checkpoints default to
+20 GiB (configurable 1–1024 GiB), stream copy/hash work, report background progress
+and support cancellation. The registry accepts the same capacity range; single
+file uploads remain 200 MiB. Interrupted publication preserves its recovery intent.
+
+Image checks accept compatible evidence commits in the repository pinned by the
+shipped release lock. Verified downloads register immutable pins without changing
+running desktops. Pins survive setup and Broker restart. Upgrade confirmation
+captures the exact generation/image and retains the previous image/home pair.
+The public GitHub asset API is a checksum-equivalent fallback for blocked release
+pages. Explicit profiles continue to manage their runtime images manually.
+
+Validation evidence:
+
+- Real React/Host/Broker/guest smoke: 256 MiB backup survived panel reload; restore
+  matched SHA-256 and reverted a changed marker while retaining the previous home.
+- Real local archive fixture: Docker export, compression, manifest/part checks,
+  engine load, compatibility checks and registration completed while the original
+  desktop remained running. Confirmed upgrade, explicit start and rollback all
+  preserved the 256 MiB file; no uncaught browser exceptions.
+- Public evidence discovery returned source `c4ac3e9d2b713c7ca492b6258ef1ecd8f5fbb4cf`
+  and evidence `47f8ef37b7d87a043041015989c4a7062c093a6e`. The public manifest was
+  retrieved through the official asset API. The full public archive download was
+  cancelled after slow partial transfer and its temporary file was removed; this
+  run does **not** claim full live public download acceptance. The prior clean CI
+  publication/anonymous verification remains recorded in cua.13.
+- File panel regression: native multi-selection, Unicode/empty files, byte/hash
+  roundtrip, cancellation, overwrite refusal, changed-file deletion fencing and
+  confirmed deletion passed.
+- Isolated DSH mock smoke: 52/52 steps passed, own processes/data cleaned.
+- Python filesystem suite: 16 passed, including >200 MiB roundtrip, manifest bounds,
+  content/identity corruption, low disk, symlink and transfer boundaries.
+- App runtime packaging/verification suite: 5 passed; closed inventory now has 24
+  files, including the streamed checkpoint subprocess reader.
+
+Windows GUI and system installation were not exercised. The 20 GiB default and
+1 TiB configurable maximum are policy bounds, not claims of endurance tests at
+those capacities. Prepared images retain four upgrade slots; pruning remains
+manual and must preserve images referenced by retained homes.
+
+Logs: `/tmp/cua14-final-check.log`, `/tmp/cua14-storage-fixture.log`,
+`/tmp/cua14-files-smoke.log`, `/tmp/cua14-mock-smoke.log`,
+`/tmp/cua14-python.log`, `/tmp/cua14-app-test.log`.
+
+Final unit suite: **1510 passed, 2 skipped, 0 failed**. Build, generated client and
+runtime checks, lint and scoped diff checks passed (existing lint warnings remain).
+Preview: `artifacts/ds-bot-0.2.5-cua.14.tgz`, 1,102,475 bytes.
+SHA-256: `240af44566a5f28409009d1f2143d85396ae5414e69758c3b02cea8163e5a196`.
+Independent extraction verified all 24 runtime files, the installed setup loader,
+new update/storage modules and exact client bytes. Only the staged package version
+is 0.2.5-cua.14; source remains 0.2.4. Packaging log: `/tmp/cua14-package.log`.

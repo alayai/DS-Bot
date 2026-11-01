@@ -4,7 +4,7 @@ import { refused } from './contract.js'
 export const STORAGE_METHODS = ['checkpoint', 'restore', 'upgrade', 'recreate', 'rollback', 'delete-checkpoint', 'delete-home', 'prune-journal', 'recover']
 const revision = record => record.homeRevision ?? null
 
-export function createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime }) {
+export function createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits }) {
   function advance(draft, id) {
     const record = draft.computers[id]
     record.generation++
@@ -49,16 +49,18 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
     // Unpublished restore/recreate/rollback leaves the previous home authoritative.
     await finish(record, draft => { deleted(draft, record, operation); advance(draft, record.id) })
   }
-  async function save(record) {
+  async function save(record, task) {
     const id = randomUUID()
     await begin(record, 'checkpoint', { checkpointId: id })
-    const result = await exclusive(record, undefined, signal => provider.checkpoint(record, { checkpointId: id, signal }))
+    const result = await exclusive(record, task.signal, signal => provider.checkpoint(record, { checkpointId: id, signal, maxBytes: limits().checkpointMaxBytes, onProgress: task.onProgress }))
+    task.signal?.throwIfAborted()
     const checkpoint = { id, computerId: record.id, at: clock(), ...result, ...(record.runtimeImage ? { image: record.runtimeImage } : {}) }
     await finish(record, draft => { draft.checkpoints ??= {}; draft.checkpoints[id] = checkpoint })
     return checkpoint
   }
-  async function run(method, args) {
+  async function run(method, args, task = {}) {
     await ready()
+    task.signal?.throwIfAborted()
     if (!STORAGE_METHODS.includes(method)) throw refused('invalid', 'Unknown storage operation.')
     return administration(args.botId, async () => {
       const record = await assigned(args.botId)
@@ -71,6 +73,7 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
           controls.set(record.id, 'none')
           return state()
         }
+        task.signal?.throwIfAborted()
         const snapshot = await store.load()
         if (snapshot.lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before making another change.')
         if ((await provider.inspect(record)).phase !== 'stopped') throw refused('not-stopped', 'Stop the desktop before changing its storage.')
@@ -94,15 +97,16 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
           })
         } else if (['delete-checkpoint', 'delete-home'].includes(method)) {
           const operation = await begin(record, method, method === 'delete-checkpoint' ? { checkpointId: checkpoint.id } : { homeRevision: args.homeRevision })
-          await exclusive(record, undefined, signal => remove(record, operation, signal))
+          await exclusive(record, task.signal, signal => remove(record, operation, signal))
           await finish(record, draft => deleted(draft, record, operation))
         } else {
-          if (['checkpoint', 'recreate', 'upgrade'].includes(method)) checkpoint = await save(record)
+          if (['checkpoint', 'recreate', 'upgrade'].includes(method)) checkpoint = await save(record, task)
           if (method !== 'checkpoint') {
             const homeRevision = ['restore', 'upgrade'].includes(method) ? randomUUID() : method === 'rollback' ? args.homeRevision : revision(record)
             const targetImage = method === 'upgrade' ? args.targetImage : method === 'rollback' ? record.previousImages?.[homeRevision ?? 'original'] ?? record.runtimeImage : record.runtimeImage
             const operation = await begin(record, method, { homeRevision, ...(targetImage ? { targetImage } : {}), ...(checkpoint ? { checkpointId: checkpoint.id } : {}) })
-            await exclusive(record, undefined, signal => provider[method](record, { ...operation, ...(checkpoint ? { hash: checkpoint.hash } : {}), signal }))
+            await exclusive(record, task.signal, signal => provider[method](record, { ...operation, ...(checkpoint ? { hash: checkpoint.hash } : {}), signal, maxBytes: limits().checkpointMaxBytes, onProgress: task.onProgress }))
+            task.signal?.throwIfAborted()
             await finish(record, draft => {
               const current = draft.computers[record.id]
               if (['restore', 'upgrade'].includes(method)) current.previousHomes = [...(record.previousHomes ?? []), revision(record)]

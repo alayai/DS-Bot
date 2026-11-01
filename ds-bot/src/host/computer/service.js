@@ -6,6 +6,7 @@ import { checkActions, checkFrame, checkId, checkProvider, refused } from './con
 import { createComputerStore } from './store.js'
 import { createLeases } from './leases.js'
 import { contextFile, fileBytes, fileName } from './artifacts.js'
+import { createStorageJobs } from './storage-jobs.js'
 import { createComputerStorage } from './lifecycle.js'
 import { createComputerHandoffs } from './handoffs.js'
 
@@ -51,7 +52,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (rt.readOnly() !== undefined) throw refused('read-only', 'This host does not own the Bot team.')
   }
   const store = createComputerStore(join(rt.home, 'computers', 'registry.json'), { writable })
-  const limits = () => store.snapshot()?.limits ?? defaults
+  const limits = () => ({ ...defaults, ...store.snapshot()?.limits })
   async function ready(allowRecovery = false) {
     await rt.load()
     writable()
@@ -213,8 +214,14 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     store, ready, owner, assigned, available, barrier, administration, human, controls, stillOwns,
     hasHuman: id => humans.has(id), claim: (record, who) => leases.acquire(record, who),
   })
-  const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime })
+  const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits })
   const storage = storageManager.run
+  const storageJobs = createStorageJobs({ ready, assigned, run: storage, now: clock })
+  async function registerImage(image) {
+    await ready()
+    if (!provider.registerImage) throw refused('unavailable', 'This desktop service cannot register images. Restart with the updated plugin.')
+    return administration('image-registration', () => provider.registerImage(image))
+  }
   async function state() {
     await ready(true)
     const stored = await store.load()
@@ -229,6 +236,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         id: record.id, botId: record.botId, generation: record.generation, grant: record.grant,
         archived: record.archived, executionPolicy: record.executionPolicy, approvalMode: record.approvalMode ?? 'required',
         runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {}, homeQuotaBytes: record.homeQuotaBytes ?? 0,
+        storageJob: storageJobs.view(record.botId),
         previousHomes: record.previousHomes ?? [], recoveryPending: Boolean(stored.lifecycle?.[record.id]),
         provider: provider.kind, phase, control: controls.get(record.id) ?? 'none',
         humanExpired: controls.get(record.id) === 'human' && (!humans.has(record.id) || humans.get(record.id).expires <= clock()),
@@ -947,6 +955,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     recoveryAbort?.abort()
     for (const operation of active.values()) operation.controller.abort()
     try {
+      await storageJobs.dispose()
       await recoveryTask
       await sampling?.catch(() => {})
       if (initializing) {
@@ -959,5 +968,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, storageStart: storageJobs.start, storageCancel: storageJobs.cancel, registerImage, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }

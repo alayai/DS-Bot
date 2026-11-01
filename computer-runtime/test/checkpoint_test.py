@@ -11,6 +11,34 @@ spec.loader.exec_module(module)
 
 
 class Checkpoints(unittest.TestCase):
+    def test_large_roundtrip_progress_and_configured_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, backup, restored = root / 'source', root / 'backup', root / 'restored'
+            source.mkdir()
+            restored.mkdir()
+            size = 201 * 1024 * 1024
+            with open(source / 'large.bin', 'wb') as output:
+                for _ in range(201):
+                    output.write(b'\xa5' * 1024 * 1024)
+            events = []
+            summary = module.checkpoint('create', source, backup, {}, progress=module.Progress(events.append))
+            self.assertEqual(summary['bytes'], size)
+            module.checkpoint('restore', backup, restored, {'hash': summary['hash']})
+            self.assertEqual(module.digest(source / 'large.bin'), module.digest(restored / 'large.bin'))
+            self.assertTrue(any(item['progress']['stage'] == 'copying' for item in events))
+            with self.assertRaisesRegex(ValueError, 'configured byte limit'):
+                module.checkpoint('restore', backup, restored, {'hash': summary['hash']}, limit=size - 1)
+            self.assertEqual((restored / 'large.bin').stat().st_size, size)
+
+    def test_manifest_is_bounded_before_read_and_restore(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'manifest.json').write_bytes(b'0' * 20)
+            with patch.object(module, 'MANIFEST_LIMIT', 10):
+                with self.assertRaisesRegex(ValueError, 'manifest is too large'):
+                    module.checkpoint('restore', root, root / 'unused', {'hash': 'unused'})
+
     def test_roundtrip_and_corruption_preserve_destination(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

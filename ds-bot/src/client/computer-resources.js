@@ -9,6 +9,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
     revision: state.revision, maxRunning: state.limits.maxRunning,
     idleMinutes: state.limits.idleStopMs / 60_000,
     freeGiB: state.limits.freeWarningBytes / GIB, homeGiB: state.limits.homeWarningBytes / GIB,
+    checkpointGiB: (state.limits.checkpointMaxBytes ?? 20 * GIB) / GIB,
     quotaGiB: (state.limits.newHomeQuotaBytes ?? 0) / GIB,
   }
   const input = (label, name, min, max, step = 1) => h('label', { className: 'bt-computer-row' }, t(label),
@@ -23,6 +24,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
     input('Maximum running desktops', 'maxRunning', 1, 8),
     input('Idle stop after minutes (0 disables)', 'idleMinutes', 0, 10080),
     input('Warn below free space (GiB)', 'freeGiB', 0.25, 1024, 0.25),
+    input('Checkpoint size limit (GiB)', 'checkpointGiB', 1, 1024),
     input('Warn above home size (GiB)', 'homeGiB', 0.25, 1024, 0.25),
     state.quotaBackend === 'podman-xfs' ? input('Hard quota for new homes (GiB, 0 disables)', 'quotaGiB', 0, 1024) : null,
     h('p', { className: 'bt-muted' }, t(state.quotaBackend === 'podman-xfs'
@@ -34,6 +36,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
         onClick: () => save({ expectedRevision: values.revision, limits: {
           maxRunning: Number(values.maxRunning), idleStopMs: Number(values.idleMinutes) * 60_000,
           freeWarningBytes: Number(values.freeGiB) * GIB, homeWarningBytes: Number(values.homeGiB) * GIB,
+          checkpointMaxBytes: Number(values.checkpointGiB) * GIB,
           newHomeQuotaBytes: Number(values.quotaGiB) * GIB,
         } }, () => setDraft(null)) }, t('Save resource settings')),
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || !draft,

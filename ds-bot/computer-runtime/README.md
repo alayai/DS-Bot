@@ -154,6 +154,11 @@ Docker endpoint, host mounts or shell arguments.
 | `computer-preview` | `{botId, expectedGeneration, controlToken?}` | Bounded PNG, dimensions and one-use human frame ID |
 | `computer-input` | `{botId, expectedGeneration, controlToken, frameId, requestId, actions}` | One human action, with a non-replayable receipt |
 | `computer-handoff-answer` | `{botId, requestId, outcome: "done" \| "skip", controlToken?}` | Claim an answer and resume the current part of the original own/group chat |
+| `computer-storage-start` | `{botId, expectedGeneration, method, checkpointId?, targetImage?}` | Start a background storage task; progress and result appear in `computer-state` |
+| `computer-storage-cancel` | `{botId, jobId}` | Cancel only the matching storage task; interrupted writes retain recovery intent |
+| `computer-image-state` / `computer-image-check` | `{}` | Read status / check approved compatible releases |
+| `computer-image-download` | `{candidateId}` | Download, verify and register the checked image without upgrading a desktop |
+| `computer-image-cancel` | `{jobId}` | Cancel only the matching image check/download |
 | `computer-checkpoint` | `{botId, expectedGeneration}` | Save a verified checkpoint of a stopped home |
 | `computer-restore` | `{botId, expectedGeneration, checkpointId}` | Stage and verify a new home, then change generation; retains the old home |
 | `computer-rollback` | `{botId, expectedGeneration, homeRevision}` | Switch to a retained home; `null` selects the original home; changes generation |
@@ -275,7 +280,12 @@ The offline non-root helper verifies every regular file and preserves symlinks
 without following them. Socket/device/FIFO entries are skipped and counted.
 Hard links become independent files; ownership changes, ACLs and extended attributes
 are not preserved. This is a single-user home recovery format, not a full filesystem image.
-Each checkpoint is limited to 128 MiB of regular files and 10000 entries. Two
+Checkpoints default to 20 GiB of regular files; **Desktop resources** can set a
+1–1024 GiB limit. The limit is independent of the 200 MiB per-file upload limit.
+Each copy supports up to 100000 entries and a 64 MiB manifest. Copying and hashing
+use 1 MiB chunks, with a 30-minute deadline per helper. The panel shows background
+progress and cancellation; closing it does not stop the task. Cancellation may
+require **Finish recovery** to discard staging storage. Two
 checkpoints and two previous restored homes are retained per desktop. At those
 limits, operations refuse rather than delete data automatically. The recovery panel
 provides explicit deletion of saved copies. Full disk quotas and discovery of
@@ -290,7 +300,35 @@ leave a staging volume recorded by its durable recovery intent; restart or
 removes only the stopped container, retaining the current home. Both operations
 invalidate old input/control generations and leave the desktop stopped. Start it
 explicitly. Checkpoints stay on the same Docker daemon and are not disaster backups
-or image-upgrade migration. Keep backups as private as the desktop itself.
+and are not portable across unrelated images. Keep backups as private as the desktop itself.
+
+## Desktop image updates
+
+Open **Desktop image updates** and choose **Check for image updates**. The host
+checks up to 20 recent releases in the repository pinned by the shipped archive.
+Only a compatible release with an immutable evidence commit (parented by its
+source commit, changing only the runtime lock) is offered. Requests use public
+GitHub APIs without credentials. Download failures can fall back to the official
+release asset API; both routes enforce the pinned manifest and archive hashes.
+
+**Download and verify image** runs in the background and supports cancellation.
+It checks the archive and local image platform, driver, protocol and user before
+saving the immutable pin. Downloading does not stop, upgrade or change the default
+image of any existing desktop. Check again after a host restart if a download was
+interrupted; storage mutations and downloads are not automatically replayed.
+
+After verification, stop the intended desktop, select the image in **Desktop
+recovery**, choose **Upgrade desktop**, then **Confirm upgrade**. The confirmation
+is tied to that desktop generation and exact image. Upgrade saves a checkpoint,
+checks a fresh candidate desktop, copies and verifies the home, and tests the
+migrated candidate before publication. The previous home and image remain paired
+for rollback. Start explicitly after upgrading or switching back.
+
+The managed configuration retains the original image plus up to four prepared
+images across Broker/host restarts. Image pruning is manual; never remove an image
+referenced by a current or retained home. Explicit runtime profiles still manage
+their configured image list themselves; automatic downloads are available for
+plugin-managed setup.
 
 ## Boundaries and persistence
 
@@ -324,8 +362,8 @@ Registry and receipts live under `<configured bot home>/computers/registry.json`
 and use atomic writes under the existing team home lock. This file is not a
 backup of `/home/cua`. Stop/start, same-image container recreation and local
 checkpoint/restore, retained-home rollback and journaled storage recovery are
-verified. Image upgrade rollback, full disk quotas and legacy orphan discovery
-are still pending.
+supported. Image upgrades preserve the prior image/home pair for rollback;
+whole-engine disk quotas and legacy orphan discovery are still pending.
 Do not delete a retained volume without first backing up its data.
 
 ## Verification

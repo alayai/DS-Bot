@@ -104,3 +104,29 @@ test('publication packer produces a lock that the installer accepts with the cur
   await assert.rejects(archiveLock(join(directory, 'desktop-manifest.json'), '../bad', 'c'.repeat(40)))
   await assert.rejects(packImageArchive(source, directory, h.lock.publishedImageId), { code: 'EEXIST' })
 })
+
+test('blocked release pages fall back to the official asset API with unchanged hash checks', async t => {
+  for (const corrupt of [false, true]) {
+    const h = await fixture(t), urls = []
+    h.deps.fetcher = async (url, options) => {
+      urls.push(url)
+      assert.equal(options.credentials, 'omit')
+      if (url.startsWith('https://github.com/')) throw new Error('blocked release page')
+      assert.ok(url.startsWith('https://api.github.com/repos/example/repo/releases/'))
+      if (url.includes('/tags/')) {
+        assert.equal(options.redirect, 'error')
+        return Response.json({ tag_name: `cua-desktop-${'c'.repeat(40)}`, assets: [
+          { id: 1, name: 'desktop-manifest.json' }, { id: 2, name: 'desktop-image.part-000' },
+        ] })
+      }
+      assert.equal(options.headers.Accept, 'application/octet-stream')
+      return new Response(url.endsWith('/1') ? h.manifest : corrupt ? Buffer.alloc(h.bytes.length) : h.bytes)
+    }
+    if (corrupt) await assert.rejects(loadImageArchive({}, h.lock, {}, h.deps), /checksum/)
+    else assert.equal(await loadImageArchive({}, h.lock, {}, h.deps), h.lock.publishedImageId)
+    assert.equal(h.loads.length, corrupt ? 0 : 1)
+    assert.equal(urls.filter(url => url.startsWith('https://github.com/')).length, 1)
+    assert.equal(urls.filter(url => url.includes('/tags/')).length, 1)
+    assert.deepEqual(await readdir(h.root), [])
+  }
+})

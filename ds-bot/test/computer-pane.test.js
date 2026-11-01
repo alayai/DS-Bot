@@ -36,7 +36,7 @@ function viewer({ setup = false } = {}) {
   let approvalMode = 'required', generation = 1, handoffs = [], storageAvailable = false, phase = 'ready', checkpoints = [], images = [], runtimeImage
   let setupState = { enabled: false, busy: false, environment: { ready: true }, job: null }
   let fileList = [{ name: 'report.bin', bytes: 123, version: 'a'.repeat(64) }], deleteError
-  let recovery
+  let recovery, storageJob
   const slot = make => slots[index++] ??= make()
   const react = {
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
@@ -68,7 +68,8 @@ function viewer({ setup = false } = {}) {
         return setupState
       }
       if (method === 'setup-cancel') return { ...setupState, job: { ...setupState.job, phase: 'cancelling' } }
-      if (method === 'state') return { revision: generation, handoffs, storageAvailable, checkpoints, images, recovery, computers: [{ id: 'computer', botId: 'bot', generation, grant: 'operate', approvalMode, phase, control, runtimeImage }] }
+      if (method === 'state') return { revision: generation, handoffs, storageAvailable, checkpoints, images, recovery, computers: [{ id: 'computer', botId: 'bot', generation, grant: 'operate', approvalMode, phase, control, runtimeImage, storageJob }] }
+      if (method === 'storage-cancel') { storageJob = { ...storageJob, status: 'cancelling' }; return storageJob }
       if (method === 'reconnect') { recovery = { ...recovery, version: 'next', status: 'running', stage: 'checking', completed: 0, total: 2 }; return {} }
       if (method === 'bind') { approvalMode = args.approvalMode; generation++; control = 'none'; return {} }
       if (method === 'takeover') { control = 'human'; return { controlToken: 'synthetic-ticket' } }
@@ -79,7 +80,7 @@ function viewer({ setup = false } = {}) {
       }
       if (method === 'handoff-answer') { handoffs = []; control = 'none'; return { status: 'delivered' } }
       if (method === 'delete-checkpoint') { checkpoints = []; return {} }
-      if (method === 'upgrade') { runtimeImage = args.targetImage; generation++; return {} }
+      if (method === 'storage-start' && args.method === 'upgrade') { runtimeImage = args.targetImage; generation++; return {} }
       if (method === 'input') return { outcome: 'unknown' }
       if (method === 'files') {
         if (args.operation === 'list') return { files: fileList, storage: { bytes: 123, freeBytes: 1000 } }
@@ -114,6 +115,7 @@ function viewer({ setup = false } = {}) {
       recovery = value
       if (value.status === 'completed') { phase = 'stopped'; generation++; control = 'none' }
     },
+    storageJob: value => { storageJob = value },
     storage: () => { storageAvailable = true; phase = 'stopped'; checkpoints = [{ id: 'backup', computerId: 'computer', at: 0 }] },
     help: value => { handoffs = value },
     poll: () => { for (const fn of timers) fn() },
@@ -449,7 +451,11 @@ test('image upgrade selector offers only later configured images and sends the s
   select.props.onChange({ target: { value: images[2] } })
   view.button('Upgrade desktop').props.onClick()
   await tick()
-  const sent = view.calls.find(call => call.method === 'upgrade')
+  assert.equal(view.calls.some(call => call.method === 'storage-start'), false)
+  view.button('Confirm upgrade').props.onClick()
+  await tick()
+  const sent = view.calls.find(call => call.method === 'storage-start')
+  assert.equal(sent.args.method, 'upgrade')
   assert.equal(sent.args.targetImage, images[2])
   assert.equal(sent.args.expectedGeneration, 1)
   assert.equal(view.button('Upgrade desktop'), undefined)
@@ -542,4 +548,21 @@ test('Windows install requires a separate confirmation and exposes cancellation 
   await tick()
   assert.equal(view.calls.at(-1).method, 'setup-cancel')
   assert.equal(view.calls.at(-1).args.jobId, 'waiting')
+})
+
+
+test('a reopened storage task shows progress and only its cancellation remains enabled', async () => {
+  const view = viewer()
+  view.storage()
+  view.storageJob({ id: 'persisted-job', status: 'running', method: 'checkpoint', progress: { stage: 'copying', doneBytes: 201 * 1024 ** 2, totalBytes: 256 * 1024 ** 2 } })
+  view.render()
+  await tick()
+  assert.equal(view.button('Save checkpoint').props.disabled, true)
+  assert.equal(view.button('Start desktop').props.disabled, true)
+  assert.equal(view.button('Cancel storage task').props.disabled, false)
+  view.button('Cancel storage task').props.onClick()
+  await tick()
+  assert.equal(view.calls.find(call => call.method === 'storage-cancel').args.jobId, 'persisted-job')
+  assert.equal(view.button('Cancel storage task').props.disabled, true)
+  view.unmount()
 })

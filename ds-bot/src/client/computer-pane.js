@@ -5,6 +5,7 @@ import { importDesktopFiles, validateDesktopFiles, exportDesktopFile } from './c
 import { FILE_LIMIT } from '../shared/computer-files.js'
 
 import { ComputerScreen } from './computer-stream.js'
+import { ComputerUpdates } from './computer-updates.js'
 import { ComputerResources } from './computer-resources.js'
 const KEYS = ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space']
 const PHASE = { ready: 'Running', stopped: 'Stopped', starting: 'Starting', error: 'Needs recovery', unavailable: 'Unavailable' }
@@ -107,7 +108,7 @@ export function ComputerView({ bot, actions, leaving }) {
   const [frame, setFrame] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [localBusy, setBusy] = useState(false)
   const [previewBusy, setPreviewBusy] = useState(false)
   const [owned, setOwned] = useState(false)
   const [controlMode, setControlMode] = useState('live')
@@ -126,6 +127,7 @@ export function ComputerView({ bot, actions, leaving }) {
   const [tick, setTick] = useState(0)
   const [diagnostics, setDiagnostics] = useState(null)
   const [targetImage, setTargetImage] = useState('')
+  const [upgradeConfirmation, setUpgradeConfirmation] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
   const [serviceConfirmation, setServiceConfirmation] = useState(null)
   const session = useRef({ token: null, record: null, pending: false, mounted: true, shown: null, streamReady: false })
@@ -136,6 +138,9 @@ export function ComputerView({ bot, actions, leaving }) {
     return Boolean(node && panel.current?.contains(node) && /^(SELECT|INPUT|TEXTAREA)$/.test(node.tagName ?? ''))
   }
   const record = state?.computers.find(item => item.botId === bot.id && !item.archived)
+  const storageJob = record?.storageJob
+  const storageRunning = ['running', 'cancelling'].includes(storageJob?.status)
+  const busy = localBusy || storageRunning
   const upgradeImages = (state?.images ?? []).slice((state?.images ?? []).indexOf(record?.runtimeImage) + 1)
   const requests = (state?.handoffs ?? []).filter(item => item.botId === bot.id)
   const serviceBlocked = Boolean(['running', 'failed'].includes(state?.recovery?.status) || state?.recovery?.disconnected)
@@ -171,7 +176,7 @@ export function ComputerView({ bot, actions, leaving }) {
     if (changed || next?.control !== 'human' || next?.humanExpired || recovering) forget()
     if (changed || value.recovery?.version !== session.current.recoveryVersion) setServiceConfirmation(null)
     session.current.recoveryVersion = value.recovery?.version
-    if (changed) { clearFrame(); setConfirmation(null); setDiagnostics(null) }
+    if (changed) { clearFrame(); setConfirmation(null); setUpgradeConfirmation(null); setDiagnostics(null) }
     session.current.record = next
     setState(value)
     if (next?.phase !== 'ready' || next.grant === 'off' || recovering) { clearFrame(); return }
@@ -462,13 +467,13 @@ export function ComputerView({ bot, actions, leaving }) {
       h('button', { type: 'submit', className: 'bt-soft bt-soft-sm', disabled: !inputReady || !text }, t('Type text'))),
     state?.storageAvailable ? h('section', { className: 'bt-computer-help', 'aria-label': t('Desktop recovery') },
       h('strong', null, t('Desktop recovery')),
-      record?.recoveryPending ? h('div', { className: 'bt-computer-row', role: 'status' },
+      record?.recoveryPending && !storageRunning ? h('div', { className: 'bt-computer-row', role: 'status' },
         h('span', null, t('A storage change was interrupted. Finish recovery before continuing.')),
         button('Finish recovery', () => run(() => call('recover')))) : null,
       h('p', { className: 'bt-muted' }, t('Stop the desktop first. Recreate saves a checkpoint; restore keeps the previous home. Start the desktop when ready.')),
       h('div', { className: 'bt-computer-row' },
-        button('Save checkpoint', () => run(() => call('checkpoint')), record?.phase !== 'stopped'),
-        button('Recreate container', () => run(() => call('recreate')), record?.phase !== 'stopped'),
+        button('Save checkpoint', () => run(() => call('storage-start', { method: 'checkpoint' })), record?.phase !== 'stopped'),
+        button('Recreate container', () => run(() => call('storage-start', { method: 'recreate' })), record?.phase !== 'stopped'),
         button('Clear operation history', () => removeCopy('prune-journal', {}, t('Desktop operation history')), record?.phase !== 'stopped')),
       h('div', { className: 'bt-computer-row' }, button('Check storage', () => run(async () => setDiagnostics(await call('diagnostics'))), !record || record.recoveryPending)),
       diagnostics?.storage ? h('div', { className: 'bt-computer-help', role: 'status' },
@@ -483,11 +488,28 @@ export function ComputerView({ bot, actions, leaving }) {
             h('option', { value: '' }, t('Choose an image')),
             upgradeImages.map(image => h('option', { key: image, value: image }, image.slice(0, 23))))),
         h('p', { className: 'bt-muted' }, t('Upgrade checks a fresh desktop, copies your saved home and keeps the previous image and home together for rollback.')),
-        button('Upgrade desktop', () => run(() => call('upgrade', { targetImage })), record?.phase !== 'stopped' || !targetImage || record.recoveryPending)) : null,
-      busy ? h('p', { className: 'bt-muted', role: 'status' }, t('Working. Keep this panel open until the operation finishes.')) : null,
+        button('Upgrade desktop', () => setUpgradeConfirmation({ targetImage, expectedGeneration: record.generation }), record?.phase !== 'stopped' || !targetImage || record.recoveryPending)) : null,
+      upgradeConfirmation ? h('div', { className: 'bt-computer-help', role: 'group', 'aria-label': t('Confirm desktop upgrade') },
+        h('strong', null, t('Confirm desktop upgrade')),
+        h('p', null, upgradeConfirmation.targetImage),
+        h('p', null, t('A checkpoint will be saved before upgrading. The previous home and image remain available for rollback.')),
+        h('div', { className: 'bt-computer-row' },
+          button('Confirm upgrade', () => run(async () => {
+            await call('storage-start', { method: 'upgrade', ...upgradeConfirmation })
+            setUpgradeConfirmation(null)
+          }), record?.phase !== 'stopped' || record.generation !== upgradeConfirmation.expectedGeneration || !upgradeImages.includes(upgradeConfirmation.targetImage)),
+          button('Cancel', () => setUpgradeConfirmation(null)))) : null,
+      storageJob ? h('div', { className: 'bt-computer-help', role: 'status' },
+        h('span', null, t(({ running: 'Storage task running', cancelling: 'Cancelling storage task', completed: 'Storage task completed', cancelled: 'Storage task cancelled', failed: 'Storage task failed' })[storageJob.status])),
+        storageJob.progress ? h('span', null, `${t(({ checking: 'Checking files', copying: 'Copying files', verifying: 'Verifying files' })[storageJob.progress.stage])} · ${(storageJob.progress.doneBytes / 1048576).toFixed(1)} MiB${storageJob.progress.totalBytes ? ` / ${(storageJob.progress.totalBytes / 1048576).toFixed(1)} MiB` : ''}`) : null,
+        storageJob.progress?.totalBytes ? h('progress', { value: storageJob.progress.doneBytes, max: storageJob.progress.totalBytes, 'aria-label': t('Storage task progress') }) : null,
+        storageJob.error ? h('p', { className: 'bt-error' }, storageJob.error) : null,
+        storageRunning ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: localBusy || storageJob.status === 'cancelling',
+          onClick: () => run(() => call('storage-cancel', { jobId: storageJob.id })) }, t('Cancel storage task')) : null,
+        storageRunning ? h('p', { className: 'bt-muted' }, t('You can close this panel. Reopen it to see storage progress.')) : null) : null,
       (state.checkpoints ?? []).filter(item => item.computerId === record?.id).map(item => h('div', { key: item.id, className: 'bt-computer-row' },
         h('span', null, new Date(item.at).toLocaleString()),
-        button('Restore checkpoint', () => run(() => call('restore', { checkpointId: item.id })), record?.phase !== 'stopped' || (item.image && item.image !== record?.runtimeImage)),
+        button('Restore checkpoint', () => run(() => call('storage-start', { method: 'restore', checkpointId: item.id })), record?.phase !== 'stopped' || (item.image && item.image !== record?.runtimeImage)),
         button('Delete checkpoint', () => removeCopy('delete-checkpoint', { checkpointId: item.id }, new Date(item.at).toLocaleString()), record?.phase !== 'stopped'))),
       (record?.previousHomes ?? []).map((homeRevision, index) => h('div', { key: homeRevision ?? 'original', className: 'bt-computer-row' },
         h('span', null, `${t('Previous home')} ${index + 1}${record.previousImages?.[homeRevision ?? 'original'] ? ` · ${record.previousImages[homeRevision ?? 'original'].slice(0, 19)}` : ''}`),
@@ -499,6 +521,7 @@ export function ComputerView({ bot, actions, leaving }) {
         h('div', { className: 'bt-computer-row' },
           button('Delete', () => run(async () => { await call(confirmation.method, confirmation.args); setConfirmation(null) })),
           button('Cancel', () => setConfirmation(null)))) : null) : null,
+    h(ComputerUpdates, { call, changed: () => void refresh().catch(failure) }),
     h('strong', null, t('Transfer files')),
     h('p', { className: 'bt-muted' }, t('Choose files from this computer. Each file can be up to 200 MiB. Files are uploaded one at a time to /home/cua/DSBot; folders and overwrites are not supported.')),
     transfer ? h('div', { className: 'bt-computer-row' },

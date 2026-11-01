@@ -354,13 +354,16 @@ async function preview(value, signal) {
     await docker(['exec', value.name, 'rm', '-f', file]).catch(() => {})
   }
 }
-async function start(value, signal) {
-  const image = imageOf(value)
-  const record = value.record
+async function validateImage(image, signal) {
   const metadata = JSON.parse((await docker(['image', 'inspect', image], signal)).stdout)[0]
   if (metadata.Id !== image || metadata.Os !== 'linux' || metadata.Architecture !== 'amd64' || metadata.Config?.User !== '1000:1000'
     || metadata.Config?.Labels?.['org.ds-bot.computer.protocol'] !== '1'
     || metadata.Config?.Labels?.['org.ds-bot.computer.driver'] !== '0.37.0') fail('Unsupported desktop image.')
+}
+async function start(value, signal) {
+  const image = imageOf(value)
+  const record = value.record
+  await validateImage(image, signal)
   if (record.homeQuotaBytes) await probeHomeQuota(docker, image, engine, signal)
   let info = await inspect(value, signal)
   if (!info) {
@@ -394,8 +397,14 @@ async function retireCandidate(value, options, signal, existing) {
   if (info?.State.Running) await docker(['stop', '--time', '5', candidate.name], signal)
   if (info) await docker(['rm', candidate.name], signal)
 }
-async function dispatch(method, record, options, signal) {
+async function dispatch(method, record, options, signal, onProgress) {
   await localRuntime()
+  if (method === 'image-add') {
+    if (!/^sha256:[a-f0-9]{64}$/.test(options.image ?? '') || (!allowedImages.includes(options.image) && allowedImages.length >= 5)) fail('Invalid prepared image.')
+    await validateImage(options.image, signal)
+    if (!allowedImages.includes(options.image)) allowedImages.push(options.image)
+    return { image: options.image }
+  }
   if (method === 'health') return { protocolVersion: 1, runtimeKey }
   const value = target(record)
   const image = imageOf(value)
@@ -454,7 +463,7 @@ async function dispatch(method, record, options, signal) {
       try { await start(candidate, signal); await preview(candidate, signal) }
       finally { await retireCandidate(value, options, undefined, candidate) }
       await cleanup(value, { ...options, kind: 'home', staged: true }, docker, signal)
-      await checkpoint('restore', value, options, { docker, image, signal, executable, engine, destinationImage: options.targetImage })
+      await checkpoint('restore', value, options, { docker, image, signal, executable, engine, onProgress, destinationImage: options.targetImage })
       try { await start(candidate, signal); await preview(candidate, signal) }
       finally { await retireCandidate(value, options, undefined, candidate) }
       if (info) await docker(['rm', value.name], signal)
@@ -474,7 +483,7 @@ async function dispatch(method, record, options, signal) {
     if (['checkpoint', 'restore', 'recreate'].includes(method)) {
       const info = await inspect(value, signal)
       if (info?.State.Running) fail('Stop the desktop before changing its storage.')
-      const result = method === 'recreate' ? null : await checkpoint(method, value, options, { docker, image, signal, executable, engine })
+      const result = method === 'recreate' ? null : await checkpoint(method, value, options, { docker, image, signal, executable, engine, onProgress })
       // The old home survives removal. Restore publishes a verified new home only in the host journal.
       if (method !== 'checkpoint' && info) await docker(['rm', value.name], signal)
       return result
@@ -536,7 +545,7 @@ function receive(message) {
   if (closing || !Number.isSafeInteger(message?.id) || requests.has(message.id)) return
   const abort = new AbortController()
   requests.set(message.id, abort)
-  void dispatch(message.method, message.record, message.options ?? {}, abort.signal).then(
+  void dispatch(message.method, message.record, message.options ?? {}, abort.signal, progress => send({ id: message.id, progress })).then(
     value => send({ id: message.id, ok: true, value }),
     error => {
       send({

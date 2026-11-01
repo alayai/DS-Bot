@@ -15,7 +15,7 @@ for (const delivery of ['registry', 'archive']) test(`installed setup uses ${del
   const host = join(root, 'src/host/computer')
   await mkdir(host, { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')
-  for (const name of ['setup-runtime.js', 'runtime-bundle.js', 'windows-install.js', 'image-archive.js']) {
+  for (const name of ['setup-runtime.js', 'runtime-bundle.js', 'windows-install.js', 'image-archive.js', 'image-download.js', 'image-releases.js']) {
     await copyFile(new URL(`../src/host/computer/${name}`, import.meta.url), join(host, name))
   }
   const image = `sha256:${'a'.repeat(64)}`

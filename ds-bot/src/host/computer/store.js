@@ -52,7 +52,7 @@ function validate(value) {
     for (const [id, item] of Object.entries(value.checkpoints)) {
       if (item?.id !== id || !/^[a-f0-9-]{36}$/.test(id) || !value.computers[item.computerId]
         || (item.image !== undefined && !/^sha256:[a-f0-9]{64}$/.test(item.image))
-        || !/^[a-f0-9]{64}$/.test(item.hash) || !Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > 134217728) {
+        || !/^[a-f0-9]{64}$/.test(item.hash) || !Number.isSafeInteger(item.bytes) || item.bytes < 0 || item.bytes > 1024 ** 4) {
         throw refused('store-invalid', 'Invalid checkpoint manifest.')
       }
     }

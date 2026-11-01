@@ -6,7 +6,8 @@ import { PROTOCOL_VERSION, refused } from '../contract.js'
 const LIFECYCLE = new Set(['start', 'stop', 'upgrade', 'checkpoint', 'restore', 'cleanup', 'rollback', 'recreate'])
 
 export function createBrokerProvider(config = {}) {
-  const launch = brokerLaunch(config)
+  let launch = brokerLaunch(config)
+  const images = [...new Set([config.image, ...(config.images ?? [])])]
   let child
   let sequence = 0
   let closed = false
@@ -51,6 +52,12 @@ export function createBrokerProvider(config = {}) {
           return
         }
         runtimeKey = message.runtimeKey
+      }
+      if (message.progress) {
+        const p = message.progress
+        if (['checking', 'copying', 'verifying'].includes(p.stage)
+          && [p.doneBytes, p.totalBytes].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 1024 ** 4)) request.onProgress?.(p)
+        return
       }
       if (message.ok) request.resolve(message.value)
       else request.reject(refused('provider-failed', typeof message.error === 'string'
@@ -139,7 +146,7 @@ export function createBrokerProvider(config = {}) {
   }
   function call(method, record, options = {}, internal = false) {
     const peer = connect(internal)
-    const { signal, ...payload } = options
+    const { signal, onProgress, ...payload } = options
     signal?.throwIfAborted()
     const id = ++sequence
     return new Promise((resolve, reject) => {
@@ -155,8 +162,8 @@ export function createBrokerProvider(config = {}) {
         pending.get(id)?.reject(refused('result-unknown', 'The Computer request ended before its effect was confirmed.'))
       }
       const longFile = method === 'files' && ['begin-read', 'commit'].includes(payload.operation)
-      const timer = setTimeout(abort, method === 'upgrade' || longFile ? 180_000 : 45_000)
-      pending.set(id, { peer, method, resolve: finish(resolve), reject: finish(reject) })
+      const timer = setTimeout(abort, ['checkpoint', 'restore', 'upgrade'].includes(method) ? 65 * 60_000 : longFile ? 180_000 : 45_000)
+      pending.set(id, { peer, method, onProgress, resolve: finish(resolve), reject: finish(reject) })
       signal?.addEventListener('abort', abort, { once: true })
       try {
         peer.send({ id, method, record, options: payload }, error => {
@@ -172,7 +179,13 @@ export function createBrokerProvider(config = {}) {
     })
   }
   return {
-    protocolVersion: PROTOCOL_VERSION, kind: 'local-container', image: config.image, images: [...new Set([config.image, ...(config.images ?? [])])], actions: ['click', 'text', 'key', 'scroll', 'drag'], maxActions: 1,
+    protocolVersion: PROTOCOL_VERSION, kind: 'local-container', image: config.image, images, actions: ['click', 'text', 'key', 'scroll', 'drag'], maxActions: 1,
+    async registerImage(image) {
+      if (!/^sha256:[a-f0-9]{64}$/.test(image) || (!images.includes(image) && images.length >= 5)) throw refused('image-incompatible', 'Choose an immutable image within the prepared image limit.')
+      await call('image-add', undefined, { image })
+      if (!images.includes(image)) images.push(image)
+      launch = brokerLaunch({ ...config, images: images.filter(id => id !== config.image) })
+    },
     recoverySupported: Boolean(launch.entrypoint),
     connectionState: () => disconnected ? 'disconnected' : 'connected',
     async reconnect({ signal } = {}) {

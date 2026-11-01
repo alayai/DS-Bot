@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, open, rm, statfs } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { imageDownload } from './image-download.js'
 
 const MAX_ARCHIVE = 8 * 1024 ** 3
 const MAX_PART = 256 * 1024 ** 2
@@ -48,6 +49,7 @@ export async function loadImageArchive(engine, lock, options = {}, {
 } = {}) {
   const source = archiveSource(lock)
   if (!source) throw new Error('No published desktop archive is configured.')
+  fetcher = imageDownload(fetcher)
   const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(45 * 60_000)]) : AbortSignal.timeout(45 * 60_000)
   const pieces = []
   await receive(source.url, 65536, { signal, fetcher, consume: chunk => pieces.push(Buffer.from(chunk)) })

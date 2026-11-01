@@ -77,7 +77,8 @@ createRoot(document.getElementById('root')).render(React.createElement(ComputerV
         chunkSeen?.()
         await new Promise(resolve => { releaseChunk = resolve })
       }
-      const value = method === 'state' ? await service.state()
+      const value = method === 'image-state' ? { supported: false, busy: false }
+        : method === 'state' ? await service.state()
         : method === 'files' ? await service.files(args)
           : method === 'resource-limits' ? await service.setResourceLimits(args)
             : method === 'diagnostics' ? await service.diagnostics(args)

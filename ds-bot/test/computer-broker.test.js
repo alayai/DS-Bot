@@ -259,3 +259,28 @@ process.on('message', message => {
   stream.close()
   await rejected
 })
+
+test('registered image pins survive Broker reconnect and storage progress does not settle the request', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'dsbot-broker-images-'))
+  const entrypoint = join(home, 'fixture.mjs')
+  const next = `sha256:${'b'.repeat(64)}`
+  await writeFile(entrypoint, `
+const images=process.argv[4]?JSON.parse(process.argv[4]):[process.argv[2]];
+const runtimeKey='a'.repeat(64);
+process.on('message',m=>{
+ if(m.method==='image-add'&&!images.includes(m.options.image))images.push(m.options.image);
+ if(m.method==='checkpoint')process.send({id:m.id,progress:{stage:'copying',doneBytes:20,totalBytes:30}});
+ process.send({id:m.id,ok:true,runtimeKey,value:m.method==='health'?{protocolVersion:1,runtimeKey}:m.method==='checkpoint'?{bytes:30}:{images}});
+});process.on('disconnect',()=>process.exit(0));
+`)
+  const provider = createBrokerProvider({ entrypoint, image })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  await provider.registerImage(next)
+  assert.deepEqual(provider.images, [image, next])
+  await provider.reconnect()
+  assert.deepEqual((await provider.inspect(target.record)).images, [image, next])
+  const progress = []
+  assert.equal((await provider.checkpoint(target.record, { onProgress: p => progress.push(p) })).bytes, 30)
+  assert.deepEqual(progress, [{ stage: 'copying', doneBytes: 20, totalBytes: 30 }])
+  await assert.rejects(provider.registerImage('mutable:latest'), /immutable/)
+})

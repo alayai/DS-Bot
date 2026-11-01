@@ -559,6 +559,14 @@ export function install(rt) {
           return ok(await rt.computerSetup.prepare(body))
         case 'computer-setup-cancel':
           return ok(await rt.computerSetup.cancel(body))
+        case 'computer-image-state':
+          return ok(await rt.computerSetup.updates.state())
+        case 'computer-image-check':
+          return ok(await rt.computerSetup.updates.check(body))
+        case 'computer-image-download':
+          return ok(await rt.computerSetup.updates.download(body))
+        case 'computer-image-cancel':
+          return ok(await rt.computerSetup.updates.cancel(body))
         case 'computer-state':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.state())
@@ -586,6 +594,12 @@ export function install(rt) {
         case 'computer-resource-limits':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.setResourceLimits(body))
+        case 'computer-storage-start':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.storageStart(body))
+        case 'computer-storage-cancel':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.storageCancel(body))
         case 'computer-upgrade':
         case 'computer-recover':
         case 'computer-rollback':

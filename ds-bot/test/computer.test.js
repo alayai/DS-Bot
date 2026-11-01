@@ -1562,3 +1562,61 @@ test('hard quota defaults require a verified backend and never resize an existin
   assert.equal((await h.bind()).homeQuotaBytes, undefined)
   assert.equal((await h.bind('b')).homeQuotaBytes, limits.newHomeQuotaBytes)
 })
+
+test('background storage reports progress, fences cancellation and preserves recovery intent', async t => {
+  const h = await setup(t)
+  storageProvider(h)
+  const record = await h.start()
+  await h.manage('stop')
+  let entered = false
+  h.provider.checkpoint = async (_record, { signal, onProgress, maxBytes }) => {
+    assert.equal(maxBytes, 20 * 1024 ** 3)
+    entered = true
+    onProgress({ stage: 'copying', doneBytes: 201 * 1024 ** 2, totalBytes: 256 * 1024 ** 2 })
+    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }))
+  }
+  const args = { botId: 'a', expectedGeneration: record.generation }
+  const started = await h.service.storageStart({ ...args, method: 'checkpoint' })
+  assert.equal(started.status, 'running')
+  for (let i = 0; !entered && i < 100; i++) await delay(2)
+  assert.equal(entered, true)
+  assert.equal((await h.service.state()).computers[0].storageJob.progress.doneBytes, 201 * 1024 ** 2)
+  await assert.rejects(h.service.storageStart({ ...args, method: 'checkpoint' }), fails('busy'))
+  await assert.rejects(h.service.storageCancel({ botId: 'a', jobId: 'old' }), fails('conflict'))
+  await h.service.storageCancel({ botId: 'a', jobId: started.id })
+  let state
+  for (let i = 0; i < 100; i++) {
+    state = await h.service.state()
+    if (state.computers[0].storageJob.status === 'cancelled') break
+    await delay(2)
+  }
+  assert.equal(state.computers[0].storageJob.status, 'cancelled')
+  assert.equal(state.computers[0].recoveryPending, true)
+  assert.equal(state.checkpoints.length, 0)
+  assert.equal(state.computers[0].generation, record.generation)
+  await h.service.storage('recover', args)
+  assert.equal((await h.service.state()).computers[0].recoveryPending, false)
+  await assert.rejects(h.service.storageStart({ ...args, method: 'checkpoint' }), fails('stale-generation'))
+})
+
+test('background restore completion publishes a verified home and can be observed later', async t => {
+  const h = await setup(t)
+  storageProvider(h)
+  const original = h.provider.checkpoint
+  h.provider.checkpoint = async (...args) => ({ ...await original(...args), bytes: 256 * 1024 ** 2 })
+  const record = await h.start()
+  await h.manage('stop')
+  const args = { botId: 'a', expectedGeneration: record.generation }
+  const saved = await h.service.storage('checkpoint', args)
+  const job = await h.service.storageStart({ ...args, method: 'restore', checkpointId: saved.checkpoints[0].id })
+  let state
+  for (let i = 0; i < 100; i++) {
+    state = await h.service.state()
+    if (state.computers[0].storageJob.status === 'completed') break
+    await delay(2)
+  }
+  assert.equal(state.computers[0].storageJob.id, job.id)
+  assert.equal(state.computers[0].storageJob.status, 'completed')
+  assert.equal(state.computers[0].generation, record.generation + 1)
+  assert.deepEqual(state.computers[0].previousHomes, [null])
+})

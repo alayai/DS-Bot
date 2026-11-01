@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyComputerRuntime } from './runtime-bundle.js'
 import { windowsSystemStatus, installWindowsComponent, openWindowsEngine } from './windows-install.js'
+import { findImageRelease } from './image-releases.js'
 import { archiveSource, loadImageArchive } from './image-archive.js'
 
 export async function loadSetupRuntime() {
@@ -25,6 +26,12 @@ export async function loadSetupRuntime() {
   })
   return {
     recipe,
+    findRelease: options => findImageRelease(lock, options),
+    async prepareRelease(engine, candidate, options) {
+      await loadImageArchive(engine, candidate.lock, options, { task: runEngineTask })
+      await check(engine, candidate.image)
+      return candidate.image
+    },
     systemStatus: kind => windowsSystemStatus(kind, { engineExecutable: kind === 'docker' ? dockerExecutable() : podmanExecutable() }),
     installSystem: (kind, component, options) => installWindowsComponent(kind, component, options),
     openEngine: kind => openWindowsEngine(kind),
@@ -44,6 +51,6 @@ export async function loadSetupRuntime() {
       else await buildDesktop(engine, join(directory, 'desktop'), tag, options)
       return this.image(engine)
     },
-    broker: (engine, image) => ({ native: true, entrypoint: join(directory, 'broker/main.mjs'), engine, image }),
+    broker: (engine, image, images = []) => ({ images, native: true, entrypoint: join(directory, 'broker/main.mjs'), engine, image }),
   }
 }

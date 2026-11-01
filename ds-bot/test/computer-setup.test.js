@@ -374,3 +374,23 @@ test('engine installer reboot is persisted and resumes only on a different boot 
   assert.equal(installs, 1)
   assert.equal(opens, 1)
 })
+
+test('managed setup restores prepared image pins and interrupted downloads without replaying them', async t => {
+  const h = await fixture(t)
+  const next = `sha256:${'c'.repeat(64)}`
+  await mkdir(join(h.home, 'computers'))
+  await writeFile(join(h.home, 'computers/setup.json'), JSON.stringify({ version: 1,
+    config: { engine, image, recipe, images: [next] }, imageUpdate: { id: 'previous', phase: 'downloading' } }))
+  h.runtime.broker = (engine, image, images) => ({ engine, image, images })
+  await h.setup.restore()
+  const activated = h.calls.find(call => call[0] === 'activate')[1]
+  assert.deepEqual(activated.images, [next])
+  assert.equal((await h.setup.updates.state()).job.phase, 'interrupted')
+  await assert.rejects(h.setup.updates.download({ candidateId: 'previous' }), /again/)
+  assert.equal(h.calls.includes('build'), false)
+  h.available()
+  await h.setup.prepare({ botId: 'a' })
+  await h.settled()
+  const saved = JSON.parse(await readFile(join(h.home, 'computers/setup.json')))
+  assert.deepEqual(saved.config.images, [next])
+})

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { replaceFile } from '../files.js'
 import { refused, checkId } from './contract.js'
+import { createImageUpdates } from './image-updates.js'
 import { loadSetupRuntime } from './setup-runtime.js'
 
 const ACTIVE = new Set(['checking', 'installing-system', 'preparing-runtime', 'preparing-image', 'verifying-image', 'configuring', 'starting-desktop', 'checking-desktop', 'cancelling'])
@@ -35,7 +36,9 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       if (text.length > 65536) throw refused('setup-storage', 'Desktop setup metadata is too large.')
       const value = JSON.parse(text)
       if (value?.version !== 1 || (value.config && (!/^sha256:[a-f0-9]{64}$/.test(value.config.image ?? '')
-        || !/^[a-f0-9]{64}$/.test(value.config.recipe ?? '')))
+        || !/^[a-f0-9]{64}$/.test(value.config.recipe ?? '')
+        || (value.config.images !== undefined && (!Array.isArray(value.config.images) || value.config.images.length > 4
+          || value.config.images.some(image => !/^sha256:[a-f0-9]{64}$/.test(image))))))
         || (value.job && (!PHASES.has(value.job.phase) || typeof value.job.id !== 'string' || typeof value.job.botId !== 'string'
           || (value.job.engineKind !== undefined && !['docker', 'podman'].includes(value.job.engineKind))
           || (value.job.prepareRuntime !== undefined && typeof value.job.prepareRuntime !== 'boolean')
@@ -49,7 +52,21 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       }
       if (value.config) (await payload()).validate(value.config.engine)
       if (value.selection) (await payload()).validate(value.selection)
+      if (value.imageUpdate !== undefined && (!value.imageUpdate || typeof value.imageUpdate !== 'object'
+        || typeof value.imageUpdate.id !== 'string' || value.imageUpdate.id.length > 160
+        || !['checking', 'downloading', 'verifying', 'cancelling', 'available', 'prepared', 'current', 'interrupted', 'cancelled', 'failed'].includes(value.imageUpdate.phase)
+        || (value.imageUpdate.candidate != null && (!/^[a-f0-9]{64}$/.test(value.imageUpdate.candidate.id ?? '')
+          || !/^sha256:[a-f0-9]{64}$/.test(value.imageUpdate.candidate.image ?? '')
+          || !/^cua-desktop-[a-f0-9]{40}$/.test(value.imageUpdate.candidate.tag ?? '')
+          || !/^[a-f0-9]{40}$/.test(value.imageUpdate.candidate.evidence ?? '')
+          || !Number.isFinite(Date.parse(value.imageUpdate.candidate.publishedAt)))))) {
+        throw refused('setup-storage', 'Invalid image update metadata.')
+      }
       data = value
+      if (data.imageUpdate && ['checking', 'downloading', 'verifying', 'cancelling'].includes(data.imageUpdate.phase)) {
+        data.imageUpdate.phase = 'interrupted'
+        data.imageUpdate.error = 'Image preparation was interrupted. Check for updates to continue.'
+      }
       if (data.job && ACTIVE.has(data.job.phase)) {
         data.job.interruptedPhase = data.job.phase
         data.job.phase = 'interrupted'
@@ -82,7 +99,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     restoring ??= (async () => {
       const tools = await payload()
       writable()
-      await activate(tools.broker(data.config.engine, data.config.image))
+      await activate(tools.broker(data.config.engine, data.config.image, data.config.images ?? []))
     })().catch(error => { restoring = undefined; throw error })
     await restoring
   }
@@ -205,7 +222,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
       await tools.image(engine, image)
       signal.throwIfAborted()
       writable()
-      data.config = { engine, image, recipe: data.config?.recipe ?? tools.recipe }
+      data.config = { ...data.config, engine, image, recipe: data.config?.recipe ?? tools.recipe }
       await update('configuring')
       await restore()
       service = rt.computer
@@ -323,12 +340,15 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
     if (data.job !== job || starting || operation || stopping) return
     await prepare({ botId: job.botId, jobId: job.id, engineKind: job.engineKind }, true)
   }
+  const updates = createImageUpdates({ load, data: () => data, save, writable, payload,
+    service: () => rt.computer, available: () => Boolean(data.config && rt.computer && !explicit() && !disabled() && !operation && !starting), now })
   async function dispose() {
     stopping = true
     operation?.controller.abort(new Error('DSH is stopping. Retry desktop preparation after restarting.'))
     await operation?.done
+    await updates.dispose()
     await writing
     disposed = true
   }
-  return { state, restore, prepare, cancel, resume, pending, dispose }
+  return { state, updates, restore, prepare, cancel, resume, pending, dispose }
 }
