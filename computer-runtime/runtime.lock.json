@@ -8,5 +8,11 @@
     "artifact": "cua_driver-0.37.0-py3-none-manylinux_2_31_x86_64.whl",
     "sha256": "e530ee36226d99516ef7ec696ba31d516e487ae5e5effdd5e2610c56af3eee19",
     "license": "MIT"
-  }
+  },
+  "publishedArchive": {
+    "url": "https://github.com/alayai/DS-Bot/releases/download/cua-desktop-c4ac3e9d2b713c7ca492b6258ef1ecd8f5fbb4cf/desktop-manifest.json",
+    "sha256": "8a583718e830d2f85bbc518949b82969dd172be7005480bc42c9fc6252188f4f"
+  },
+  "publishedImageId": "sha256:3da1065e532b906f78b404df1909e7a17722cdd239acfcb5bda9202271ce3c4a",
+  "publishedImageRecipe": "e0cba224e8da10a669143468fd1d5f04243d8dfad664b84f7db6427e9807a9df"
 }
