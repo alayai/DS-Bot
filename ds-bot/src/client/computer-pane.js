@@ -5,6 +5,9 @@ import { importDesktopFiles, validateDesktopFiles, exportDesktopFile } from './c
 import { FILE_LIMIT } from '../shared/computer-files.js'
 
 import { ComputerScreen } from './computer-stream.js'
+import { ComputerTasks } from './computer-tasks.js'
+import { ComputerPortable } from './computer-portable.js'
+import { ComputerPolicy } from './computer-policy.js'
 import { ComputerUpdates } from './computer-updates.js'
 import { ComputerResources } from './computer-resources.js'
 const KEYS = ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space']
@@ -521,6 +524,9 @@ export function ComputerView({ bot, actions, leaving }) {
         h('div', { className: 'bt-computer-row' },
           button('Delete', () => run(async () => { await call(confirmation.method, confirmation.args); setConfirmation(null) })),
           button('Cancel', () => setConfirmation(null)))) : null) : null,
+    h(ComputerTasks, { key: `tasks-${record?.id}`, record, call }),
+    h(ComputerPortable, { key: `backup-${record?.id}`, record, call, changed: () => void refresh().catch(failure) }),
+    h(ComputerPolicy, { key: record?.id, record, call, changed: () => void refresh().catch(failure) }),
     h(ComputerUpdates, { call, changed: () => void refresh().catch(failure) }),
     h('strong', null, t('Transfer files')),
     h('p', { className: 'bt-muted' }, t('Choose files from this computer. Each file can be up to 200 MiB. Files are uploaded one at a time to /home/cua/DSBot; folders and overwrites are not supported.')),
@@ -565,8 +571,9 @@ export const COMPUTER_CSS = `
 .bt-computer-head,.bt-computer-row,.bt-computer-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .bt-computer-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .bt-computer-head{justify-content:space-between}
-.bt-computer select,.bt-computer input:not([type=file]){min-height:32px;min-width:0;max-width:100%;border:1px solid var(--bt-line);border-radius:8px;padding:6px 8px;background:var(--bt-card);color:var(--bt-ink);font:inherit}
+.bt-computer select,.bt-computer textarea,.bt-computer input:not([type=file]){min-height:32px;min-width:0;max-width:100%;border:1px solid var(--bt-line);border-radius:8px;padding:6px 8px;background:var(--bt-card);color:var(--bt-ink);font:inherit}
 .bt-computer input:not([type=file]){flex:1}
+.bt-computer textarea{width:100%;min-height:72px;resize:vertical}
 .bt-computer input[type=file][hidden]{display:none}
 .bt-computer-uploads{margin:4px 0;padding-left:20px;max-height:180px;overflow:auto;overflow-wrap:anywhere}
 .bt-computer-screen{position:relative;flex:none;border:1px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card);min-height:120px;aspect-ratio:16 / 10;display:flex;align-items:center;justify-content:center}

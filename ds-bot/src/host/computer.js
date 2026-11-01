@@ -56,6 +56,9 @@ function installTools(rt, provider, computer) {
     },
   }
   const definitions = [
+    ['computer_task_update', 'Report progress or an explicit result for your current queued desktop task. Include verifiable evidence; a completed result ends this turn.', {
+      taskId: { type: 'string', required: true }, status: { type: 'string', enum: ['progress', 'completed', 'failed'], required: true }, note: { type: 'string', required: true },
+    }, (args, exec) => computer.tasks.report(args, exec)],
     ['computer_status', 'Check your assigned desktop without starting it. Assisted mode does not isolate your other tools.', {}, (_args, exec) => computer.status(exec)],
     ['computer_observe', 'Observe your assigned desktop. The user must start it first. Coordinates belong to this screenshot and Session.', {}, (_args, exec) => computer.observe(exec)],
     ['computer_act', `Perform up to ${maxActions} desktop action(s) using your latest observation. Approval is required unless the user selected YOLO for this desktop. Observe again after each batch. Never replay unknown results.`, actionParameters, (args, exec) => computer.act(args, exec)],
@@ -90,6 +93,7 @@ function installTools(rt, provider, computer) {
   rt.ctx.on('agent/created', ({ agent }) => scope(agent))
   rt.ctx.on('agent/pre-step', async ({ agent }, next) => {
     await scope(agent)
+    if (rt.isBotSession(agent.session?.id ?? agent.id)) await computer.tasks.enter(agent)
     return next()
   })
   rt.ctx.tools.guard(exec => {
@@ -101,16 +105,19 @@ function installTools(rt, provider, computer) {
   rt.ctx.on('session/event', (session, event) => {
     if (!computer) return
     if (event.type === 'user/message' && ['user', 'user-question-reply'].includes(event.data?.source?.kind)) {
+      void computer.tasks.interrupt(session.id).catch(() => rt.warn('ds-bot: desktop task interruption failed'))
       return computer.handoffs.cancel(session.id).catch(() => rt.warn('ds-bot: desktop help cancellation failed'))
     }
     if (event.type !== 'turn/end') return
     if (event.data?.reason?.kind === 'aborted' && event.data.reason.reason?.kind === 'user') {
       void computer.handoffs.cancel(session.id).catch(() => rt.warn('ds-bot: desktop help cancellation failed'))
     }
+    void computer.tasks.endTurn(session.id, event.data?.turn).catch(() => rt.warn('ds-bot: desktop task result needs review'))
     void computer.endTurn(session.id, event.data?.turn).catch(() => rt.warn('ds-bot: desktop release failed; the desktop remains blocked'))
   })
   rt.ctx.effect(() => {
     const timer = setInterval(() => {
+      void computer?.tasks.tick().catch(() => rt.warn('ds-bot: desktop task dispatch failed'))
       void computer?.reapIdle().catch(() => rt.warn('ds-bot: idle desktop shutdown failed'))
       void computer?.sampleResources().catch(() => rt.warn('ds-bot: desktop resource measurement failed'))
     }, 30_000)

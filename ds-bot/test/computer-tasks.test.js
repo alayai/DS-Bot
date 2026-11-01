@@ -1,0 +1,91 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createComputerStore } from '../src/host/computer/store.js'
+import { createDesktopTasks } from '../src/host/computer/tasks.js'
+async function fixture(t) {
+  const home = await mkdtemp(join(tmpdir(), 'dsbot-tasks-test-'))
+  t.after(() => rm(home, { recursive: true, force: true }))
+  const store = createComputerStore(join(home, 'queue.json'), { writable() {} })
+  const record = { id: 'cmp_test', botId: 'a', generation: 1, grant: 'operate', executionPolicy: 'assisted', archived: false }
+  await store.update(draft => { draft.computers[record.id] = record })
+  const controls = new Map([[record.id, 'none']]), sent = [], removed = [], cancelled = []
+  const agent = { id: 'chat', session: { id: 'chat' }, inbox: { nextTurn: [], nextStep: [], remove: id => removed.push(id) }, cancel: reason => cancelled.push(reason) }
+  const rt = { readOnly: () => undefined, chatOf: () => 'chat', live: new Map(), resolveAgent: async () => agent,
+    ctx: { sessions: { flush: async () => {} } }, deliver: async value => { (await tasks.validateDelivery(value.computerTask, value.sessionId))(); sent.push(value) } }
+  let barriers = 0
+  const deps = { store, ready: async () => {}, assigned: async () => (await store.load()).computers[record.id], owner: () => ({ botId: 'a', sessionId: 'chat', turnId: rt.live.get('chat').turn }),
+    administration: async (_id, work) => work(), barrier: async () => { barriers++ }, controls, provider: { inspect: async () => ({ phase: 'ready' }) } }
+  let tasks = createDesktopTasks(rt, deps)
+  const command = (method, args = {}) => tasks.command(method, { botId: 'a', expectedGeneration: 1, ...args })
+  const start = async () => { await command('add', { goal: 'Inspect the desktop and report evidence.' }); await tasks.tick(); const item = (await tasks.list('a'))[0]; rt.live.set('chat', { turn: 1, info: { exchangeId: item.attempt } }); await tasks.enter(agent); return item }
+  return { store, rt, agent, sent, removed, cancelled, command, start, get tasks() { return tasks }, barriers: () => barriers,
+    reload: () => { tasks.dispose(); tasks = createDesktopTasks(rt, deps); return tasks } }
+}
+test('queued desktop tasks dispatch once and require an explicit result', async t => {
+  const h = await fixture(t), item = await h.start()
+  await h.tasks.tick(); assert.equal(h.sent.length, 1)
+  await h.tasks.report({ taskId: item.id, status: 'progress', note: 'Observed current desktop.' }, {})
+  await h.tasks.endTurn('chat', 1)
+  assert.equal((await h.tasks.list('a'))[0].status, 'needs-review')
+  await h.tasks.tick(); assert.equal(h.sent.length, 1)
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+})
+test('pause cancels only the matching task and resume creates a fresh fenced delivery', async t => {
+  const h = await fixture(t), item = await h.start()
+  h.agent.inbox.nextTurn = [{ id: 'mine', source: { exchangeId: item.attempt } }, { id: 'other', source: { exchangeId: 'unrelated' } }]
+  await h.command('pause', { id: item.id }); assert.equal(h.cancelled.length, 1); assert.deepEqual(h.removed, ['mine'])
+  h.agent.inbox.nextTurn = []; h.rt.live.clear()
+  await assert.rejects(h.command('resume', { id: item.id }), /confirm/)
+  await h.command('resume', { id: item.id, confirm: true }); await h.tasks.tick()
+  assert.equal(h.sent.length, 2); assert.notEqual(h.sent[1].exchangeId, item.attempt)
+  h.rt.live.set('chat', { turn: 2, info: { exchangeId: item.attempt } })
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 2 }), /no longer running/)
+})
+test('uncertain delivery and host restart never automatically replay a task', async t => {
+  const h = await fixture(t)
+  h.rt.deliver = async value => { h.sent.push(value); throw Error('lost after enqueue') }
+  await h.command('add', { goal: 'Task' }); await h.tasks.tick(); await h.tasks.tick()
+  assert.equal(h.sent.length, 1); assert.equal((await h.tasks.list('a'))[0].status, 'unknown')
+  h.reload(); assert.equal((await h.tasks.list('a'))[0].status, 'interrupted')
+  await h.tasks.tick(); assert.equal(h.sent.length, 1)
+})
+test('explicit completion records evidence, ends the turn and blocks stale tools', async t => {
+  const h = await fixture(t), item = await h.start(); let ended = false
+  await h.tasks.report({ taskId: item.id, status: 'completed', note: 'Verified the requested file exists.' }, { concludeTurn: () => { ended = true } })
+  assert.equal(ended, true); assert.equal((await h.tasks.list('a'))[0].status, 'completed')
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+  await h.command('remove', { id: item.id }); assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+})
+test('queue waits for unrelated turns and generation changes require review', async t => {
+  const h = await fixture(t)
+  h.rt.live.set('chat', { turn: 20, info: { exchangeId: 'unrelated' } })
+  await h.command('add', { goal: 'Task' }); await h.tasks.tick(); assert.equal(h.sent.length, 0)
+  const item = (await h.tasks.list('a'))[0]
+  await h.command('pause', { id: item.id }); assert.equal(h.cancelled.length, 0)
+  h.rt.live.clear(); await h.command('resume', { id: item.id, confirm: true })
+  await h.store.update(draft => { draft.computers.cmp_test.generation++ }); await h.tasks.tick()
+  assert.equal((await h.tasks.list('a'))[0].status, 'interrupted'); assert.equal(h.sent.length, 0)
+})
+
+test('a new turn cannot reclaim a running attempt and a generation change fences it immediately', async t => {
+  const h = await fixture(t), item = await h.start()
+  h.rt.live.set('chat', { turn: 2, info: { exchangeId: item.attempt } }); await h.tasks.enter(h.agent)
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 2 }), /no longer running/)
+  h.rt.live.set('chat', { turn: 1, info: { exchangeId: item.attempt } })
+  await h.store.update(draft => { draft.computers.cmp_test.generation++ })
+  assert.throws(() => h.tasks.guard({ botId: 'a', sessionId: 'chat', turnId: 1 }), /no longer running/)
+  assert.equal((await h.tasks.list('a'))[0].status, 'interrupted')
+})
+
+test('pause fences a delayed delivery before it reaches the agent inbox', async t => {
+  const h = await fixture(t); let release, entered
+  const gate = new Promise(resolve => { release = resolve }), started = new Promise(resolve => { entered = resolve })
+  h.rt.deliver = async args => { entered(); await gate; (await h.tasks.validateDelivery(args.computerTask, args.sessionId))(); h.sent.push(args) }
+  const [item] = await h.command('add', { goal: 'Task' })
+  const pending = h.tasks.tick(); await started
+  await h.command('pause', { id: item.id }); release(); await pending
+  assert.equal(h.sent.length, 0); assert.equal((await h.tasks.list('a'))[0].status, 'paused')
+})

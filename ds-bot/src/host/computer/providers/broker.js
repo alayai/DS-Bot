@@ -3,7 +3,7 @@ import { uploadFile, downloadFile } from '../../../shared/computer-files.js'
 import { brokerLaunch, openBroker } from './transport.js'
 import { PROTOCOL_VERSION, refused } from '../contract.js'
 
-const LIFECYCLE = new Set(['start', 'stop', 'upgrade', 'checkpoint', 'restore', 'cleanup', 'rollback', 'recreate', 'maintenance'])
+const LIFECYCLE = new Set(['start', 'stop', 'upgrade', 'checkpoint', 'restore', 'cleanup', 'rollback', 'recreate', 'maintenance', 'configure', 'portable-import'])
 
 export function createBrokerProvider(config = {}) {
   let launch = brokerLaunch(config)
@@ -162,7 +162,7 @@ export function createBrokerProvider(config = {}) {
         pending.get(id)?.reject(refused('result-unknown', 'The Computer request ended before its effect was confirmed.'))
       }
       const longFile = method === 'files' && ['begin-read', 'commit'].includes(payload.operation)
-      const timer = setTimeout(abort, ['checkpoint', 'restore', 'upgrade'].includes(method) ? 65 * 60_000 : longFile || method === 'maintenance' ? 180_000 : 45_000)
+      const timer = setTimeout(abort, ['checkpoint', 'restore', 'upgrade', 'portable-import', 'portable-export'].includes(method) ? 65 * 60_000 : longFile || method === 'maintenance' ? 180_000 : 45_000)
       pending.set(id, { peer, method, onProgress, resolve: finish(resolve), reject: finish(reject) })
       signal?.addEventListener('abort', abort, { once: true })
       try {
@@ -195,6 +195,13 @@ export function createBrokerProvider(config = {}) {
       }
       return result
     },
+    restrictedNetwork: launch.engine?.kind !== 'podman',
+    portableSupported: Boolean(config.native),
+    portableExport: (record, options) => call('portable-export', record, options),
+    portableImport: (record, options) => call('portable-import', record, options),
+    diskSpace: () => call('disk-space'),
+    capacity: () => call('capacity'),
+    configure: (record, options) => call('configure', record, options),
     recoverySupported: Boolean(launch.entrypoint),
     connectionState: () => disconnected ? 'disconnected' : 'connected',
     async reconnect({ signal } = {}) {

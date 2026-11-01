@@ -559,6 +559,8 @@ export function install(rt) {
           return ok(await rt.computerSetup.prepare(body))
         case 'computer-setup-cancel':
           return ok(await rt.computerSetup.cancel(body))
+        case 'computer-image-cleanup-verify':
+          return ok(await rt.computerSetup.updates.verify(body))
         case 'computer-image-cleanup-scan':
           return ok(await rt.computerSetup.updates.scan())
         case 'computer-image-cleanup-remove':
@@ -573,6 +575,15 @@ export function install(rt) {
           return ok(await rt.computerSetup.updates.download(body))
         case 'computer-image-cancel':
           return ok(await rt.computerSetup.updates.cancel(body))
+        case 'computer-tasks':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(body.method ? await rt.computer.tasks.command(body.method, body) : await rt.computer.tasks.list(body.botId))
+        case 'computer-portable-state':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.portable.state())
+        case 'computer-portable':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.portable.command(body.method, body))
         case 'computer-state':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.state())
@@ -606,6 +617,7 @@ export function install(rt) {
         case 'computer-storage-cancel':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.storageCancel(body))
+        case 'computer-configure':
         case 'computer-upgrade':
         case 'computer-recover':
         case 'computer-rollback':

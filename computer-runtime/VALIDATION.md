@@ -1118,3 +1118,52 @@ is 0.2.5-cua.14; source remains 0.2.4. Packaging log: `/tmp/cua14-package.log`.
   plugin verifies all 25 runtime files and loads the installed setup/cache modules.
   Artifact: `artifacts/ds-bot-0.2.5-cua.15.tgz`, 1,108,363 bytes,
   SHA-256 `ed57099038e8200770da12fc49d047c8b08b6516560b65602fe5a231fdaaefaa`.
+
+## cua.16 — storage evidence, desktop policies, portable backups and task queue
+
+- Legacy verification tests cover missing image labels, registered ownership,
+  changed engine/creation metadata, mismatched owners and stale inventory tokens.
+  Volume labels are never modified. Real user legacy storage remains untouched.
+- Policy tests cover stopped/generation requirements, CPU/memory admission and
+  retaining settings when grants change. Disk tests cover protective stop,
+  blocked restart, cleared protection after space recovery and rejection of
+  public portable requests containing host paths.
+- Portable tests cover ordered bounded chunks, ownership, explicit confirmation,
+  interrupted uploads, download/discard, roundtrip content/links, corrupt/truncated
+  archives, unsafe paths/parents/checksums and wrong images. The format checks
+  integrity, not authenticity, encryption, xattrs or a complete machine snapshot.
+- Queue tests cover single dispatch, explicit results, pause/resume, uncertain
+  delivery, restart, unrelated turns, stale attempts/generations, delayed delivery
+  cancellation and real public DSH AgentLoop screenshot/result completion.
+- `dev/computer-management-smoke.mjs` passes on real Docker: 1 CPU/1 GiB RAM,
+  offline refusal, exact-domain HTTPS success, rejection of other domains,
+  metadata IP, direct outbound connections and external guest DNS; reverting to
+  open mode removes the proxy/network. Streamed backup import restores the marker
+  into a new home and keeps the previous home. A corrupt import is refused; recovery
+  removes staging and preserves the current home. This uses only a temporary team and
+  removes its own labelled resources.
+- `dev/computer-management-ui-smoke.mjs` passes with real Chromium/React and the
+  actual host managers plus a fake desktop provider: 65 MiB export as two numbered
+  downloads (including an explicit fallback after a denied native picker),
+  reverse-order multi-file selection, chunked upload, explicit import,
+  CPU/RAM confirmation, queue persistence/pause/cancel and panel reload. No browser
+  errors. This validates the fallback download UI; native Windows save-picker and
+  Electron GUI acceptance are not claimed.
+- Isolated mock DSH regression passes all 52 steps and stops both test processes.
+  App runtime/patch tests pass 7/7; Python file/checkpoint/portable/proxy tests pass
+  20/20. Runtime payload now contains 30 verified files. Logs:
+  `/tmp/cua16-real.log`, `/tmp/cua16-ui.log`, `/tmp/cua16-loop.log`,
+  `/tmp/cua16-smoke.log`, `/tmp/cua16-app.log`, `/tmp/cua16-python.log`.
+- No Windows engine configuration or user desktop/container/volume was changed.
+  Podman restricted-network mode is explicitly unsupported. Existing Podman/XFS
+  quota enforcement retains its actual kernel probe; Docker protection remains
+  sampled admission/stopping, not a hard disk limit. Signed installer, real Podman,
+  Windows GUI and cross-browser-version acceptance remain outside this run.
+
+Final cua.16 verification: **1541 unit tests passed, 2 skipped, 0 failed**.
+Generated client/runtime checks and lint passed (existing warnings remain).
+Artifact: `artifacts/ds-bot-0.2.5-cua.16.tgz`, 1,132,762 bytes.
+SHA-256: `8bdb50e8a4eff2bcde9ae111961d840f427009c3815e6f9135cb4fc01bcac0f2`. Independent extraction verified all 30 runtime files,
+the installed loader, new host modules and exact generated client bytes.
+Only the staged package version is 0.2.5-cua.16; source remains 0.2.4.
+Packaging log: `/tmp/cua16-package.log`.

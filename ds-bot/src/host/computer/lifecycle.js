@@ -1,7 +1,8 @@
+import { desktopPolicy } from '../../../computer-runtime/broker/policy.mjs'
 import { randomUUID } from 'node:crypto'
 import { refused } from './contract.js'
 
-export const STORAGE_METHODS = ['checkpoint', 'restore', 'upgrade', 'recreate', 'rollback', 'delete-checkpoint', 'delete-home', 'prune-journal', 'recover']
+export const STORAGE_METHODS = ['checkpoint', 'restore', 'upgrade', 'recreate', 'rollback', 'delete-checkpoint', 'delete-home', 'prune-journal', 'recover', 'configure', 'portable-import', 'portable-export']
 const revision = record => record.homeRevision ?? null
 
 export function createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits }) {
@@ -29,7 +30,7 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
     kind: operation.method === 'delete-checkpoint' || operation.method === 'checkpoint' ? 'checkpoint' : 'home',
     ...(operation.checkpointId ? { checkpointId: operation.checkpointId } : {}),
     ...(operation.homeRevision !== undefined ? { homeRevision: operation.homeRevision } : {}),
-    staged: ['restore', 'upgrade'].includes(operation.method), targetImage: operation.targetImage, signal,
+    staged: ['restore', 'upgrade', 'portable-import'].includes(operation.method), targetImage: operation.targetImage, signal,
   })
   function deleted(draft, record, operation) {
     if (operation.method === 'delete-checkpoint') delete draft.checkpoints[operation.checkpointId]
@@ -42,7 +43,7 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
     const operation = (await store.load()).lifecycle?.[record.id]
     if (!operation) return
     if (operation.generation !== record.generation) throw refused('store-invalid', 'Storage recovery generation does not match.')
-    if (['checkpoint', 'restore', 'upgrade', 'delete-checkpoint', 'delete-home'].includes(operation.method)) {
+    if (['checkpoint', 'restore', 'upgrade', 'portable-import', 'delete-checkpoint', 'delete-home'].includes(operation.method)) {
       if (typeof provider.cleanup !== 'function') throw refused('unavailable', 'This provider cannot reconcile staged storage.')
       await remove(record, operation)
     }
@@ -61,6 +62,8 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
   async function run(method, args, task = {}) {
     await ready()
     task.signal?.throwIfAborted()
+    if (method.startsWith('portable-') && (!task.portablePath || !provider.portableSupported)) throw refused('unavailable', 'Portable backups require the native desktop runtime.')
+    if (method === 'configure') desktopPolicy(args.policy)
     if (!STORAGE_METHODS.includes(method)) throw refused('invalid', 'Unknown storage operation.')
     return administration(args.botId, async () => {
       const record = await assigned(args.botId)
@@ -81,14 +84,51 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
         let checkpoint = snapshot.checkpoints?.[args.checkpointId]
         if (['restore', 'delete-checkpoint'].includes(method) && (!checkpoint || checkpoint.computerId !== record.id)) throw refused('invalid', 'Choose a checkpoint belonging to this desktop.')
         if (['rollback', 'delete-home'].includes(method) && (!(record.previousHomes ?? []).includes(args.homeRevision) || args.homeRevision === revision(record))) throw refused('invalid', 'Choose a retained previous home.')
-        if (['restore', 'upgrade'].includes(method) && (record.previousHomes?.length ?? 0) >= 2) throw refused('resource-limit', 'Delete a previous home before restoring another checkpoint.')
+        if (['restore', 'upgrade', 'portable-import'].includes(method) && (record.previousHomes?.length ?? 0) >= 2) throw refused('resource-limit', 'Delete a previous home before restoring another checkpoint.')
         if (['checkpoint', 'recreate', 'upgrade'].includes(method) && checkpoints.length >= 2) throw refused('resource-limit', 'Delete a checkpoint before saving another one.')
         if (method === 'upgrade' && (!provider.images?.includes(args.targetImage) || provider.images.indexOf(args.targetImage) <= provider.images.indexOf(record.runtimeImage))) throw refused('image-incompatible', 'Choose a different configured desktop image.')
         if (method === 'restore' && checkpoint.image && checkpoint.image !== record.runtimeImage) throw refused('image-incompatible', 'Switch to the home paired with this checkpoint image before restoring it.')
-        const required = ['delete-checkpoint', 'delete-home'].includes(method) ? 'cleanup' : method
+        const required = method === 'portable-import' ? 'portableImport' : method === 'portable-export' ? 'portableExport' : ['delete-checkpoint', 'delete-home'].includes(method) ? 'cleanup' : method
         if (method !== 'prune-journal' && typeof provider[required] !== 'function') throw refused('unavailable', 'Desktop recovery is unavailable.')
+        if (method === 'configure') {
+          const policy = desktopPolicy(args.policy), capacity = await provider.capacity?.()
+          if (policy.network === 'restricted' && provider.restrictedNetwork === false) throw refused('unsupported', 'Allowed-domain networking requires Docker with isolated internal bridge support.')
+          if (capacity && (policy.cpu > capacity.cpu || policy.memoryMiB * 1024 ** 2 > capacity.memoryBytes - 256 * 1024 ** 2)) throw refused('resource-limit', 'The requested desktop resources exceed engine capacity.')
+        }
+        if (['checkpoint', 'restore', 'recreate', 'upgrade', 'portable-import'].includes(method) && limits().diskStopBytes && provider.diskSpace) {
+          const disk = await provider.diskSpace()
+          if (!Number.isSafeInteger(disk.freeBytes) || disk.freeBytes < limits().diskStopBytes) throw refused('resource-limit', 'Free engine storage before copying a desktop home.')
+        }
         await barrier(record)
-        if (method === 'prune-journal') {
+        if (method === 'portable-export' || method === 'portable-import') {
+          if (!task.portablePath || !provider.portableSupported) throw refused('unavailable', 'Portable backups require the native desktop runtime.')
+          if (method === 'portable-export') {
+            const result = await exclusive(record, task.signal, signal => provider.portableExport(record, {
+              path: task.portablePath, maxBytes: limits().checkpointMaxBytes, signal,
+            }))
+            controls.set(record.id, 'none')
+            return result
+          }
+          const homeRevision = randomUUID()
+          await begin(record, method, { homeRevision })
+          await exclusive(record, task.signal, signal => provider.portableImport(record, {
+            homeRevision, path: task.portablePath, maxBytes: limits().checkpointMaxBytes, signal,
+          }))
+          task.signal?.throwIfAborted()
+          await finish(record, draft => {
+            const current = draft.computers[record.id]
+            current.previousHomes = [...(record.previousHomes ?? []), revision(record)]
+            current.previousImages ??= {}
+            if (record.runtimeImage) current.previousImages[revision(record) ?? 'original'] = record.runtimeImage
+            current.homeRevision = homeRevision
+            advance(draft, record.id)
+          })
+        } else if (method === 'configure') {
+          const targetPolicy = desktopPolicy(args.policy)
+          await begin(record, method, { targetPolicy })
+          await exclusive(record, task.signal, signal => provider.configure(record, { signal }))
+          await finish(record, draft => { draft.computers[record.id].policy = targetPolicy; advance(draft, record.id) })
+        } else if (method === 'prune-journal') {
           // Generation changes make old call ids and observations unusable before receipts are removed.
           await store.update(draft => {
             advance(draft, record.id)

@@ -51,7 +51,7 @@ export function install(rt) {
   // `length`: the whole message's length when it went as a file (attachLong). `work`:
   // the work (handoffs.js) a result that came back goes on with. `merged`: a request
   // that takes in an earlier one its recipient had not read, under that one's exchange.
-  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work, computerHandoff }) {
+  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work, computerHandoff, computerTask }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -101,6 +101,9 @@ export function install(rt) {
     })
     const validate = computerHandoff ? await rt.computer?.handoffs.validateDelivery(computerHandoff, targetSessionId) : undefined
     if (computerHandoff && !validate) throw new Error('The desktop continuation is unavailable.')
+    const validateTask = computerTask ? await rt.computer?.tasks.validateDelivery(computerTask, targetSessionId) : undefined
+    if (computerTask && !validateTask) throw new Error('The desktop task is unavailable.')
+    validateTask?.()
     validate?.()
     if (steer) agent.steer(message)
     else agent.followup(message)

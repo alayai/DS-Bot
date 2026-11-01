@@ -72,11 +72,11 @@ export function ComputerUpdates({ call, changed }) {
         h('p', { style: { overflowWrap: 'anywhere' } }, `${t(item.kind === 'image' ? 'Image' : 'Storage volume')}: ${item.id}`),
         h('p', { className: 'bt-muted' }, item.reason ? t(item.reason) : t(item.missing ? 'Image is already absent; remove its saved entry.' : 'Unused resource')),
         item.bytes > 0 ? h('p', { className: 'bt-muted' }, `${(item.bytes / 1024 ** 2).toFixed(1)} MiB · ${t('Shared image layers may remain on disk.')}`) : null,
-        item.removable ? (confirmation?.id === item.id && confirmation.token === state.cleanup.token
+        item.removable || item.canVerify ? (confirmation?.id === item.id && confirmation.token === state.cleanup.token
           ? h('div', null,
-            h('p', { className: 'bt-error' }, t('Permanently delete this resource? This cannot be undone.')),
-            button('Confirm deletion', 'image-cleanup-remove', confirmation, state.busy),
+            h('p', { className: 'bt-error' }, t(item.canVerify ? 'Confirm the image reference recorded for this legacy volume? Engine labels are kept unchanged.' : 'Permanently delete this resource? This cannot be undone.')),
+            button(item.canVerify ? 'Confirm storage evidence' : 'Confirm deletion', item.canVerify ? 'image-cleanup-verify' : 'image-cleanup-remove', confirmation, state.busy),
             h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => setConfirmation(null) }, t('Cancel')))
           : h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: pending || state.busy,
-            onClick: () => setConfirmation({ token: state.cleanup.token, id: item.id, kind: item.kind }) }, t('Delete unused resource'))) : null))))
+            onClick: () => setConfirmation({ token: state.cleanup.token, id: item.id, kind: item.kind }) }, t(item.canVerify ? 'Verify legacy storage' : 'Delete unused resource'))) : null))))
 }

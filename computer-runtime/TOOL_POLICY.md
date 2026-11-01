@@ -7,7 +7,7 @@ rejected at binding and registry loading. YOLO changes CUA action approval only.
 
 | Surface | Current behavior | Required before `computer-only` can be enabled |
 |---|---|---|
-| Eight `computer_*` tools | Registered in current Bot Agent scope; execution rechecks Bot, Session, turn, grant and generation. Child Agents cannot use the desktop. | Retain these checks, including direct and nested dispatch. |
+| Nine `computer_*` tools | Registered in current Bot Agent scope; execution rechecks Bot, Session, turn, grant and generation. Child Agents cannot use the desktop. | Retain these checks, including direct and nested dispatch. |
 | Desktop start, stop, bind and storage | Authenticated `api/bot` management endpoints; no corresponding model tools. | Keep runtime paths, image IDs, volume names and permissions operator-owned. |
 | Native shell, filesystem, terminal and jobs | Continue under the existing DSH permission preset. The guest's isolation does not isolate these tools. | Deny host effects, background jobs and indirect execution for the restricted Agent. |
 | `run_code`, nested tools and wrappers | Public monotonic `tools.guard` covers ordinary and parent-token nested executor calls, as tested in `computer-dsh.test.js`. | Check every delegated effect, not just the outer tool name. A tool body can also call host services directly. |
@@ -34,3 +34,7 @@ execution guard. Both are useful, but neither by itself proves that every
 allowed trusted tool or hook has only guest effects. No private DSH API or
 runtime patch was introduced. A future isolated mode needs a reviewed closed
 composition and delegation policy; unsupported isolation must remain unavailable.
+
+The queued-task tool `computer_task_update` only records progress/results for the
+current fenced task and turn. Management and backup operations remain user-only.
+Queue pause/recovery and guest network policies do not isolate host tools.

@@ -92,3 +92,49 @@ test('real DSH agent loop sends a Computer screenshot to its next model request 
   assert.equal((await rt.computer.handoffs.list()).length, 0)
   await handle.dispose()
 })
+
+test('real DSH loop claims queued desktop work and records explicit completion without replay', { timeout: 20000 }, async t => {
+  const home = await mkdtemp(join(tmpdir(), 'ds-bot-task-loop-')), ctx = new Context()
+  t.after(async () => { await ctx.fiber.dispose(); await rm(home, { recursive: true, force: true }) })
+  for (const plugin of [SessionStore, SessionProjectionRegistry, AgentRegistry, LlmRuntime, SystemPrompt, ToolRuntime]) await ctx.plugin(plugin)
+  new LocalAttachmentStore(ctx, { dshHome: home })
+  let taskId, requests = 0, trigger
+  class TaskModel extends LlmAdapter {
+    async resolveModel(provider, id) { return { provider, id, name: id, inputModalities: ['text', 'image'] } }
+    async *stream() {
+      requests++
+      if (requests > 4) { yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text: 'Stop the fixture.' }; yield { type: 'finish', reason: { kind: 'stop' } }; return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'tool-call-delta', index: 0, id: `task-call-${requests}`, name: requests === 1 ? 'computer_observe' : 'computer_task_update',
+        argumentsDelta: JSON.stringify(requests === 1 ? {} : { taskId, status: 'completed', note: 'Observed the screenshot and verified the requested desktop state.' }) }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'], new TaskModel())
+  const rt = { ctx, home, config: { computer: { enabled: true }, computerProvider: createFakeComputer() }, load: async () => {}, readOnly: () => undefined,
+    isBotSession: id => id === 'queue-fixture', selfOf: () => 'queue-fixture', botOf: id => id === 'queue-fixture' ? { id } : undefined,
+    chatOf: () => 'queue-fixture', groupOwners: new Map(), live: new Map(), warn: () => {} }
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'user/message') { trigger = event.data.source; const live = rt.live.get(session.id); if (live) live.info = trigger }
+    if (event.type === 'turn/start') rt.live.set(session.id, { turn: event.data.turn, info: trigger })
+  })
+  install(rt)
+  const record = await rt.computer.bind({ botId: 'queue-fixture', grant: 'observe', expectedRevision: 0 })
+  await rt.computer.manage('start', { botId: record.botId, expectedGeneration: record.generation })
+  await ctx.plugin(AgentLoop)
+  const handle = await ctx.agents.create({ sessionId: 'queue-fixture', agentOptions: { provider: 'fixture', model: 'vision' } })
+  rt.resolveAgent = async () => handle.agent
+  rt.deliver = async args => {
+    const validate = await rt.computer.tasks.validateDelivery(args.computerTask, args.sessionId)
+    validate()
+    handle.agent.followup(createUserMessage({ source: { kind: 'ds-bot', role: 'resume', exchangeId: args.exchangeId }, content: [{ type: 'text', text: args.text }] }))
+    await ctx.sessions.flush(handle.agent.session)
+  }
+  const [task] = await rt.computer.tasks.command('add', { botId: record.botId, expectedGeneration: record.generation, goal: 'Observe the desktop and report verification.' })
+  taskId = task.id
+  const ended = new Promise(resolve => ctx.on('session/event', (_session, event) => { if (event.type === 'turn/end') resolve(event.data) }))
+  await rt.computer.tasks.tick(); const end = await ended
+  assert.equal(requests, 2, JSON.stringify({end,messages:handle.agent.session.deriveMessages()}))
+  assert.equal((await rt.computer.tasks.list(record.botId))[0].status, 'completed')
+  await rt.computer.tasks.tick(); assert.equal(requests, 2)
+})

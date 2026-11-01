@@ -29,9 +29,9 @@ export function createImageUpdates({ load, data, save, writable, payload, servic
         await (await payload()).clearDownloadCache()
         cache = { bytes: 0 }
       } else await service().maintenance(async request => {
-        if (method === 'remove') {
+        if (['remove', 'verify'].includes(method)) {
           if (!cleanup || args.token !== cleanup.token) throw refused('conflict', 'Scan again before deleting.')
-          const result = await request('remove', { token: args.token, id: args.id, kind: args.kind })
+          const result = await request(method, { token: args.token, id: args.id, kind: args.kind })
           if (result.kind === 'image') {
             data().config.images = (data().config.images ?? []).filter(id => id !== result.removed)
             if (data().imageUpdate?.candidate?.image === result.removed) {
@@ -133,5 +133,5 @@ export function createImageUpdates({ load, data, save, writable, payload, servic
     operation?.controller.abort()
     await operation?.done
   }
-  return { state, get busy() { return Boolean(starting || operation) }, scan: () => maintain('scan'), remove: args => maintain('remove', args), clearCache: () => maintain('cache-clear'), check: args => begin('check', args), download: args => begin('download', args), cancel, dispose }
+  return { state, get busy() { return Boolean(starting || operation) }, scan: () => maintain('scan'), verify: args => maintain('verify', args), remove: args => maintain('remove', args), clearCache: () => maintain('cache-clear'), check: args => begin('check', args), download: args => begin('download', args), cancel, dispose }
 }

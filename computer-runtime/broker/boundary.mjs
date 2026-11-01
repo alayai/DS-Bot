@@ -1,3 +1,4 @@
+import { desktopPolicy } from './policy.mjs'
 import { randomUUID } from 'node:crypto'
 
 export function quotaArguments(bytes = 0, engine) {
@@ -76,15 +77,18 @@ export function assertContainer(data, value, image) {
   const labels = data?.Config?.Labels ?? {}
   const config = data?.HostConfig ?? {}
   const mount = data?.Mounts?.[0]
+  const policy = desktopPolicy(value.record.policy)
+  const networkOK = policy.network === 'offline' ? config.NetworkMode === 'none'
+    : policy.network === 'restricted' ? config.NetworkMode === `dsbot-net-${value.record.id}` : OPEN_NETWORK.has(config.NetworkMode)
   if (labels['org.ds-bot.computer.id'] !== value.record.id || labels['org.ds-bot.computer.owner'] !== value.record.botId
     || labels['org.ds-bot.computer.protocol'] !== '1' || data.Image !== image
-    || data.Config.User !== '1000:1000' || config.Privileged || !OPEN_NETWORK.has(config.NetworkMode)
+    || data.Config.User !== '1000:1000' || config.Privileged || !networkOK
     || config.PidMode === 'host' || config.IpcMode === 'host' || config.UTSMode === 'host'
     || config.Devices?.length || config.DeviceRequests?.length || config.Binds?.length || config.CapAdd?.length
     || !config.CapDrop?.includes('ALL') || !config.SecurityOpt?.includes('no-new-privileges')
     || config.SecurityOpt?.some(option => option !== 'no-new-privileges')
-    || config.Memory !== 4 * 1024 ** 3 || config.MemorySwap !== 4 * 1024 ** 3
-    || config.NanoCpus !== 2_000_000_000 || config.PidsLimit !== 512
+    || config.Memory !== policy.memoryMiB * 1024 ** 2 || config.MemorySwap !== policy.memoryMiB * 1024 ** 2
+    || config.NanoCpus !== policy.cpu * 1_000_000_000 || config.PidsLimit !== 512
     || Object.keys(config.PortBindings ?? {}).length || config.PublishAllPorts
     || config.RestartPolicy?.Name !== 'no'
     || data.Mounts?.length !== 1 || mount?.Type !== 'volume'

@@ -1,11 +1,13 @@
 export const DEFAULT_RESOURCE_LIMITS = Object.freeze({
-  maxRunning: 2, idleStopMs: 900_000, freeWarningBytes: 2 * 1024 ** 3, homeWarningBytes: 10 * 1024 ** 3, newHomeQuotaBytes: 0, checkpointMaxBytes: 20 * 1024 ** 3,
+  diskStopBytes: 512 * 1024 ** 2, maxRunning: 2, idleStopMs: 900_000, freeWarningBytes: 2 * 1024 ** 3, homeWarningBytes: 10 * 1024 ** 3, newHomeQuotaBytes: 0, checkpointMaxBytes: 20 * 1024 ** 3,
 })
 
 export function resourceLimits(value) {
   if (!value || !Number.isInteger(value.maxRunning) || value.maxRunning < 1 || value.maxRunning > 8
     || !Number.isSafeInteger(value.idleStopMs) || value.idleStopMs < 0 || value.idleStopMs > 7 * 86400_000
     || (value.idleStopMs !== 0 && value.idleStopMs < 60_000)
+    || !Number.isSafeInteger(value.diskStopBytes ?? DEFAULT_RESOURCE_LIMITS.diskStopBytes)
+    || (value.diskStopBytes !== undefined && value.diskStopBytes !== 0 && (value.diskStopBytes < 256 * 1024 ** 2 || value.diskStopBytes > 1024 ** 4))
     || !Number.isSafeInteger(value.freeWarningBytes) || value.freeWarningBytes < 256 * 1024 ** 2 || value.freeWarningBytes > 1024 ** 4
     || !Number.isSafeInteger(value.homeWarningBytes) || value.homeWarningBytes < 256 * 1024 ** 2 || value.homeWarningBytes > 1024 ** 4
     || !Number.isSafeInteger(value.checkpointMaxBytes ?? DEFAULT_RESOURCE_LIMITS.checkpointMaxBytes)

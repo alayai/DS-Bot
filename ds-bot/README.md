@@ -36,7 +36,7 @@ desktop operations. Existing desktops retain their original image after an updat
 **Desktop resources** saves running-desktop and idle-stop limits, free-space and
 home-size warning levels, and displays measured disk usage. Hard home quotas are
 available only for Podman on XFS with verified kernel enforcement, and only for new
-homes. Docker named volumes provide warnings; backup copies and engine root layers
+homes. Docker named volumes provide warnings and sampled low-space protective stops; backup copies and engine root layers
 are outside the per-home quota. This is not a Windows Docker disk-size limit.
 
 Installing the plugin alone does not start or download anything. An explicit
@@ -44,7 +44,9 @@ Installing the plugin alone does not start or download anything. An explicit
 explicit Broker/WSL configurations continue to work and are never migrated to
 a different engine automatically. Desktops initially allow observation only;
 select **Observe and operate** to enable Bot input and optionally choose YOLO.
-Running desktops can reach the internet and their traffic is not filtered; other Bot tools retain their existing permissions.
+By default desktops have open internet; stopped-desktop settings now offer offline or Docker domain-restricted networking; other Bot tools retain their existing permissions.
+
+**Desktop CPU, memory and network** configures each stopped desktop. **External desktop backup** saves/imports streamed home backups with checksums and retained rollback; it supports Windows multi-file selection for numbered parts. **Desktop task queue** persists goals, progress, pause and explicit reviewed resume. Legacy storage can be verified against saved image references without changing engine labels. See the runtime guide for backend limits, backup privacy and the distinction between sampled disk protection and hard quotas.
 
 `start-cua.ps1` remains available for the separate source-app WSL test setup.
 See the included `computer-runtime/README.md` for configuration and limitations.

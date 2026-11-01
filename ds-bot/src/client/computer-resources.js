@@ -9,6 +9,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
     revision: state.revision, maxRunning: state.limits.maxRunning,
     idleMinutes: state.limits.idleStopMs / 60_000,
     freeGiB: state.limits.freeWarningBytes / GIB, homeGiB: state.limits.homeWarningBytes / GIB,
+    stopGiB: (state.limits.diskStopBytes ?? 512 * 1024 ** 2) / GIB,
     checkpointGiB: (state.limits.checkpointMaxBytes ?? 20 * GIB) / GIB,
     quotaGiB: (state.limits.newHomeQuotaBytes ?? 0) / GIB,
   }
@@ -23,6 +24,9 @@ export function ComputerResources({ state, record, busy, save, measure }) {
     h('p', { className: 'bt-muted' }, t('These settings apply to every Bot desktop on this DSH host. Changing the running desktop limit never forcibly stops a desktop.')),
     input('Maximum running desktops', 'maxRunning', 1, 8),
     input('Idle stop after minutes (0 disables)', 'idleMinutes', 0, 10080),
+    input('Stop desktops below free space (GiB, 0 disables)', 'stopGiB', 0, 1024, 0.25),
+    h('p', { className: 'bt-muted' }, t('Low-space protection checks the engine every 30 seconds, stops only Bot desktops, and blocks new starts. It is not a hard quota; fast writes can exceed the threshold between checks.')),
+    record?.diskProtection ? h('p', { role: 'status', className: 'bt-error' }, t('This desktop was stopped to protect low disk space. Free engine storage, then start it manually.')) : null,
     input('Warn below free space (GiB)', 'freeGiB', 0.25, 1024, 0.25),
     input('Checkpoint size limit (GiB)', 'checkpointGiB', 1, 1024),
     input('Warn above home size (GiB)', 'homeGiB', 0.25, 1024, 0.25),
@@ -34,6 +38,7 @@ export function ComputerResources({ state, record, busy, save, measure }) {
     h('div', { className: 'bt-computer-row' },
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || !draft,
         onClick: () => save({ expectedRevision: values.revision, limits: {
+          diskStopBytes: Number(values.stopGiB) * GIB,
           maxRunning: Number(values.maxRunning), idleStopMs: Number(values.idleMinutes) * 60_000,
           freeWarningBytes: Number(values.freeGiB) * GIB, homeWarningBytes: Number(values.homeGiB) * GIB,
           checkpointMaxBytes: Number(values.checkpointGiB) * GIB,

@@ -1,3 +1,4 @@
+import { desktopPolicy } from '../../../computer-runtime/broker/policy.mjs'
 import { checkTransfer, CHUNK_SIZE } from '../../shared/computer-files.js'
 import { DEFAULT_RESOURCE_LIMITS, resourceLimits, resourceWarnings } from '../../shared/computer-resources.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -6,6 +7,8 @@ import { checkActions, checkFrame, checkId, checkProvider, refused } from './con
 import { createComputerStore } from './store.js'
 import { createLeases } from './leases.js'
 import { contextFile, fileBytes, fileName } from './artifacts.js'
+import { createDesktopTasks } from './tasks.js'
+import { createPortableBackups } from './portable.js'
 import { createStorageJobs } from './storage-jobs.js'
 import { createComputerStorage } from './lifecycle.js'
 import { createComputerHandoffs } from './handoffs.js'
@@ -118,7 +121,9 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     }
     const turnId = rt.live.get(sessionId)?.turn
     if (!Number.isSafeInteger(turnId)) throw refused('owner-denied', 'A running Bot turn is required.')
-    return { botId, sessionId, turnId }
+    const who = { botId, sessionId, turnId }
+    tasks.guard(who)
+    return who
   }
   function compatible(record) {
     if (provider.image && !(provider.images ?? [provider.image]).includes(record.runtimeImage)) {
@@ -160,6 +165,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   async function stillOwns(record, who) {
     writable()
+    tasks.guard(who)
     const current = await assigned(who.botId)
     if (current.id !== record.id || current.generation !== record.generation) throw refused('stale-generation', 'The assigned desktop changed.')
     if (!rt.isBotSession(who.sessionId) || rt.selfOf(who.sessionId) !== who.botId || rt.live.get(who.sessionId)?.turn !== who.turnId) {
@@ -216,8 +222,11 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     store, ready, owner, assigned, available, barrier, administration, human, controls, stillOwns,
     hasHuman: id => humans.has(id), claim: (record, who) => leases.acquire(record, who),
   })
+  const tasks = createDesktopTasks(rt, { store, ready, assigned, owner, administration, barrier, controls, provider })
   const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits })
   const storage = storageManager.run
+  const portable = createPortableBackups({ directory: join(rt.home, 'computers', 'portable'), ready, assigned, run: storage, limits, supported: () => provider.portableSupported === true,
+    measure: typeof provider.diagnostics === 'function' ? async record => (await diagnostics({ botId: record.botId, expectedGeneration: record.generation })).storage.bytes : undefined })
   const storageJobs = createStorageJobs({ ready, assigned, run: storage, now: clock })
   async function maintenance(work) {
     await ready()
@@ -225,11 +234,16 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (active.size || managing.size) throw refused('busy', 'Wait for desktop operations to finish before cleanup.')
     maintenanceBusy = true
     try {
-      const { revision, computers, checkpoints = {}, lifecycle = {} } = await store.load()
-      if (Object.keys(lifecycle).length) throw refused('recovery-required', 'Finish desktop storage recovery before cleanup.')
-      return await work((action, options = {}) => provider.maintenance(action, {
-        ...options, registry: { revision, computers, checkpoints, lifecycle },
-      }))
+      return await work(async (action, options = {}) => {
+        const { revision, computers, checkpoints = {}, lifecycle = {}, storageClaims = {} } = await store.load()
+        if (Object.keys(lifecycle).length) throw refused('recovery-required', 'Finish desktop storage recovery before cleanup.')
+        const result = await provider.maintenance(action, { ...options, registry: { revision, computers, checkpoints, lifecycle, storageClaims } })
+        if (result.verified) await store.update(draft => {
+          draft.storageClaims ??= {}
+          draft.storageClaims[result.verified.name] = { stamp: result.verified.stamp, image: result.verified.image }
+        })
+        return result
+      })
     } finally { maintenanceBusy = false }
   }
   async function registerImage(image) {
@@ -250,7 +264,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       computers.push({
         id: record.id, botId: record.botId, generation: record.generation, grant: record.grant,
         archived: record.archived, executionPolicy: record.executionPolicy, approvalMode: record.approvalMode ?? 'required',
-        runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {}, homeQuotaBytes: record.homeQuotaBytes ?? 0,
+        diskProtection: record.diskProtection ?? null, restrictedNetwork: provider.restrictedNetwork !== false, policy: desktopPolicy(record.policy), runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {}, homeQuotaBytes: record.homeQuotaBytes ?? 0,
         storageJob: storageJobs.view(record.botId),
         previousHomes: record.previousHomes ?? [], recoveryPending: Boolean(stored.lifecycle?.[record.id]),
         provider: provider.kind, phase, control: controls.get(record.id) ?? 'none',
@@ -403,6 +417,22 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       || ['running', 'failed'].includes(recovery.status)) return
     sampling = (async () => {
       await ready()
+      if (limits().diskStopBytes && provider.diskSpace) {
+        const disk = await provider.diskSpace()
+        if (!Number.isSafeInteger(disk.freeBytes) || disk.freeBytes < 0) throw refused('unavailable', 'Invalid engine disk measurement.')
+        if (disk.freeBytes < limits().diskStopBytes) {
+          for (const record of Object.values((await store.load()).computers)) {
+            if (managing.has(record.botId) || (await provider.inspect(record)).phase !== 'ready') continue
+            await administration(record.botId, async () => {
+              await tasks.interruptComputer(record.id)
+              await barrier(record)
+              await provider.stop(record)
+              await store.update(draft => { draft.computers[record.id].diskProtection = { at: clock(), freeBytes: disk.freeBytes }; draft.computers[record.id].humanPaused = false })
+              controls.set(record.id, 'none')
+            })
+          }
+        }
+      }
       for (const record of Object.values((await store.load()).computers)) {
         if (closed) break
         if (record.archived || active.has(record.id) || managing.has(record.botId)
@@ -440,6 +470,8 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       const id = existing?.id ?? `cmp_${randomUUID()}`
       const record = {
         ...(provider.image ? { runtimeImage: existing?.runtimeImage ?? provider.image } : {}),
+        ...(existing?.policy ? { policy: existing.policy } : {}),
+        ...(existing?.diskProtection ? { diskProtection: existing.diskProtection } : {}),
         ...(existing?.homeRevision ? { homeRevision: existing.homeRevision } : {}),
         ...(existing?.previousHomes ? { previousHomes: existing.previousHomes } : {}),
         ...(existing?.previousImages ? { previousImages: existing.previousImages } : {}),
@@ -611,11 +643,16 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   async function reserveRuntime(record, work) {
     return administration('runtime-start', async () => {
-      let running = 0
+      let running = 0, memoryMiB = desktopPolicy(record.policy).memoryMiB + (record.policy?.network === 'restricted' ? 128 : 0)
+      const disk = await provider.diskSpace?.()
+      if (disk && (!Number.isSafeInteger(disk.freeBytes) || disk.freeBytes < limits().diskStopBytes)) throw refused('resource-limit', 'Engine disk space is below the protective stop level. Free space before starting a desktop.')
+      const capacity = await provider.capacity?.()
+      if (capacity && desktopPolicy(record.policy).cpu > capacity.cpu) throw refused('resource-limit', 'The requested CPU count exceeds the engine capacity.')
       for (const other of Object.values((await store.load()).computers)) {
         if (other.id === record.id) continue
-        if ((await provider.inspect(other)).phase !== 'stopped') running++
+        if ((await provider.inspect(other)).phase !== 'stopped') { running++; memoryMiB += desktopPolicy(other.policy).memoryMiB + (other.policy?.network === 'restricted' ? 128 : 0) }
       }
+      if (capacity && memoryMiB * 1024 ** 2 > capacity.memoryBytes - 256 * 1024 ** 2) throw refused('resource-limit', 'The running desktops exceed available engine memory. Stop a desktop or lower its memory limit.')
       if (running >= limits().maxRunning) throw refused('resource-limit', 'The running desktop limit was reached. Stop another desktop first.')
       return work()
     })
@@ -651,8 +688,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         if (['bot/computer-resource-limit', 'bot/computer-busy'].includes(error.code)) controls.set(record.id, 'none')
         throw error
       })
+      await store.update(draft => { delete draft.computers[record.id].diskProtection })
       controls.set(record.id, 'none')
     } else if (method === 'stop') {
+      await tasks.interruptComputer(record.id)
       await barrier(record)
       await provider.stop(record)
       await store.update(draft => {
@@ -967,9 +1006,11 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   async function dispose() {
     closed = true
+    tasks.dispose()
     recoveryAbort?.abort()
     for (const operation of active.values()) operation.controller.abort()
     try {
+      await portable.dispose()
       await storageJobs.dispose()
       await recoveryTask
       await sampling?.catch(() => {})
@@ -983,5 +1024,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, storageStart: storageJobs.start, storageCancel: storageJobs.cancel, maintenance, registerImage, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, tasks, portable, storageStart: storageJobs.start, storageCancel: storageJobs.cancel, maintenance, registerImage, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }

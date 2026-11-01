@@ -2,6 +2,8 @@ import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { checkId, refused } from './contract.js'
+import { desktopPolicy } from '../../../computer-runtime/broker/policy.mjs'
+import { validateTasks } from './tasks.js'
 import { resourceLimits } from '../../shared/computer-resources.js'
 
 const empty = () => ({ version: 1, revision: 0, computers: {}, operations: {} })
@@ -12,6 +14,11 @@ function validate(value) {
     || !value.operations || Array.isArray(value.operations) || typeof value.operations !== 'object') {
     throw refused('store-invalid', 'Computer metadata is invalid; it has not been overwritten.')
   }
+  if (value.tasks !== undefined) validateTasks(value.tasks, value.computers)
+  if (value.storageClaims !== undefined && (!value.storageClaims || Array.isArray(value.storageClaims)
+    || Object.keys(value.storageClaims).length > 10000 || Object.entries(value.storageClaims).some(([name, claim]) =>
+      !/^dsbot-cmp_[a-f0-9-]{36}-(?:home(?:-[a-f0-9-]{36})?|backup-[a-f0-9-]{36})$/.test(name)
+      || !/^[a-f0-9]{64}$/.test(claim?.stamp ?? '') || !/^sha256:[a-f0-9]{64}$/.test(claim?.image ?? '')))) throw refused('store-invalid', 'Invalid legacy storage evidence.')
   if (value.limits !== undefined) {
     try { resourceLimits(value.limits) } catch { throw refused('store-invalid', 'Invalid desktop resource limits.') }
   }
@@ -26,23 +33,26 @@ function validate(value) {
       || (record.previousHomes !== undefined && (!Array.isArray(record.previousHomes) || record.previousHomes.length > 2 || record.previousHomes.some(id => id !== null && !/^[a-f0-9-]{36}$/.test(id))))
       || (record.previousImages !== undefined && (!record.previousImages || Array.isArray(record.previousImages) || typeof record.previousImages !== 'object' || Object.entries(record.previousImages).some(([key, image]) => !(record.previousHomes ?? []).includes(key === 'original' ? null : key) || !/^sha256:[a-f0-9]{64}$/.test(image))))
       || typeof record.archived !== 'boolean' || (record.humanPaused !== undefined && typeof record.humanPaused !== 'boolean')) throw refused('store-invalid', 'Invalid Computer record.')
+    if (record.diskProtection !== undefined && (!Number.isFinite(record.diskProtection?.at) || !Number.isSafeInteger(record.diskProtection?.freeBytes) || record.diskProtection.freeBytes < 0)) throw refused('store-invalid', 'Invalid disk protection record.')
+    if (record.policy !== undefined) desktopPolicy(record.policy)
     checkId(record.botId)
   }
   if (value.lifecycle !== undefined) {
     if (!value.lifecycle || typeof value.lifecycle !== 'object' || Array.isArray(value.lifecycle)) throw refused('store-invalid', 'Invalid storage recovery journal.')
     for (const [id, item] of Object.entries(value.lifecycle)) {
+      if (item?.method === 'configure') desktopPolicy(item.targetPolicy)
       if (item?.computerId !== id || !value.computers[id] || item.generation !== value.computers[id].generation
         || !/^[a-f0-9-]{36}$/.test(item.id) || !Number.isFinite(item.at)
-        || !['checkpoint', 'restore', 'upgrade', 'recreate', 'rollback', 'delete-checkpoint', 'delete-home'].includes(item.method)
+        || !['checkpoint', 'restore', 'upgrade', 'recreate', 'rollback', 'delete-checkpoint', 'delete-home', 'configure', 'portable-import'].includes(item.method)
         || (['checkpoint', 'restore', 'upgrade', 'delete-checkpoint'].includes(item.method) && !/^[a-f0-9-]{36}$/.test(item.checkpointId))
-        || (['restore', 'upgrade', 'rollback', 'delete-home'].includes(item.method) && item.homeRevision !== null && !/^[a-f0-9-]{36}$/.test(item.homeRevision))
-        || (['restore', 'upgrade', 'delete-home'].includes(item.method) && item.homeRevision === (value.computers[id].homeRevision ?? null))
+        || (['restore', 'upgrade', 'portable-import', 'rollback', 'delete-home'].includes(item.method) && item.homeRevision !== null && !/^[a-f0-9-]{36}$/.test(item.homeRevision))
+        || (['restore', 'upgrade', 'portable-import', 'delete-home'].includes(item.method) && item.homeRevision === (value.computers[id].homeRevision ?? null))
         || (['rollback', 'delete-home'].includes(item.method) && !value.computers[id].previousHomes?.includes(item.homeRevision))
         || (['restore', 'upgrade', 'recreate', 'delete-checkpoint'].includes(item.method) && value.checkpoints?.[item.checkpointId]?.computerId !== id)
         || (item.targetImage !== undefined && !/^sha256:[a-f0-9]{64}$/.test(item.targetImage))
         || (item.method === 'upgrade' && (!item.targetImage || item.targetImage === value.computers[id].runtimeImage))
         || (item.method === 'checkpoint' && value.checkpoints?.[item.checkpointId])
-        || (['restore', 'upgrade'].includes(item.method) && (item.homeRevision === null || value.computers[id].previousHomes?.includes(item.homeRevision)))) {
+        || (['restore', 'upgrade', 'portable-import'].includes(item.method) && (item.homeRevision === null || value.computers[id].previousHomes?.includes(item.homeRevision)))) {
         throw refused('store-invalid', 'Invalid storage recovery operation.')
       }
     }

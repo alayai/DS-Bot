@@ -5,6 +5,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
 import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, quotaArguments, probeHomeQuota } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
+import { portableHome } from './portable.mjs'
+import { prepareNetwork, verifyNetwork, removeNetwork, stopNetwork, proxyEnvironment, browserBootstrap } from './network.mjs'
+import { desktopPolicy } from './policy.mjs'
 import { maintainStorage } from './maintenance.mjs'
 import { createTransfers } from './transfers.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
@@ -81,6 +84,7 @@ function target(record) {
   }
   if (record.botId !== value.record.botId || record.generation < value.record.generation) fail('Stale desktop identity.')
   if ((record.homeQuotaBytes ?? 0) !== (value.record.homeQuotaBytes ?? 0)) fail('Home quotas cannot be changed on an existing desktop.')
+  if (record.generation === value.record.generation && JSON.stringify(desktopPolicy(record.policy)) !== JSON.stringify(desktopPolicy(value.record.policy))) fail('Stale desktop policy.')
   if (record.generation === value.record.generation && (homeVolume(record) !== value.volume || (record.runtimeImage && value.record.runtimeImage && record.runtimeImage !== value.record.runtimeImage))) fail('Stale home identity.')
   if (record.generation > value.record.generation) {
     if (value.busy || value.fence) fail('Revoke the old desktop generation first.')
@@ -91,18 +95,24 @@ function target(record) {
   value.record = { ...record }
   return value
 }
-function networkMode() {
+function networkMode(value) {
+  const mode = desktopPolicy(value?.record.policy).network
+  if (mode === 'offline') return 'none'
+  if (mode === 'restricted') return `dsbot-net-${value.record.id}`
   return engine?.kind === 'podman' ? 'podman' : 'bridge'
 }
 function createArgs(value) {
+  const policy = desktopPolicy(value.record.policy)
   return [
     'create', '--name', value.name,
     '--label', `org.ds-bot.computer.id=${value.record.id}`, '--label', `org.ds-bot.computer.owner=${value.record.botId}`,
     '--label', 'org.ds-bot.computer.protocol=1',
-    '--init', '--user', '1000:1000', '--network', networkMode(), '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--pids-limit', '512', '--shm-size', '256m', '--restart', 'no',
+    '--init', '--user', '1000:1000', '--network', networkMode(value), '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '--memory', `${policy.memoryMiB}m`, '--memory-swap', `${policy.memoryMiB}m`, '--cpus', String(policy.cpu), '--pids-limit', '512', '--shm-size', '256m', '--restart', 'no',
     '--log-opt', 'max-size=5m', '--log-opt', 'max-file=2',
-    '--mount', `type=volume,source=${value.volume},target=/home/cua`, imageOf(value),
+    ...proxyEnvironment(value),
+    '--mount', `type=volume,source=${value.volume},target=/home/cua`,
+    ...(policy.network === 'restricted' ? ['--entrypoint', 'python3', imageOf(value), '-c', browserBootstrap] : [imageOf(value)]),
   ]
 }
 async function readContainer(value, signal) {
@@ -129,7 +139,7 @@ async function waitReady(value, signal) {
 async function replaceOfflineContainer(value, data, signal) {
   if (value.replacing) return value.replacing
   value.replacing = (async () => {
-    const opened = { ...data, HostConfig: { ...data.HostConfig, NetworkMode: networkMode() } }
+    const opened = { ...data, HostConfig: { ...data.HostConfig, NetworkMode: networkMode(value) } }
     try { assertContainer(opened, value, imageOf(value)) }
     catch (error) { fail(error.message) }
     const running = Boolean(data.State?.Running)
@@ -148,10 +158,11 @@ async function replaceOfflineContainer(value, data, signal) {
 }
 async function inspect(value, signal) {
   let data = await readContainer(value, signal)
-  if (data?.HostConfig?.NetworkMode === 'none') data = await replaceOfflineContainer(value, data, signal)
+  if (data?.HostConfig?.NetworkMode === 'none' && !value.record.policy) data = await replaceOfflineContainer(value, data, signal)
   if (!data) return null
   try {
     assertContainer(data, value, imageOf(value))
+    await verifyNetwork(value, data, { docker, image: baseImage, signal })
     const volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0]
     assertVolume(volume, value)
     assertHomeImage(volume, value.record, imageOf(value), data.Image)
@@ -312,6 +323,7 @@ async function revoke(value) {
           // A new Broker cannot account for input from a dead predecessor.
           // Stop its container; only an explicit start can resume this desktop.
           await docker(['stop', '--time', '5', value.name])
+          await stopNetwork(value, { docker, image: baseImage })
         } else {
           const list = async () => {
             const response = JSON.parse((await docker(['exec', value.name, 'cua-driver', 'sessions', 'list', '--json', '--socket', socket])).stdout)
@@ -367,6 +379,7 @@ async function start(value, signal) {
   const record = value.record
   await validateImage(image, signal)
   if (record.homeQuotaBytes) await probeHomeQuota(docker, image, engine, signal)
+  await prepareNetwork(value, { docker, engine, image: baseImage, signal })
   let info = await inspect(value, signal)
   if (!info) {
     let volume
@@ -417,6 +430,21 @@ async function dispatch(method, record, options, signal, onProgress) {
     if (result.kind === 'image') allowedImages.splice(allowedImages.indexOf(result.removed), 1)
     return result
   }
+  if (method === 'disk-space') {
+    const helper = `dsbot-space-${randomUUID()}`
+    try {
+      const result = await docker(['run', '--rm', '--name', helper, '--read-only', '--network', 'none', '--user', '1000:1000',
+        '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--memory', '64m', '--memory-swap', '64m', '--cpus', '0.5', '--pids-limit', '16',
+        '--entrypoint', 'python3', baseImage, '-c', "import os,json;s=os.statvfs('/');print(json.dumps({'freeBytes':s.f_bavail*s.f_frsize,'totalBytes':s.f_blocks*s.f_frsize}))"], signal)
+      return JSON.parse(result.stdout)
+    } finally { await docker(['rm', '-f', helper]).catch(() => {}) }
+  }
+  if (method === 'capacity') {
+    const info = JSON.parse((await docker(['info', '--format', '{{json .}}'], signal)).stdout)
+    const cpu = info.NCPU ?? info.host?.cpus, memoryBytes = info.MemTotal ?? info.host?.memTotal
+    if (!Number.isSafeInteger(cpu) || !Number.isSafeInteger(memoryBytes)) fail('The engine capacity could not be verified.')
+    return { cpu, memoryBytes }
+  }
   if (method === 'health') return { protocolVersion: 1, runtimeKey }
   const value = target(record)
   const image = imageOf(value)
@@ -443,6 +471,20 @@ async function dispatch(method, record, options, signal, onProgress) {
   value.abort = abort
   signal = AbortSignal.any([signal, abort.signal])
   try {
+  if (method === 'portable-export' || method === 'portable-import') {
+    const info = await inspect(value, signal)
+    if (info?.State.Running) fail('Stop the desktop before transferring a backup.')
+    const result = await portableHome(method === 'portable-import' ? 'import' : 'export', value, options, { docker, image, engine, executable, signal })
+    if (method === 'portable-import' && info) await docker(['rm', value.name], signal)
+    return result
+  }
+  if (method === 'configure') {
+    const info = await inspect(value, signal)
+    if (info?.State.Running) fail('Stop the desktop before changing its policy.')
+    if (info) await docker(['rm', value.name], signal)
+    await removeNetwork(value, { docker, image: baseImage, signal })
+    return { configured: true }
+  }
     if (method === 'start') return await start(value, signal)
     if (method === 'stop') {
       closeViewers(value)
@@ -454,10 +496,11 @@ async function dispatch(method, record, options, signal, onProgress) {
       value.client = null
       const info = await inspect(value, signal)
       if (info?.State.Running) await docker(['stop', '--time', '5', value.name], signal)
+      await stopNetwork(value, { docker, image: baseImage, signal })
       return null
     }
     if (method === 'quota-check') return probeHomeQuota(docker, image, engine, signal)
-    if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: 'open', isolation: 'container' }
+    if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: desktopPolicy(record.policy).network, isolation: 'container' }
     if (method === 'cleanup') {
       if (options.targetImage && options.staged) await retireCandidate(value, options, signal)
       return await cleanup(value, options, docker, signal)
@@ -595,6 +638,7 @@ async function shutdown() {
     await revoke(value)
     const info = await inspect(value)
     if (info?.State.Running) await docker(['stop', '--time', '5', value.name])
+    await stopNetwork(value, { docker, image: baseImage })
   }))
   process.exit(0)
 }

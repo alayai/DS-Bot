@@ -1646,3 +1646,39 @@ test('cleanup holds a global management barrier and forwards only the persisted 
   await h.manage('start')
   assert.equal((await h.service.status(h.exec())).phase, 'ready')
 })
+
+test('per-desktop settings require stopped generation and fit engine capacity', async t => {
+  const provider = createFakeComputer(); provider.configure = async () => {}; provider.capacity = async () => ({ cpu: 4, memoryBytes: 8 * 1024 ** 3 })
+  const h = await setup(t, { provider }); let record = await h.start()
+  const policy = { cpu: 1, memoryMiB: 1024, network: 'offline' }
+  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy }), fails('not-stopped'))
+  await h.manage('stop')
+  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy: { ...policy, cpu: 8 } }), fails('resource-limit'))
+  await h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy })
+  record = (await h.service.state()).computers[0]
+  assert.equal(record.policy.network, 'offline'); assert.equal(record.policy.memoryMiB, 1024)
+  await h.bind('a', 'observe')
+  record = (await h.service.state()).computers[0]
+  assert.equal(record.policy.network, 'offline'); assert.equal(record.policy.memoryMiB, 1024)
+  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation - 1, policy }), fails('stale-generation'))
+  await h.manage('start')
+})
+
+test('disk protection stops only registered running desktops and refuses unsafe restarts', async t => {
+  let freeBytes = 10 * 1024 ** 3
+  const provider = createFakeComputer(); provider.diskSpace = async () => ({ freeBytes }); provider.diagnostics = async () => ({ storage: { bytes: 1, freeBytes, totalBytes: 100 * 1024 ** 3 } })
+  const h = await setup(t, { provider }); await h.start()
+  freeBytes = 100 * 1024 ** 2; await h.service.sampleResources()
+  let record = (await h.service.state()).computers[0]
+  assert.equal(record.phase, 'stopped'); assert.equal(record.diskProtection.freeBytes, freeBytes)
+  await assert.rejects(h.manage('start'), fails('resource-limit'))
+  freeBytes = 10 * 1024 ** 3; await h.manage('start')
+  record = (await h.service.state()).computers[0]; assert.equal(record.phase, 'ready'); assert.equal(record.diskProtection, null)
+})
+
+test('public storage requests cannot supply portable host paths or pause the desktop', async t => {
+  const h = await setup(t); const record = await h.bind()
+  await assert.rejects(h.service.storage('portable-import', { botId: 'a', expectedGeneration: record.generation, path: '/tmp/forged' }), fails('unavailable'))
+  await assert.rejects(h.service.storageStart({ method: 'portable-export', botId: 'a', expectedGeneration: record.generation }), fails('invalid'))
+  assert.equal((await h.service.state()).computers[0].control, 'none')
+})

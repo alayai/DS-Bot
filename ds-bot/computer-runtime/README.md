@@ -13,7 +13,7 @@ rollback, explicit storage/history cleanup, and journaled interrupted-operation 
 A runtime check/build CLI and a separately distributable source payload are included.
 Desktop builds now carry that payload outside the asar and can opt in with
 `broker.bundled: true`, including Windows-to-WSL path resolution.
-Windows GUI acceptance, network policy, signed installer acceptance,
+Windows GUI acceptance, signed installer acceptance,
 cross-browser-version compatibility and complete disk quotas remain incomplete.
 
 ## Prepare from the installed plugin
@@ -94,8 +94,8 @@ The base image digest, wheel version and wheel SHA-256 are recorded in
 `runtime.lock.json`; pip verifies the hash through `desktop/requirements.txt`.
 The build uses the registry and Python package index. **Running desktops use
 the engine bridge** (`bridge` on Docker, `podman` on Podman) and can reach the
-internet. Egress is not filtered. Host networking stays rejected. An older
-container created with `--network none` is replaced on the next start; its
+internet by default. Explicit offline and restricted policies are described below. Host networking stays rejected. An older
+container created with `--network none` without an explicit policy is replaced on the next start; its
 volume is kept.
 
 The Broker requires the resulting `sha256:…` **local image ID**, not the tag or
@@ -355,8 +355,8 @@ plugin-managed setup.
   `computer-only` isolation of the Bot**.
 - Each Computer uses one dedicated Docker volume at `/home/cua`. Host folders,
   `DSH_HOME`, model credentials and the Docker socket are not mounted in it.
-- Containers run as UID/GID 1000, on the engine bridge network, without added capabilities, with
-  `no-new-privileges`, 2 CPUs, 4 GiB RAM and total memory/swap allowance, and
+- Containers run as UID/GID 1000, with the configured network policy, without added capabilities, with
+  `no-new-privileges`, defaults of 2 CPUs and 4 GiB RAM and total memory/swap allowance, and
   a 512 PID limit. No host ports are published.
 - A container shares the host kernel. The host-side Broker needs Docker
   authority; it is not a sandbox against malicious processes running as the
@@ -381,7 +381,7 @@ and use atomic writes under the existing team home lock. This file is not a
 backup of `/home/cua`. Stop/start, same-image container recreation and local
 checkpoint/restore, retained-home rollback and journaled storage recovery are
 supported. Image upgrades preserve the prior image/home pair for rollback;
-whole-engine disk quotas and legacy orphan discovery are still pending.
+whole-engine hard disk quotas remain unavailable; reference-aware orphan discovery and legacy verification are now included.
 Do not delete a retained volume without first backing up its data.
 
 ## Verification
@@ -506,7 +506,7 @@ failure occurred with Computer disabled; its cause remains unresolved. See
     file. Delete an unused checkpoint/previous home with confirmation, then save a
     new checkpoint. Clear operation history; files and chat history should remain.
 
-Guests can reach the internet; egress is not filtered. computer-only isolation,
+By default guests can reach the internet; explicit offline/restricted settings change guest egress. computer-only isolation,
 platform-specific IME behavior and unrestricted host control are not acceptance targets
 for this checkpoint. Missing these is expected; stale input, lost files, wrong Bot
 ownership or a frozen preview accepting input are defects.
@@ -742,3 +742,77 @@ Broker crash during an unconfirmed startup or storage operation also requires
 restarting DSH and checking lifecycle recovery; the panel does not assume
 orphaned engine helpers have stopped. Recovery does not reinstall or restart
 the system container engine.
+
+## Desktop management added in cua.16
+
+**Desktop CPU, memory and network** saves per-desktop settings after a stopped-state
+confirmation. CPU is 1–32 cores; RAM is 512–65536 MiB in 256 MiB increments. The
+engine must have sufficient CPU/RAM; concurrent reservations also account for
+other running desktops. Reconfiguration removes only the verified stopped
+container and retains its home. Interrupted changes recover the previous policy.
+
+Network modes are **Open internet** (default), **Offline**, and **Allowed domains
+only**. Offline uses engine network isolation. Restricted mode requires Docker
+with isolated internal bridge support; Podman explicitly refuses this mode. A
+non-root, read-only proxy connects the private network to the engine bridge,
+listens only on its private-network alias, permits exact listed public DNS names
+on HTTP 80 / HTTPS CONNECT 443, and connects to checked public IPs without a
+second DNS resolution. Private/link-local addresses, direct guest egress and
+external guest DNS are refused. List each needed subdomain explicitly. HTTPS is
+a destination allowlist, not TLS interception or a content/URL filter.
+
+Use the **DSBot Restricted Browser** shortcut (Firefox, separate saved profile)
+inside a restricted desktop. Other applications must honor the provided HTTP
+proxy variables. Applications using another protocol or bypassing the proxy
+fail to connect. Network mode is not a restriction on the Bot's other host tools.
+No host ports, Docker socket, host folders or privileged network capabilities are
+exposed to the guest. Proxy helpers stop with their desktop; changing policy
+removes verified unused helpers/networks. Engine tampering is rejected.
+
+**Desktop resources → Stop desktops below free space** defaults to 0.5 GiB;
+0 disables it. Starts and storage copies check engine capacity. Every 30 seconds,
+low-space protection revokes input and stops this team's running desktops, records
+the reason, and requires a manual start after space is available. It does not
+stop unrelated containers or resize Docker Desktop's disk. This is sampled
+protection, not a hard quota; rapid writes can exhaust space between checks.
+Podman/XFS home quotas keep their existing kernel-verification requirement.
+
+**Desktop storage cleanup → Verify legacy storage** is available only for an
+owned local volume with a known image in this team's saved records. Confirmation
+saves evidence tied to the engine identity and volume creation/labels/options;
+it never rewrites engine labels. Changed or unknown evidence stays protected.
+
+**External desktop backup** exports a stopped home to a versioned `.dsbackup`
+file through the native Broker. Its limit follows the checkpoint limit, separate
+from ordinary 200 MiB uploads. The archive includes home data, browser profiles
+and login state, but not the image or host model credentials. Save it outside DSH
+and keep it private. It is not encrypted or signed. Import requires a desktop
+pinned to the same immutable image; prepare that image first.
+
+A native save picker streams directly to a chosen file when supported. Otherwise
+save each numbered 64 MiB part separately (select **Use numbered backup parts** if the native picker is present but denied); import uses the Windows/browser file
+picker to select the complete file or all parts together, in any selection order.
+No whole-archive browser allocation or frontend-supplied host path is used.
+Confirm the saved files exist before discarding the temporary export. Uploads
+are sequential 256 KiB chunks. Closing the panel stops browser transfers;
+background export/import continues. Restarted active jobs become interrupted,
+never replayed. Failed uploads must be discarded before retrying.
+
+Import validates paths, parents, entry counts, sizes, per-file SHA-256 and
+readback in a new unpublished volume; failures never replace the current home.
+Successful import retains the previous home for rollback. The two-retained-home
+limit remains. Recovery removes unpublished staging from interrupted imports.
+These checks detect corruption; a backup's own checksums do not authenticate its
+author. Export temporary files remain until explicitly discarded.
+
+**Desktop task queue** persists up to 500 tasks with goals and progress. Queued
+work runs in order when the desktop is ready, control is returned and its Bot's
+own chat is idle. Dispatch uses public DSH follow-up/session APIs and a durable
+attempt id. `computer_task_update` records progress or an explicit completed/failed
+result with evidence. Ending a turn without a result becomes **needs-review**.
+Pause revokes CUA authority, removes only that attempt's queued messages, and
+cancels only its matching running turn. New ordinary user chat interrupts the
+queue. A restart, uncertain delivery or changed generation waits for review;
+confirmed resume sends a new observation-first instruction and rejects old
+attempts. It never replays recorded desktop inputs. Finished entries can be
+removed. This remains assisted mode, not `computer-only` isolation.

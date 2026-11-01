@@ -9,7 +9,7 @@ export function createStorageJobs({ ready, assigned, run, now = Date.now }) {
   async function start({ method, ...args }) {
     await ready()
     if (closed) throw refused('unavailable', 'Desktop storage is stopping.')
-    if (!STORAGE_METHODS.includes(method)) throw refused('invalid', 'Unknown storage operation.')
+    if (!STORAGE_METHODS.includes(method) || method.startsWith('portable-')) throw refused('invalid', 'Unknown storage operation.')
     const record = await assigned(args.botId)
     if (closed) throw refused('unavailable', 'Desktop storage is stopping.')
     if (record.generation !== args.expectedGeneration) throw refused('stale-generation', 'Refresh before changing desktop storage.')

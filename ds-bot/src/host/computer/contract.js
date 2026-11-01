@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = 1
-export const TOOL_NAMES = ['computer_status', 'computer_observe', 'computer_act', 'computer_release', 'computer_request_takeover', 'computer_files', 'computer_import', 'computer_export']
+export const TOOL_NAMES = ['computer_status', 'computer_observe', 'computer_act', 'computer_release', 'computer_request_takeover', 'computer_files', 'computer_import', 'computer_export', 'computer_task_update']
 
 export function refused(code, message) {
   return Object.assign(new Error(message), { code: `bot/computer-${code}` })

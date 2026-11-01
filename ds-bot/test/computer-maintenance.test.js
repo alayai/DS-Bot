@@ -108,3 +108,30 @@ test('engine inspection and deletion failures are propagated without force or un
   h.deps.docker = () => Promise.reject(Error('engine offline'))
   await assert.rejects(h.scan(), /offline/)
 })
+
+test('legacy evidence binds engine, creation metadata and registered ownership without relabelling', async () => {
+  const h = fixture(), name = `dsbot-${id}-home`, volume = h.volume(name)
+  delete volume.Labels['org.ds-bot.computer.image']
+  let scan = await h.scan()
+  assert.equal(scan.items.find(item => item.id === name).canVerify, true)
+  const result = await maintainStorage('verify', { registry: h.registry, kind: 'volume', id: name, token: scan.token }, h.deps)
+  h.registry.storageClaims = { [name]: result.verified }; h.registry.revision++
+  scan = await h.scan()
+  assert.equal(scan.items.find(item => item.id === upgrade).removable, true)
+  assert.equal(volume.Labels['org.ds-bot.computer.image'], undefined)
+  for (const change of [() => { volume.CreatedAt = 'changed' }, () => { h.deps.runtimeKey = 'changed' }]) {
+    change(); assert.equal((await h.scan()).items.find(item => item.id === upgrade).removable, false)
+  }
+  assert.deepEqual(h.removed, [])
+})
+
+test('legacy claims cannot verify mismatched owners or stale scans', async () => {
+  const h = fixture(), name = `dsbot-${id}-home`, volume = h.volume(name)
+  delete volume.Labels['org.ds-bot.computer.image']
+  const scan = await h.scan()
+  volume.CreatedAt = 'replacement'
+  await assert.rejects(maintainStorage('verify', { registry: h.registry, kind: 'volume', id: name, token: scan.token }, h.deps), /changed/)
+  volume.Labels['org.ds-bot.computer.id'] = `cmp_${revision}`
+  h.registry.computers[`cmp_${revision}`] = { ...h.record, id: `cmp_${revision}` }
+  assert.equal((await h.scan()).items.find(item => item.id === name).canVerify, false)
+})

@@ -16,11 +16,16 @@ export async function maintainStorage(method, options, { docker, signal, images,
   if (records.some(record => !computerId(record.id) || registry.computers[record.id] !== record)) fail('Invalid cleanup registry.')
   const json = async args => JSON.parse((await docker(args, signal)).stdout)
   const names = async args => (await docker(args, signal)).stdout.trim().split(/\s+/).filter(Boolean).sort()
+  const knownVolumes = new Map(), knownOwners = new Map()
   const protectedVolumes = new Map(), protectedImages = new Map([[baseImage, 'Default desktop image']])
   for (const record of records) {
+    knownOwners.set(homeVolume(record), record.id)
+    knownVolumes.set(homeVolume(record), record.runtimeImage)
     protectedVolumes.set(homeVolume(record), 'Current desktop home')
     protectedImages.set(record.runtimeImage ?? baseImage, 'Current desktop image')
     for (const revision of record.previousHomes ?? []) {
+      knownOwners.set(homeVolume({ ...record, homeRevision: revision }), record.id)
+      knownVolumes.set(homeVolume({ ...record, homeRevision: revision }), record.previousImages?.[revision ?? 'original'] ?? record.runtimeImage)
       protectedVolumes.set(homeVolume({ ...record, homeRevision: revision }), 'Retained home for rollback')
       protectedImages.set(record.previousImages?.[revision ?? 'original'] ?? record.runtimeImage ?? baseImage, 'Retained image for rollback')
     }
@@ -28,6 +33,8 @@ export async function maintainStorage(method, options, { docker, signal, images,
   for (const item of Object.values(registry.checkpoints)) {
     const record = registry.computers[item.computerId]
     if (!record) fail('Invalid checkpoint owner.')
+    knownOwners.set(backupVolume(record, item.id), record.id)
+    knownVolumes.set(backupVolume(record, item.id), item.image ?? record.runtimeImage)
     protectedVolumes.set(backupVolume(record, item.id), 'Saved checkpoint')
     protectedImages.set(item.image ?? record.runtimeImage ?? baseImage, 'Saved checkpoint image')
   }
@@ -44,7 +51,10 @@ export async function maintainStorage(method, options, { docker, signal, images,
     const info = (await json(['volume', 'inspect', name]))[0]
     if (!info || info.Name !== name) fail('Volume identity could not be verified.')
     const labels = info.Labels ?? {}, owner = labels['org.ds-bot.computer.id']
-    const image = labels['org.ds-bot.computer.image']
+    let image = labels['org.ds-bot.computer.image']
+    const stamp = fingerprint({ runtimeKey, name, created: info.CreatedAt, labels, driver: info.Driver, options: info.Options })
+    const claim = registry.storageClaims?.[name]
+    if (!image && knownOwners.get(name) === owner && claim?.stamp === stamp && claim.image === knownVolumes.get(name)) image = claim.image
     volumes.push({ name, created: info.CreatedAt, labels, driver: info.Driver, options: info.Options })
     if (imageId(image)) protectedImages.set(image, 'Referenced by desktop storage')
     else for (const id of images) protectedImages.set(id, 'Storage image identity is unknown')
@@ -55,11 +65,13 @@ export async function maintainStorage(method, options, { docker, signal, images,
     if (Object.hasOwn(registry.computers, owner)) {
       try { assertVolume(info, { record: registry.computers[owner], volume: name }); boundary = true } catch {}
     }
+    const shape = (home && (!storage || storage === 'staged-home')) || (backup && backup[1] === labels['org.ds-bot.computer.checkpoint'] && storage === 'checkpoint')
     const owned = boundary && typeof info.CreatedAt === 'string' && computerId(owner) && Object.hasOwn(registry.computers, owner) && imageId(image)
-      && ((home && (!storage || storage === 'staged-home'))
-        || (backup && backup[1] === labels['org.ds-bot.computer.checkpoint'] && storage === 'checkpoint'))
+      && shape
     const reason = protectedVolumes.get(name) ?? (owned ? null : 'Ownership cannot be verified for this team')
-    items.push({ kind: 'volume', id: name, removable: !reason, reason, image: imageId(image) ? image : null })
+    items.push({ kind: 'volume', id: name, removable: !reason, reason, image: imageId(image) ? image : null,
+      canVerify: Boolean(shape) && !image && knownOwners.get(name) === owner && boundary && typeof info.CreatedAt === 'string' && imageId(knownVolumes.get(name)),
+      evidence: { stamp, image: knownVolumes.get(name) } })
   }
   const imageMetadata = []
   for (const id of [...images].sort()) {
@@ -73,8 +85,12 @@ export async function maintainStorage(method, options, { docker, signal, images,
   }
   const token = fingerprint({ runtimeKey, registry, containers, volumes, imageMetadata })
   if (method === 'scan') return { token, items }
-  if (method !== 'remove' || options.token !== token) fail('Cleanup information changed. Scan again before deleting.')
+  if (!['remove', 'verify'].includes(method) || options.token !== token) fail('Cleanup information changed. Scan again before deleting.')
   const selected = items.find(item => item.id === options.id && item.kind === options.kind)
+  if (method === 'verify') {
+    if (!selected?.canVerify) fail('This legacy volume has no verifiable image reference in this team.')
+    return { verified: { name: selected.id, ...selected.evidence } }
+  }
   if (!selected?.removable) fail('This resource is still referenced or its ownership cannot be verified.')
   // No force: the engine must also refuse a resource claimed by another container.
   if (selected.kind === 'volume') await docker(['volume', 'rm', selected.id], signal)
