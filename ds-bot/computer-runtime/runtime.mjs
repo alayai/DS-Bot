@@ -13,7 +13,7 @@ const docker = args => run('docker', args, { timeout: 30_000, maxBuffer: 1024 * 
 const payload = [
   'runtime.mjs', 'runtime.lock.json', 'engine.mjs', 'podman.mjs', 'README.md', 'TOOL_POLICY.md',
   'broker/main.mjs', 'broker/boundary.mjs', 'broker/checkpoint.mjs', 'broker/checkpoint.py',
-  'broker/files.py', 'broker/input.mjs', 'broker/rfb.mjs', 'broker/release-input.py', 'broker/mcp.mjs',
+  'broker/files.py', 'broker/transfers.mjs', 'broker/input.mjs', 'broker/rfb.mjs', 'broker/release-input.py', 'broker/mcp.mjs',
   'desktop/Dockerfile', 'desktop/requirements.txt', 'desktop/launch.py',
   'desktop/inventory.py', 'licenses/cua-MIT.txt',
 ]

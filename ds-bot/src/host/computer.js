@@ -39,11 +39,15 @@ function installTools(rt, provider, computer) {
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: provider.actions ?? ['click', 'text', 'key', 'scroll'], required: true },
+          type: { type: 'string', enum: provider.actions ?? ['click', 'text', 'key', 'scroll', 'drag'], required: true },
           x: { type: 'integer' }, y: { type: 'integer' },
+          toX: { type: 'integer', description: 'Drag endpoint in observed pixels.' }, toY: { type: 'integer' },
+          durationMs: { type: 'integer', description: 'Drag duration, 100–2000 ms; default 500.' },
+          count: { type: 'integer', enum: [1, 2], description: 'Click count; 2 performs one double-click gesture.' },
+          modifiers: { type: 'array', items: { type: 'string', enum: ['Control', 'Shift', 'Alt', 'Super'] } },
           button: { type: 'string', enum: ['left', 'right', 'middle'] },
           text: { type: 'string', description: 'Between one and 4000 characters.' },
-          key: { type: 'string' }, deltaY: { type: 'integer', description: 'Signed line steps: -50 to 50, excluding zero; positive scrolls down.' },
+          key: { type: 'string', description: 'Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp/Down, Space, F1–F12, or one ASCII letter/digit. Use modifiers for chords.' }, deltaY: { type: 'integer', description: 'Signed line steps: -50 to 50, excluding zero; positive scrolls down.' },
         },
         additionalProperties: false,
       },
@@ -59,10 +63,10 @@ function installTools(rt, provider, computer) {
     }, (args, exec) => computer.handoffs.request(args, exec)],
     ['computer_release', 'Release your desktop so another Session of your Bot can use it.', {}, (_args, exec) => computer.release(exec)],
     ['computer_files', 'List files in your private desktop /home/cua/DSBot transfer folder.', {}, (args, exec) => computer.modelFiles('list', args, exec)],
-    ['computer_import', 'Import a file attached in this Session into /home/cua/DSBot. Flat names only, 256 KiB maximum; existing files are never overwritten.', {
+    ['computer_import', 'Import a file attached in this Session into /home/cua/DSBot. Flat names only, 200 MiB maximum; existing files are never overwritten.', {
       attachmentId: { type: 'string', required: true }, name: { type: 'string', required: true },
     }, (args, exec) => computer.modelFiles('import', args, exec)],
-    ['computer_export', 'Attach a file from /home/cua/DSBot to this conversation. Flat names only, 256 KiB maximum.', {
+    ['computer_export', 'Attach a file from /home/cua/DSBot to this conversation. Flat names only, 200 MiB maximum.', {
       name: { type: 'string', required: true },
     }, (args, exec) => computer.modelFiles('export', args, exec)],
   ].map(([name, description, parameters, execute]) => defineTool({

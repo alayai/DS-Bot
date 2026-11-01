@@ -18,9 +18,13 @@ class Fixture(BaseHTTPRequestHandler):
           onclick="const n=Number(this.dataset.count)+1;this.dataset.count=n;
             this.style.background=n%2?'rgb(240,64,16)':'rgb(16,128,240)';
             fetch('/pulse',{method:'POST',body:String(n)})">Frame latency</button>
+        <button style="left:400px;top:300px" ondblclick="fetch('/double',{method:'POST',body:'double'})">Double click</button>
+        <div style="position:fixed;left:32px;top:450px;width:500px;height:80px;background:#eee;user-select:none"
+          onmousedown="this.dataset.start=event.clientX"
+          onmouseup="if(Number(this.dataset.start)<150 && event.clientX>350)fetch('/drag',{method:'POST',body:'dragged'})">Drag across this area</div>
         <script>onscroll=()=>fetch('/scroll',{method:'POST',body:String(scrollY)})</script>""")
     def do_POST(self):
-        if self.path not in ["/done", "/focus", "/text", "/key", "/scroll", "/pulse"]:
+        if self.path not in ["/done", "/focus", "/text", "/key", "/scroll", "/pulse", "/double", "/drag"]:
             self.send_error(404)
             return
         if self.path == "/done":

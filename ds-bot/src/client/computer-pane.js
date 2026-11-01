@@ -1,6 +1,8 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { imagePoint, freshFrame } from './computer-model.js'
 import { t } from './i18n.js'
+import { importDesktopFile, exportDesktopFile } from './computer-files.js'
+import { FILE_LIMIT } from '../shared/computer-files.js'
 
 import { ComputerScreen } from './computer-stream.js'
 const KEYS = ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Space']
@@ -95,12 +97,17 @@ export function ComputerView({ bot, actions, leaving }) {
   const [text, setText] = useState('')
   const [key, setKey] = useState('Enter')
   const [files, setFiles] = useState([])
+  const [fileStorage, setFileStorage] = useState(null)
+  const [fileDeletion, setFileDeletion] = useState(null)
+  const [transfer, setTransfer] = useState(null)
+  const transferring = useRef(null)
   const [streamFailed, setStreamFailed] = useState(false)
   const [streamProblem, setStreamProblem] = useState(null)
   const [tick, setTick] = useState(0)
   const [diagnostics, setDiagnostics] = useState(null)
   const [targetImage, setTargetImage] = useState('')
   const [confirmation, setConfirmation] = useState(null)
+  const [serviceConfirmation, setServiceConfirmation] = useState(null)
   const session = useRef({ token: null, record: null, pending: false, mounted: true, shown: null, streamReady: false })
   const panel = useRef(null)
   // An open menu is a native control. Repainting or disabling it drops the choice.
@@ -111,7 +118,8 @@ export function ComputerView({ bot, actions, leaving }) {
   const record = state?.computers.find(item => item.botId === bot.id && !item.archived)
   const upgradeImages = (state?.images ?? []).slice((state?.images ?? []).indexOf(record?.runtimeImage) + 1)
   const requests = (state?.handoffs ?? []).filter(item => item.botId === bot.id)
-  const ready = record?.phase === 'ready' && record.grant !== 'off'
+  const serviceBlocked = Boolean(['running', 'failed'].includes(state?.recovery?.status) || state?.recovery?.disconnected)
+  const ready = record?.phase === 'ready' && record.grant !== 'off' && !serviceBlocked
   const liveControl = owned && controlMode === 'live'
   const inputReady = owned && ready && !busy && !leaving && document.visibilityState !== 'hidden'
     && (liveControl ? session.current.streamReady && Boolean(session.current.liveInput)
@@ -121,7 +129,8 @@ export function ComputerView({ bot, actions, leaving }) {
     ...(session.current.token ? { controlToken: session.current.token } : {}), ...args,
   })
   const clearFrame = () => { session.current.shown = null; setFrame(null) }
-  const forget = () => { session.current.token = null; setOwned(false); setFiles([]) }
+  const clearFiles = () => { setFiles([]); setFileStorage(null); setFileDeletion(null) }
+  const forget = () => { session.current.token = null; setOwned(false); clearFiles() }
   const failure = reason => {
     if (!session.current.mounted) return
     if (reason.code === 'bot/computer-busy') {
@@ -138,11 +147,14 @@ export function ComputerView({ bot, actions, leaving }) {
     if (!session.current.mounted || editing()) return
     const next = value.computers.find(item => item.botId === bot.id && !item.archived)
     const changed = next?.id !== session.current.record?.id || next?.generation !== session.current.record?.generation
-    if (changed || next?.control !== 'human' || next?.humanExpired) forget()
+    const recovering = ['running', 'failed'].includes(value.recovery?.status) || value.recovery?.disconnected
+    if (changed || next?.control !== 'human' || next?.humanExpired || recovering) forget()
+    if (changed || value.recovery?.version !== session.current.recoveryVersion) setServiceConfirmation(null)
+    session.current.recoveryVersion = value.recovery?.version
     if (changed) { clearFrame(); setConfirmation(null); setDiagnostics(null) }
     session.current.record = next
     setState(value)
-    if (next?.phase !== 'ready' || next.grant === 'off') { clearFrame(); return }
+    if (next?.phase !== 'ready' || next.grant === 'off' || recovering) { clearFrame(); return }
     if (session.current.streamReady) return
     const shot = await call('preview')
     if (session.current.mounted && document.visibilityState !== 'hidden' && !editing()) {
@@ -151,7 +163,10 @@ export function ComputerView({ bot, actions, leaving }) {
     }
   }
   async function run(work, reload = true) {
-    if (session.current.pending || leaving) return
+    // A background preview can outlive the enabled button the user clicked.
+    // Wait for that read; never silently discard the user's file selection.
+    if (session.current.polling) await session.current.polling
+    if (session.current.pending || leaving || !session.current.mounted) return
     session.current.pending = true
     setBusy(true)
     setError('')
@@ -171,7 +186,10 @@ export function ComputerView({ bot, actions, leaving }) {
       setTick(value => value + 1)
       if (leaving || document.visibilityState === 'hidden' || session.current.pending) return
       session.current.pending = true
-      void refresh().catch(failure).finally(() => { session.current.pending = false })
+      session.current.polling = refresh().catch(failure).finally(() => {
+        session.current.pending = false
+        session.current.polling = null
+      })
     }
     poll()
     const timer = setInterval(poll, 1500)
@@ -181,6 +199,7 @@ export function ComputerView({ bot, actions, leaving }) {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', hide)
       session.current.mounted = false
+      if (transferring.current) transferring.current.cancelled = true
       // Closing a viewer never silently hands control back to an automatic agent.
     }
   }, [bot.id, leaving])
@@ -192,7 +211,7 @@ export function ComputerView({ bot, actions, leaving }) {
     setStreamFailed(false); setStreamProblem(null)
     clearFrame()
     setNotice('')
-    setFiles([])
+    clearFiles()
   })
   const bind = (grant, approvalMode = record?.approvalMode ?? 'required') => run(async () => {
     await call('bind', { grant, approvalMode, expectedRevision: state.revision })
@@ -222,43 +241,92 @@ export function ComputerView({ bot, actions, leaving }) {
     const point = imagePoint(frame, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY)
     if (point) input({ type, ...point, ...(type === 'click' ? { button: event.type === 'contextmenu' ? 'right' : 'left' } : { deltaY: event.deltaY > 0 ? 3 : -3 }) })
   }
-  const loadFiles = async () => setFiles((await call('files', { operation: 'list' })).files)
+  const loadFiles = async () => {
+    const result = await call('files', { operation: 'list' })
+    setFiles(result.files)
+    setFileStorage(result.storage ?? null)
+    setFileDeletion(null)
+  }
+  const askDeleteFile = file => setFileDeletion({
+    botId: bot.id, expectedGeneration: record.generation, controlToken: session.current.token,
+    operation: 'delete', name: file.name, version: file.version,
+  })
+  const deleteFile = () => run(async () => {
+    const request = fileDeletion
+    // Consume confirmation before dispatch: a lost reply must not replay deletion.
+    clearFiles()
+    setNotice('')
+    try {
+      const result = await actions.computerCall('files', request)
+      if (result?.deleted !== true || result.name !== request.name) throw new Error('Invalid deletion receipt.')
+    } catch {
+      throw new Error(t('Deletion could not be confirmed. Refresh the file list before trying again.'))
+    }
+    setNotice(t('File deleted.'))
+    await loadFiles()
+  })
+  const transferFile = work => run(async () => {
+    const identity = { botId: bot.id, expectedGeneration: session.current.record?.generation, controlToken: session.current.token }
+    const task = { cancelled: false }
+    transferring.current = task
+    setNotice('')
+    setTransfer({ bytes: 0, total: 0, phase: 'Preparing file…' })
+    const request = args => actions.computerCall('files', { ...identity, ...args })
+    const check = () => {
+      if (task.cancelled || !session.current.mounted || session.current.token !== identity.controlToken
+        || session.current.record?.generation !== identity.expectedGeneration) throw new Error('Transfer stopped. Check the destination before retrying.')
+    }
+    const progress = (bytes, total) => {
+      check()
+      setTransfer({ bytes, total, phase: bytes === total ? 'Verifying file…' : 'Transferring file…' })
+    }
+    try { await work(request, { check, progress }); check() }
+    finally {
+      transferring.current = null
+      if (session.current.mounted) setTransfer(null)
+    }
+  })
   const upload = event => {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    void run(async () => {
-      if (file.size > 262144) throw new Error(t('Files must be at most 256 KiB.'))
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      let binary = ''
-      for (const byte of bytes) binary += String.fromCharCode(byte)
-      await call('files', { operation: 'write', name: file.name, data: btoa(binary) })
+    void transferFile(async (request, options) => {
+      await importDesktopFile(request, file, options)
       await loadFiles()
       setNotice(t('File imported. Existing files are never overwritten.'))
     })
   }
-  const download = name => run(async () => {
-    const value = await call('files', { operation: 'read', name })
-    const bytes = Uint8Array.from(atob(value.data), char => char.charCodeAt(0))
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+  const download = name => transferFile(async (request, options) => {
+    const blob = await exportDesktopFile(request, name, options)
+    options.check()
+    const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = value.name
+    link.download = name
     link.click()
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
   })
   const removeCopy = (method, args, label) => setConfirmation({ method, args: { ...args, botId: bot.id, expectedGeneration: record.generation }, label })
-  const button = (label, onClick, disabled = false) => h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || disabled || leaving, onClick }, t(label))
+  const recoverService = () => run(async () => {
+    const args = serviceConfirmation
+    setServiceConfirmation(null)
+    forget()
+    clearFrame()
+    session.current.streamReady = false
+    setStreamFailed(false); setStreamProblem(null)
+    await actions.computerCall('reconnect', args)
+  })
+  const button = (label, onClick, disabled = false, recoveryAction = false) => h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || disabled || leaving || (serviceBlocked && !recoveryAction), onClick }, t(label))
   return h('div', { ref: panel, className: 'bt-computer', 'data-tick': tick },
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t(PHASE[record?.phase] ?? 'Not assigned'))),
     h('p', { className: 'bt-muted' }, t('Linux container with open internet access. Other Bot tools still run with their existing permissions.')),
     h('label', { className: 'bt-computer-row' }, t('Bot access'),
-      h('select', { value: record?.grant ?? 'off', disabled: busy || !state || leaving, onChange: event => { void bind(event.target.value) } },
+      h('select', { value: record?.grant ?? 'off', disabled: busy || !state || leaving || serviceBlocked, onChange: event => { void bind(event.target.value) } },
         h('option', { value: 'off' }, t('Off — keep files')),
         h('option', { value: 'observe' }, t('Observe only')),
         h('option', { value: 'operate' }, t('Observe and operate')))),
     h('label', { className: 'bt-computer-row' }, t('CUA approval mode'),
-      h('select', { 'aria-label': t('CUA approval mode'), value: record?.approvalMode ?? 'required', disabled: busy || record?.grant !== 'operate' || leaving,
+      h('select', { 'aria-label': t('CUA approval mode'), value: record?.approvalMode ?? 'required', disabled: busy || record?.grant !== 'operate' || leaving || serviceBlocked,
         onChange: event => { void bind(record.grant, event.target.value) } },
       h('option', { value: 'required' }, t('Ask before each action')),
       h('option', { value: 'yolo' }, t('YOLO — no approval')))),
@@ -267,8 +335,29 @@ export function ComputerView({ bot, actions, leaving }) {
     h('div', { className: 'bt-computer-row' },
       button('Start desktop', () => manage('start'), !record || record.grant === 'off' || ready || record.control === 'human' || record.recoveryPending),
       button('Stop desktop', () => manage('stop'), !record || record.phase === 'stopped'),
-      button('Refresh', () => run(refresh, false)),
+      button('Refresh', () => run(refresh, false), false, true),
       streamFailed ? button('Retry live stream', () => { setStreamFailed(false); setStreamProblem(null) }, !ready) : null),
+    state?.recovery?.supported ? h('section', { className: 'bt-computer-help', 'aria-label': t('Desktop service recovery') },
+      state.recovery.status === 'running' ? h('p', { role: 'status' },
+        t({ settling: 'Waiting for desktop operations to stop…', reconnecting: 'Reconnecting desktop service…', checking: 'Checking and stopping desktops…' }[state.recovery.stage]),
+        ` ${state.recovery.completed} / ${state.recovery.total}`) : null,
+      state.recovery.status === 'completed' && !state.recovery.disconnected ? h('p', { role: 'status' }, t('Desktop service recovered. Start each desktop when ready.')) : null,
+      state.recovery.status === 'failed' ? h('p', { role: 'alert' }, t(state.recovery.problem === 'interrupted-management'
+        ? 'A desktop startup or storage operation was interrupted. Restart DSH and check desktop recovery before continuing.'
+        : state.recovery.problem === 'runtime-changed'
+        ? 'The desktop engine connection changed. Restore the previous connection before retrying.'
+        : state.recovery.problem === 'unsettled'
+        ? 'Recovery could not finish stopping previous work. Wait, then retry.'
+        : 'Recovery failed. Check that the container engine is running, then retry. Desktops remain blocked.')) : null,
+      serviceConfirmation ? h('div', { role: 'group', 'aria-label': t('Confirm service recovery') },
+        h('p', null, t('Stop all Bot desktops and recover their shared service? Saved files and checkpoints are kept. Start desktops manually afterward; unconfirmed actions will not be repeated.')),
+        h('div', { className: 'bt-computer-row' },
+          button('Recover service and stop desktops', recoverService, state.recovery.status === 'running', true),
+          button('Cancel', () => setServiceConfirmation(null), false, true)))
+        : button('Recover desktop service', () => setServiceConfirmation({
+          botId: bot.id, expectedGeneration: record.generation, expectedRecovery: state.recovery.version,
+        }), !record || state.recovery.status === 'running', true)) : state?.recovery?.disconnected
+      ? h('p', { className: 'bt-muted' }, t('Restart DSH to recover this desktop bridge.')) : null,
     h('div', { className: 'bt-computer-row' },
       button(owned ? 'Renew control' : 'Take control', () => manage('takeover'), !ready),
       button('Give back to Bot', () => manage('release'), !owned),
@@ -296,7 +385,7 @@ export function ComputerView({ bot, actions, leaving }) {
           await call('handoff-answer', { requestId: item.id, outcome: 'skip' })
           forget()
         })) : null))),
-    error ? h('div', { className: 'bt-error', role: 'alert' }, error) : null,
+    error ? h('div', { className: 'bt-error', role: 'alert' }, t(error)) : null,
     previewBusy ? h('div', { className: 'bt-muted', role: 'status' }, t('The desktop is busy. Keeping the last preview until it is available again.')) : null,
     notice ? h('div', { className: 'bt-muted', role: 'status' }, notice) : null,
     h('div', { className: 'bt-computer-screen', 'data-control': inputReady || undefined },
@@ -359,13 +448,27 @@ export function ComputerView({ bot, actions, leaving }) {
           button('Delete', () => run(async () => { await call(confirmation.method, confirmation.args); setConfirmation(null) })),
           button('Cancel', () => setConfirmation(null)))) : null) : null,
     h('strong', null, t('Transfer files')),
-    h('p', { className: 'bt-muted' }, t('Use /home/cua/DSBot inside the desktop. Files up to 256 KiB; folders and overwrites are not supported.')),
+    h('p', { className: 'bt-muted' }, t('Use /home/cua/DSBot inside the desktop. Files up to 200 MiB; folders and overwrites are not supported.')),
+    transfer ? h('div', { className: 'bt-computer-row' },
+      h('span', { role: 'status', 'aria-live': 'polite' }, t(transfer.phase), ` ${transfer.bytes} / ${transfer.total} B`),
+      h('progress', { value: transfer.bytes, max: transfer.total || 1, 'aria-label': t('File transfer progress') }),
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: transfer.phase === 'Cancelling transfer…',
+        onClick: () => { if (transferring.current) transferring.current.cancelled = true; setTransfer(value => ({ ...value, phase: 'Cancelling transfer…' })) } }, t('Cancel transfer'))) : null,
     h('div', { className: 'bt-computer-row' },
       h('label', null, t('Import file'), h('input', { type: 'file', 'aria-label': t('Import file'), disabled: busy || !owned || !ready, onChange: upload })),
       button('List files', () => run(loadFiles), !owned || !ready)),
+    fileStorage ? h('p', { className: 'bt-muted', role: 'status' },
+      `${t('Listed files')}: ${files.length} · ${(fileStorage.bytes / 1048576).toFixed(1)} MiB · ${t('Disk available')}: ${(fileStorage.freeBytes / 1073741824).toFixed(1)} GiB`) : null,
+    fileDeletion ? h('div', { className: 'bt-computer-help', role: 'group', 'aria-label': t('Confirm file deletion') },
+      h('strong', null, fileDeletion.name),
+      h('p', null, t('Permanently delete this file from the desktop? This cannot be undone.')),
+      h('div', { className: 'bt-computer-row' },
+        button('Delete file permanently', deleteFile, !owned || !ready),
+        button('Cancel', () => setFileDeletion(null)))) : null,
     files.map(file => h('div', { key: file.name, className: 'bt-computer-row' },
       h('span', { className: 'bt-computer-name' }, file.name), h('span', { className: 'bt-muted' }, `${file.bytes} B`),
-      button('Download', () => download(file.name), !owned || !ready || file.bytes > 262144))))
+      button('Download', () => download(file.name), !owned || !ready || file.bytes > FILE_LIMIT),
+      button('Delete file', () => askDeleteFile(file), !owned || !ready || !file.version))))
 }
 
 export const COMPUTER_CSS = `

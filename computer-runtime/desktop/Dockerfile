@@ -4,6 +4,15 @@ FROM docker.io/trycua/xfce-cua@sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877
 HEALTHCHECK NONE
 
 USER root
+# The base image ships DejaVu only, and it does not include ping.
+# CJK fonts let the desktop render Chinese text. iputils-ping uses the
+# unprivileged ICMP socket; the container still drops every capability.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk=1:20220127+repack1-1 \
+        libcap2-bin=1:2.66-4+deb12u3+b1 \
+        iputils-ping=3:20221126-1+deb12u1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /opt/dsbot/requirements.txt
 RUN /opt/venv/bin/python3 -m pip install --no-deps --require-hashes -r /opt/dsbot/requirements.txt \
     && test "$(cua-driver --version)" = "cua-driver 0.37.0"

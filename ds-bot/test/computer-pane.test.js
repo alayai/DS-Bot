@@ -35,6 +35,8 @@ function viewer({ setup = false } = {}) {
   let index = 0, effects = [], control = 'none', frameId = 0, data = 'same-png', previewWait, previewError, now = 100
   let approvalMode = 'required', generation = 1, handoffs = [], storageAvailable = false, phase = 'ready', checkpoints = [], images = [], runtimeImage
   let setupState = { enabled: false, busy: false, environment: { ready: true }, job: null }
+  let fileList = [{ name: 'report.bin', bytes: 123, version: 'a'.repeat(64) }], deleteError
+  let recovery
   const slot = make => slots[index++] ??= make()
   const react = {
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
@@ -66,7 +68,8 @@ function viewer({ setup = false } = {}) {
         return setupState
       }
       if (method === 'setup-cancel') return { ...setupState, job: { ...setupState.job, phase: 'cancelling' } }
-      if (method === 'state') return { revision: generation, handoffs, storageAvailable, checkpoints, images, computers: [{ id: 'computer', botId: 'bot', generation, grant: 'operate', approvalMode, phase, control, runtimeImage }] }
+      if (method === 'state') return { revision: generation, handoffs, storageAvailable, checkpoints, images, recovery, computers: [{ id: 'computer', botId: 'bot', generation, grant: 'operate', approvalMode, phase, control, runtimeImage }] }
+      if (method === 'reconnect') { recovery = { ...recovery, version: 'next', status: 'running', stage: 'checking', completed: 0, total: 2 }; return {} }
       if (method === 'bind') { approvalMode = args.approvalMode; generation++; control = 'none'; return {} }
       if (method === 'takeover') { control = 'human'; return { controlToken: 'synthetic-ticket' } }
       if (method === 'preview') {
@@ -78,6 +81,14 @@ function viewer({ setup = false } = {}) {
       if (method === 'delete-checkpoint') { checkpoints = []; return {} }
       if (method === 'upgrade') { runtimeImage = args.targetImage; generation++; return {} }
       if (method === 'input') return { outcome: 'unknown' }
+      if (method === 'files') {
+        if (args.operation === 'list') return { files: fileList, storage: { bytes: 123, freeBytes: 1000 } }
+        if (args.operation === 'delete') {
+          if (deleteError) throw new Error('lost reply')
+          fileList = []
+          return { name: args.name, deleted: true }
+        }
+      }
       throw new Error(`Unexpected ${method}`)
     },
   }
@@ -98,6 +109,11 @@ function viewer({ setup = false } = {}) {
     setupState: value => { setupState = { ...setupState, ...value } },
     images: (values, active) => { images = values; runtimeImage = active },
     rebind: () => { generation++ },
+    failDelete: () => { deleteError = true },
+    recovery: value => {
+      recovery = value
+      if (value.status === 'completed') { phase = 'stopped'; generation++; control = 'none' }
+    },
     storage: () => { storageAvailable = true; phase = 'stopped'; checkpoints = [{ id: 'backup', computerId: 'computer', at: 0 }] },
     help: value => { handoffs = value },
     poll: () => { for (const fn of timers) fn() },
@@ -122,6 +138,75 @@ function viewer({ setup = false } = {}) {
   }
 }
 
+test('service recovery confirms its global effect and polling never repeats the background request', async () => {
+  const view = viewer()
+  await view.own()
+  view.recovery({ supported: true, version: 'first', status: 'idle' })
+  view.poll()
+  await tick()
+  view.button('Recover desktop service').props.onClick()
+  assert.equal(view.calls.filter(item => item.method === 'reconnect').length, 0)
+  view.button('Cancel').props.onClick()
+  assert.equal(view.button('Recover service and stop desktops'), undefined)
+  view.button('Recover desktop service').props.onClick()
+  view.recovery({ supported: true, version: 'other-window', status: 'idle' })
+  view.poll()
+  await tick()
+  assert.equal(view.button('Recover service and stop desktops'), undefined)
+  view.button('Recover desktop service').props.onClick()
+  view.button('Recover service and stop desktops').props.onClick()
+  await tick()
+  assert.equal(view.button('Recover desktop service').props.disabled, true)
+  assert.equal(view.button('Take control').props.disabled, true)
+  const request = view.calls.find(item => item.method === 'reconnect')
+  assert.deepEqual(JSON.parse(JSON.stringify(request.args)), { botId: 'bot', expectedGeneration: 1, expectedRecovery: 'other-window' })
+  view.poll()
+  await tick()
+  assert.equal(view.calls.filter(item => item.method === 'reconnect').length, 1)
+  view.recovery({ supported: true, version: 'next', status: 'completed', completed: 2, total: 2 })
+  view.poll()
+  await tick()
+  assert.equal(view.button('Start desktop').props.disabled, false)
+  assert.equal(view.calls.filter(item => item.method === 'start').length, 0)
+  view.unmount()
+})
+
+test('file deletion consumes explicit confirmation, binds its identity and never retries a lost reply', async () => {
+  const view = viewer()
+  await view.own()
+  view.button('List files').props.onClick()
+  await tick()
+  view.button('Delete file').props.onClick()
+  assert.equal(view.calls.filter(item => item.args.operation === 'delete').length, 0)
+  view.button('Cancel').props.onClick()
+  assert.equal(view.button('Delete file permanently'), undefined)
+  view.button('Delete file').props.onClick()
+  view.rebind()
+  view.poll()
+  await tick()
+  assert.equal(view.button('Delete file permanently'), undefined)
+  view.button('Take control').props.onClick()
+  await tick()
+  view.button('List files').props.onClick()
+  await tick()
+  view.button('Delete file').props.onClick()
+  view.failDelete()
+  view.button('Delete file permanently').props.onClick()
+  await tick()
+  const deleted = view.calls.filter(item => item.args.operation === 'delete')
+  assert.equal(deleted.length, 1)
+  assert.deepEqual(JSON.parse(JSON.stringify(deleted[0].args)), {
+    botId: 'bot', expectedGeneration: 2, controlToken: 'synthetic-ticket',
+    operation: 'delete', name: 'report.bin', version: 'a'.repeat(64),
+  })
+  assert.equal(view.button('Delete file permanently'), undefined)
+  assert.equal(view.button('Delete file'), undefined)
+  view.poll()
+  await tick()
+  assert.equal(view.calls.filter(item => item.args.operation === 'delete').length, 1)
+  view.unmount()
+})
+
 test('live takeover passes its token to the stream and never submits snapshot input', async () => {
   const view = viewer()
   await view.own({ live: true })
@@ -141,6 +226,22 @@ test('live takeover passes its token to the stream and never submits snapshot in
   view.button('Use snapshot control').props.onClick()
   assert.equal(screen().props.live, false)
   assert.equal(screen().props.controlToken, undefined)
+})
+
+test('takeover clicked during a background preview runs once after the preview settles', async () => {
+  const view = viewer()
+  let release
+  view.wait(new Promise(resolve => { release = resolve }))
+  view.render()
+  await tick()
+  view.button('Take control').props.onClick()
+  assert.equal(view.calls.some(call => call.method === 'takeover'), false)
+  view.wait(null)
+  release()
+  await tick()
+  assert.equal(view.calls.filter(call => call.method === 'takeover').length, 1)
+  assert.ok(view.button('Renew control'))
+  view.unmount()
 })
 
 test('unchanged desktop images keep fresh input enabled without another image load', async () => {

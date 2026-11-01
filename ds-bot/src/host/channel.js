@@ -562,6 +562,9 @@ export function install(rt) {
         case 'computer-state':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.state())
+        case 'computer-reconnect':
+          if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
+          return ok(await rt.computer.reconnect(body))
         case 'computer-preview':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.preview(body))

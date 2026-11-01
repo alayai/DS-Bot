@@ -764,3 +764,136 @@ Both benches were stopped; only their temporary homes and fixture resources
 were removed. The matching Linux harness remains available for future checks.
 This batch changes development/verification tooling, not the plugin payload;
 the preceding `0.2.5-cua.6` preview remains the functional test package.
+
+
+## 2026-11-01 — model gestures and chunked file transfers
+
+Implemented public driver mappings for double-click (`count: 2`), key modifiers
+and bounded drag gestures. File transfers now use 256 KiB chunks with a 16 MiB
+file cap, SHA-256 validation, atomic no-overwrite publication, fixed export
+snapshots, cancellation and expiry cleanup. The panel counts acknowledged bytes.
+A background preview no longer silently drops a takeover click or file selection.
+
+| Check | Result | Scope |
+|---|---|---|
+| Plugin unit suite | 1448 passed, 2 skipped, 0 failed | Includes strict gesture schemas, stale control/generation, cancellation, expiry, corrupted export and lost commit acknowledgements |
+| Full Bot mock smoke | 52/52 passed | Isolated Linux test home and matching pinned DSH harness; no retry of actions |
+| Real driver smoke | Passed | Independent Ctrl+A replacement, double-click and drag markers; 1 MiB model attachment import/export; lifecycle/checkpoint regression |
+| Real panel file smoke | Passed | Browser File APIs to Host/Broker/guest; 1 MiB upload/download, in-flight chunk cancellation, no overwrite, no uncaught browser errors |
+| Python filesystem tests | 7 passed | Empty and 16 MiB boundary, symlink/hardlink refusal, immutable export snapshot, checksum/order, swapped staging path |
+| Desktop runtime packaging | 5 passed | Updated closed bundle inventory and standalone payload checks |
+| Generated client/runtime and lint | Passed | Existing repository lint warnings remain |
+
+The guest helper publishes from the checked open file descriptor, avoiding a
+staging-path replacement between validation and linking. Lost final replies
+remain uncertain and are never replayed. IPC frames remain bounded; raising the
+file cap did not increase the Broker's 1 MiB stdin framing limit.
+
+Windows Electron/IME and installer acceptance remain the user's test step. This
+is not a real visual-model quality evaluation or completion of the full roadmap.
+Only owned fixture containers, volumes, processes and test homes were removed.
+Logs: `/tmp/cua-enhance-{tests,lint,smoke,real,panel,python,app}.log`.
+
+Local preview: `artifacts/ds-bot-0.2.5-cua.7.tgz` (1,066,247 bytes).
+SHA-256: `aac4d99d408f045ced503827e9a9e4174fbac0b79859c84d86e422c7f8086c4b`.
+Only the staged package version changed; repository package version remains 0.2.4.
+The final archive was independently extracted and all 23 runtime payload files
+passed manifest verification. Its extracted Host provider and Broker started a
+real desktop, returned a 1280×800 PNG, roundtripped the full **16 MiB** limit, and
+removed an unpublished import on revocation; the old transfer identity was refused.
+See `/tmp/cua-enhance-packed.log`. The final translation/build check also passed
+105 focused tests; no additional functional changes followed those checks.
+
+## 2026-11-01 — 200 MiB file limit
+
+The UI, model descriptions, Host admission, Broker admission and guest helper now
+accept files up to **209,715,200 bytes (200 MiB)**; one additional byte is refused.
+Chunks remain 256 KiB and IPC framing limits are unchanged. The browser hashes
+bounded slices incrementally with pinned @noble/hashes 2.0.1 (MIT, notice and license
+included). Downloads hash received chunks without rereading the complete Blob.
+Host attachment ingestion and model exports use a single sized output buffer
+instead of retaining all chunks and then allocating another combined copy.
+
+Snapshot preparation and commit have longer bounded waits; slow snapshot creation
+starts its idle expiry after preparation. Long file operations preserve the same
+control identity, and return to normal expiry afterward. Free-space reserve remains
+16 MiB, independent of the 200 MiB file limit. No automatic replay was added.
+
+| Check | Result |
+|---|---|
+| Plugin unit suite | 1452 passed, 2 skipped, 0 failed |
+| Guest filesystem suite | 7 passed, including a complete 200 MiB write/commit and one-byte-over-limit refusal |
+| Real browser panel | 200 MiB uploaded and downloaded; exact length and SHA-256 matched; cancellation and overwrite protection passed |
+| Full mock Bot regression | 52/52 passed |
+| Build, generated client/runtime checks, lint | Passed; existing lint warnings remain |
+| Clean dependency install | `npm ci --ignore-scripts --legacy-peer-deps` passed in an isolated Linux directory |
+| Extracted preview | All 23 runtime files verified; model transfer roundtrip, 200 MiB admission and 200 MiB + 1 refusal passed |
+
+Preview: `artifacts/ds-bot-0.2.5-cua.8.tgz`, 1,075,334 bytes.
+SHA-256: `cf6120548b14838d0e0b739fe70cd5e6be59099ba6b1eaa5ee162b35f34350fc`.
+Only the staged preview version changes; source version remains 0.2.4.
+Logs: `/tmp/cua200-{panel,packed,tests,python,smoke,build,lint,dependencies}.log`.
+The isolated mock bench and owned test containers/volumes were stopped and removed.
+Windows desktop acceptance remains separate; these real tests ran under Linux/WSL.
+
+## 2026-11-01 — Manual transfer-file cleanup
+
+Added explicit file deletion while the user holds desktop control, with a
+confirmation bound to the desktop generation, control ticket, file name and
+listing version. Listing reports visible regular-file bytes and runtime free
+space. The 200 MiB transfer limit is unchanged; cleanup also accepts larger
+regular files. Model tools do not expose deletion.
+
+| Check | Result |
+|---|---|
+| Plugin unit suite | 1455 passed, 2 skipped, 0 failed |
+| Full mock Bot regression | 52/52 passed; isolated bench stopped and removed |
+| Guest filesystem suite | 10 passed, including existing full 200 MiB commit and new cleanup cases |
+| Real browser panel | 1,048,607-byte roundtrip, cancel and overwrite checks passed; cancelling deletion preserved bytes, changed file was refused, fresh confirmation removed it and refreshed the list |
+| Authorization and failure checks | Missing/stale control, stale generation, invalid name/version refused before dispatch; active transfer blocks deletion; lost reply is not retried |
+| Build, generated client/runtime checks, lint | Passed; existing lint warnings remain |
+| Extracted preview | All 23 runtime hashes and generated client matched; 3 cleanup filesystem tests passed against the extracted helper |
+
+Deletion uses a no-follow directory descriptor and unlinks only the selected
+flat name. Metadata checks detect stale listings before unlink; they are not an
+atomic inode compare-and-delete guarantee against concurrent guest renaming.
+The link-swap test verifies that the destination of a substituted symlink survives.
+
+Preview: `artifacts/ds-bot-0.2.5-cua.9.tgz`, 1,076,767 bytes.
+SHA-256: `e0d92c54a29f3aa1ba712cdf4ee790d63444bfa9c3498ac9829443cb23984ef8`.
+Source version remains 0.2.4. Logs: `/tmp/cua9-{tests,python,panel,packed,build,lint,package,smoke}.log`.
+Owned test containers and volumes were removed; existing user containers were left untouched.
+Windows desktop acceptance remains with the user.
+
+## 2026-11-01 — Native desktop service recovery
+
+The panel now starts an explicit background recovery of the shared native Broker.
+It invalidates all desktop viewers, control tickets and observations, drains
+cancelled operations, retires the previous Broker, checks the original engine
+identity, then stops and reconciles each registered desktop. Homes, checkpoints
+and unknown receipts survive; desktops require an explicit start afterward.
+Old-window consent is rejected and ordinary polling never reconnects the Broker.
+
+| Check | Result |
+|---|---|
+| Plugin unit suite | 1463 passed, 2 skipped, 0 failed |
+| Full mock Bot regression | 52/52 passed; isolated bench stopped and removed |
+| Final Broker tests | 13 passed, including retirement/cancellation, engine identity mismatch and interrupted lifecycle refusal |
+| Host/API/UI recovery | Cross-Bot invalidation, pending input to unknown, stale consent/control rejection, partial failure blocking, explicit retry and management-only endpoint passed |
+| Real browser and two guests | Killed only the fixture Broker; cancelled then confirmed recovery in the panel; both desktops stopped; old ticket refused; explicit restart retained distinct home markers |
+| Existing file panel regression | Chunked roundtrip, cancel, no overwrite and confirmed file cleanup passed |
+| Build, generated client/runtime checks, lint | Passed; no new lint warnings in changed recovery files |
+| Extracted preview | All 23 runtime hashes and generated client matched; extracted Host provider and Broker completed two native recovery handshakes |
+
+Legacy Windows WSL stdio recovery remains unavailable. A crash with an
+unconfirmed lifecycle operation refuses in-place replacement because engine
+helpers may not have settled; restart DSH and inspect lifecycle recovery.
+Tests ran under Linux/WSL with native Node; Windows Electron GUI acceptance
+remains with the user.
+
+Preview: `artifacts/ds-bot-0.2.5-cua.10.tgz`, 1,080,121 bytes.
+SHA-256: `7bfc04a2aba1f18e0d06cb38ba1919ec5984d01f141942d0677250ec1d5266cd`.
+Source version remains 0.2.4. Logs:
+`/tmp/cua10-{tests,broker-final,panel,build,lint,package,smoke}.log`.
+Both owned guest containers and volumes were removed. Existing user containers
+were left untouched.

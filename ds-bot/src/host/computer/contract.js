@@ -19,27 +19,39 @@ export function checkActions(actions, frame) {
   return actions.map(action => {
     if (!action || typeof action !== 'object' || Array.isArray(action)) throw refused('invalid', 'Invalid action.')
     const fields = {
-      click: ['type', 'x', 'y', 'button'],
+      click: ['type', 'x', 'y', 'button', 'count'],
       text: ['type', 'text'],
-      key: ['type', 'key'],
+      key: ['type', 'key', 'modifiers'],
+      drag: ['type', 'x', 'y', 'toX', 'toY', 'button', 'durationMs'],
       scroll: ['type', 'x', 'y', 'deltaY'],
     }
     const keys = Object.hasOwn(fields, action.type) ? fields[action.type] : undefined
     if (!keys || Object.keys(action).some(key => !keys.includes(key))) throw refused('invalid', 'Unsupported action or field.')
-    if (action.type === 'click' || action.type === 'scroll') {
+    if (['click', 'scroll', 'drag'].includes(action.type)) {
       if (!Number.isInteger(action.x) || !Number.isInteger(action.y)
         || action.x < 0 || action.y < 0 || action.x >= frame.width || action.y >= frame.height) {
         throw refused('invalid', 'Coordinates must be inside the observed image.')
       }
     }
-    if (action.type === 'click' && action.button !== undefined && !['left', 'right', 'middle'].includes(action.button)) {
+    if (['click', 'drag'].includes(action.type) && action.button !== undefined && !['left', 'right', 'middle'].includes(action.button)) {
       throw refused('invalid', 'Unsupported mouse button.')
+    }
+    if (action.type === 'click' && action.count !== undefined && ![1, 2].includes(action.count)) throw refused('invalid', 'Click count must be one or two.')
+    if (action.type === 'drag' && (!Number.isInteger(action.toX) || !Number.isInteger(action.toY)
+      || action.toX < 0 || action.toY < 0 || action.toX >= frame.width || action.toY >= frame.height
+      || (action.durationMs !== undefined && (!Number.isInteger(action.durationMs) || action.durationMs < 100 || action.durationMs > 2000)))) {
+      throw refused('invalid', 'Drag endpoints must be inside the observation and duration between 100 and 2000 ms.')
     }
     if (action.type === 'text' && (typeof action.text !== 'string' || action.text.length < 1 || action.text.length > 4000 || action.text.includes('\0'))) {
       throw refused('invalid', 'Text must contain between one and 4000 characters without NUL.')
     }
-    if (action.type === 'key' && !/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown|Space)$/.test(action.key)) {
-      throw refused('invalid', 'Unsupported key. Key combinations are not enabled yet.')
+    if (action.type === 'key' && (typeof action.key !== 'string' || !/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown|Space|[a-zA-Z0-9]|F[1-9]|F1[0-2])$/.test(action.key))) {
+      throw refused('invalid', 'Unsupported keyboard key.')
+    }
+    if (action.type === 'key' && action.modifiers !== undefined
+      && (!Array.isArray(action.modifiers) || action.modifiers.length > 4 || new Set(action.modifiers).size !== action.modifiers.length
+        || action.modifiers.some(key => !['Control', 'Shift', 'Alt', 'Super'].includes(key)))) {
+      throw refused('invalid', 'Unsupported or duplicate key modifiers.')
     }
     if (action.type === 'scroll' && (!Number.isInteger(action.deltaY) || Math.abs(action.deltaY) > 50 || action.deltaY === 0)) {
       throw refused('invalid', 'Scroll distance must be a nonzero integer between -50 and 50 line steps.')

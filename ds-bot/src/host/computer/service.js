@@ -1,3 +1,4 @@
+import { checkTransfer, CHUNK_SIZE } from '../../shared/computer-files.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { checkActions, checkFrame, checkId, checkProvider, refused } from './contract.js'
@@ -38,12 +39,19 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   let closed = false
   let initializing
+  let recovery = { version: randomUUID(), status: 'idle', stage: null, completed: 0, total: 0 }
+  let recoveryTask
+  let recoveryAbort
+  const recoverySupported = provider.recoverySupported === true && typeof provider.reconnect === 'function'
+  function operational() {
+    if (['running', 'failed'].includes(recovery.status)) throw refused('recovery-required', 'Recover the desktop service before continuing.')
+  }
   function writable() {
     if (closed) throw refused('unavailable', 'The Computer service is stopping.')
     if (rt.readOnly() !== undefined) throw refused('read-only', 'This host does not own the Bot team.')
   }
   const store = createComputerStore(join(rt.home, 'computers', 'registry.json'), { writable })
-  async function ready() {
+  async function ready(allowRecovery = false) {
     await rt.load()
     writable()
     if (!initializing) initializing = (async () => {
@@ -93,6 +101,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     })()
     await initializing
     writable()
+    if (!allowRecovery) operational()
   }
   function owner(exec) {
     const sessionId = exec?.agent?.session?.id ?? exec?.agent?.id
@@ -131,12 +140,14 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     }
   }
   async function administration(id, work) {
+    operational()
     if (managing.has(id)) throw refused('busy', 'Desktop settings are already changing.')
     managing.add(id)
     try { return await work() } finally { managing.delete(id) }
   }
   function available(record) {
     writable()
+    operational()
     if (store.snapshot()?.lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before using this desktop.')
     if (record.grant === 'off') throw refused('off', 'This desktop is disabled. Its files are retained.')
     if (controls.get(record.id) && controls.get(record.id) !== 'none') {
@@ -156,6 +167,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     return current
   }
   function exclusive(record, signal, work) {
+    operational()
     if (active.has(record.id)) throw refused('busy', 'A desktop operation is still settling.')
     const controller = new AbortController()
     const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
@@ -203,13 +215,13 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime })
   const storage = storageManager.run
   async function state() {
-    await ready()
+    await ready(true)
     const stored = await store.load()
     const computers = []
     for (const record of Object.values(stored.computers)) {
       let phase = 'unavailable'
       try {
-        const inspected = await provider.inspect(record)
+        const inspected = recovery.status === 'running' ? {} : await provider.inspect(record)
         if (['ready', 'stopped', 'starting', 'error'].includes(inspected.phase)) phase = inspected.phase
       } catch {}
       computers.push({
@@ -221,7 +233,96 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         humanExpired: controls.get(record.id) === 'human' && (!humans.has(record.id) || humans.get(record.id).expires <= clock()),
       })
     }
-    return { revision: stored.revision, computers, images: provider.images ?? [], limits: { maxRunning, idleStopMs }, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list() }
+    return { revision: stored.revision, computers, images: provider.images ?? [], limits: { maxRunning, idleStopMs }, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list(),
+      recovery: { ...recovery, supported: recoverySupported, disconnected: provider.connectionState?.() === 'disconnected' } }
+  }
+  async function drainOperations(operations, signal) {
+    let timer, abort
+    try {
+      await Promise.race([
+        Promise.allSettled(operations.map(item => item.promise)),
+        new Promise((_, reject) => {
+          abort = () => reject(refused('cancelled', 'Desktop service recovery was cancelled.'))
+          timer = setTimeout(() => reject(refused('busy', 'A desktop operation has not settled. Wait before retrying recovery.')), 45_000)
+          signal.addEventListener('abort', abort, { once: true })
+          if (signal.aborted) abort()
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+    }
+  }
+  async function recoverService(records, operations, signal) {
+    await store.update(draft => {
+      for (const record of records) draft.computers[record.id].humanPaused = true
+    })
+    await drainOperations(operations, signal)
+    writable()
+    signal.throwIfAborted()
+    recovery.stage = 'reconnecting'
+    await provider.reconnect({ signal })
+    recovery.stage = 'checking'
+    for (const record of records) {
+      writable()
+      signal.throwIfAborted()
+      compatible(record)
+      await provider.revoke(record, { signal })
+      await provider.stop(record, { signal })
+      await storageManager.reconcile(record)
+      const current = (await store.load()).computers[record.id]
+      if ((await provider.inspect(current, { signal })).phase !== 'stopped') {
+        throw refused('recovery-required', 'A desktop could not be confirmed stopped.')
+      }
+      recovery.completed++
+    }
+    writable()
+    signal.throwIfAborted()
+    await store.update(draft => {
+      for (const record of records) {
+        draft.computers[record.id].generation++
+        draft.computers[record.id].humanPaused = false
+      }
+      for (const item of Object.values(draft.operations)) if (item.outcome === 'pending') item.outcome = 'unknown'
+      for (const item of Object.values(draft.handoffs ?? {})) {
+        if (['pending', 'queued', 'sending', 'unknown'].includes(item.status)) item.status = 'cancelled'
+      }
+    })
+    for (const record of records) {
+      controls.set(record.id, 'none')
+      touched.set(record.id, clock())
+    }
+    recovery.status = 'completed'
+    recovery.stage = null
+  }
+  async function reconnect(args) {
+    await ready(true)
+    if (!recoverySupported) throw refused('unavailable', 'Restart DSH to recover this desktop bridge.')
+    const stored = await store.load()
+    checkId(args.botId)
+    const record = Object.values(stored.computers).find(item => item.botId === args.botId && !item.archived)
+    if (!rt.botOf(args.botId) || !record) throw refused('owner-denied', 'Choose an assigned desktop.')
+    if (record.generation !== args.expectedGeneration) throw refused('stale-generation', 'The desktop binding changed. Refresh before recovering.')
+    if (args.expectedRecovery !== recovery.version) throw refused('conflict', 'Desktop service recovery changed. Refresh before confirming.')
+    if (recovery.status === 'running' || managing.size) throw refused('busy', 'A desktop management operation is still running.')
+    const records = Object.values(stored.computers)
+    const operations = [...active.values()]
+    recovery = { version: randomUUID(), status: 'running', stage: 'settling', completed: 0, total: records.length }
+    recoveryAbort = new AbortController()
+    for (const item of records) {
+      controls.set(item.id, 'blocked')
+      humans.delete(item.id)
+      invalidate(item.id)
+    }
+    for (const operation of operations) operation.controller.abort()
+    recoveryTask = recoverService(records, operations, recoveryAbort.signal).catch(error => {
+      recovery.status = 'failed'
+      recovery.problem = error.code === 'bot/computer-recovery-unsafe' ? 'interrupted-management'
+        : error.code === 'bot/computer-runtime-changed' ? 'runtime-changed'
+        : ['bot/computer-busy', 'bot/computer-recovery-required'].includes(error.code) ? 'unsettled' : 'unavailable'
+      for (const item of records) controls.set(item.id, 'blocked')
+    })
+    return state()
   }
   async function diagnostics(args) {
     await ready()
@@ -484,6 +585,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   function human(record, token) {
     writable()
+    operational()
     const ticket = humans.get(record.id)
     if (controls.get(record.id) !== 'human' || typeof token !== 'string'
       || ticket?.token !== token || ticket.expires <= clock()) {
@@ -630,17 +732,24 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     const record = await userRecord(args)
     human(record, args.controlToken)
     if (typeof provider.files !== 'function') throw refused('unavailable', 'File transfer is unavailable.')
-    if (!['list', 'read', 'write'].includes(args.operation)) throw refused('invalid', 'Unknown file operation.')
-    if (args.operation !== 'list' && (typeof args.name !== 'string' || !/^[^/\\\x00-\x1f]{1,120}$/.test(args.name)
-      || args.name === '.' || args.name === '..' || args.name.startsWith('.'))) throw refused('invalid', 'Use a plain file name without folders or hidden names.')
-    if (args.operation === 'write' && (typeof args.data !== 'string' || args.data.length > 349_528
-      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.data)
-      || Buffer.from(args.data, 'base64').length > 262_144)) throw refused('invalid', 'Files must be at most 256 KiB.')
+    let request
+    if (['list', 'read', 'write'].includes(args.operation)) {
+      if (args.operation !== 'list') fileName(args.name)
+      if (args.operation === 'write' && (typeof args.data !== 'string' || args.data.length > Math.ceil(CHUNK_SIZE / 3) * 4
+        || fileBytes(args.data).length > CHUNK_SIZE)) throw refused('invalid', 'Use chunked transfer for files larger than 256 KiB.')
+      request = { operation: args.operation, name: args.name, data: args.data }
+    } else {
+      if (!provider.chunkedFiles) throw refused('unavailable', 'Update the runtime before using chunked file transfer.')
+      try { request = checkTransfer(args) } catch (error) { throw refused('invalid', error.message) }
+      if (args.operation === 'write-chunk' && fileBytes(args.data).length > CHUNK_SIZE) throw refused('invalid', 'Invalid file chunk.')
+    }
     return exclusive(record, undefined, async signal => {
-      human(record, args.controlToken).frame = null
-      const value = await provider.files(record, { operation: args.operation, name: args.name, data: args.data, signal })
+      const ticket = human(record, args.controlToken)
+      ticket.frame = null
+      ticket.expires = clock() + (['begin-read', 'commit'].includes(request.operation) ? 180_000 : humanTtl)
+      const value = await provider.files(record, { ...request, signal })
       signal.throwIfAborted()
-      human(record, args.controlToken)
+      human(record, args.controlToken).expires = clock() + humanTtl
       return value
     })
   }
@@ -700,22 +809,25 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
             signal.throwIfAborted()
             await stillOwns(record, who)
             leases.check(lease)
-            await provider.files(record, { operation: 'write', name: args.name, data: data.toString('base64'), signal })
+            if (provider.importFile) await provider.importFile(record, { name: args.name, data, signal })
+            else await provider.files(record, { operation: 'write', name: args.name, data: data.toString('base64'), signal })
             result = { outcome: 'completed', completedActions: 1 }
           } catch { /* A completed rename may precede a lost reply; never replay it. */ }
           await store.update(draft => Object.assign(draft.operations[id], result))
           return receipt({ id, ...result })
         }
-        const value = await provider.files(record, {
+        const exported = method === 'export' && provider.exportFile
+          ? await provider.exportFile(record, { name: args.name, signal }) : null
+        const value = exported === null ? await provider.files(record, {
           operation: method === 'export' ? 'read' : 'list',
           ...(method !== 'list' ? { name: args.name } : {}),
           ...(data ? { data: data.toString('base64') } : {}), signal,
-        })
+        }) : null
         signal.throwIfAborted()
         await stillOwns(record, who)
         leases.check(lease)
         if (method !== 'export') return value
-        const bytes = fileBytes(value.data)
+        const bytes = exported ?? fileBytes(value.data)
         const file = await attachments.saveFile({ data: bytes, name: args.name })
         signal.throwIfAborted()
         await stillOwns(record, who)
@@ -741,6 +853,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     await store.update(draft => { draft.computers[record.id].archived = true })
   }
   async function endTurn(sessionId, turnId) {
+    if (['running', 'failed'].includes(recovery.status)) return
     for (const record of Object.values((await store.load()).computers)) {
       if (held.get(record.id)?.sessionId !== sessionId) continue
       if (turnId !== undefined && held.get(record.id)?.turnId !== turnId) continue
@@ -752,7 +865,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     }
   }
   async function reapIdle() {
-    if (closed || !initializing || idleStopMs === 0) return
+    if (closed || !initializing || idleStopMs === 0 || ['running', 'failed'].includes(recovery.status)) return
     await ready()
     for (const record of Object.values((await store.load()).computers)) {
       if (record.archived || held.has(record.id) || viewers.has(record.id) || active.has(record.id) || managing.has(record.botId)
@@ -771,8 +884,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   async function dispose() {
     closed = true
+    recoveryAbort?.abort()
     for (const operation of active.values()) operation.controller.abort()
     try {
+      await recoveryTask
       if (initializing) {
         await initializing.catch(() => {})
         const state = await store.load()
@@ -783,5 +898,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, diagnostics, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, diagnostics, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }

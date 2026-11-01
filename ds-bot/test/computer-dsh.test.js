@@ -40,7 +40,28 @@ test('disabled Computer feature adds no tools, service or mutable API', async t 
   assert.equal(h.rt.computer, undefined)
   assert.ok(![...h.ctx.registeredTools.keys()].some(name => name.startsWith('computer_')))
   assert.equal((await h.call('computer-start', { botId: 'a', expectedGeneration: 1 })).error.code, 'bot/computer-off')
+  assert.equal((await h.call('computer-reconnect', { botId: 'a', expectedGeneration: 1 })).error.code, 'bot/computer-off')
   assert.equal((await h.call('computer-setup-prepare', { botId: 'a' })).error.code, 'bot/computer-off')
+})
+
+test('desktop service recovery is a user management endpoint, not a model tool', async t => {
+  let restarts = 0
+  const provider = Object.assign(createFakeComputer(), { recoverySupported: true, reconnect: async () => { restarts++ } })
+  const h = await host(t, true, { computerProvider: provider })
+  await h.ctx.emitAsync('agent/created', { agent: h.ctx.scopeAgent('a') })
+  assert.ok(!h.ctx.registeredTools.has('computer_reconnect'))
+  await h.call('computer-bind', { botId: 'a', expectedRevision: 0 })
+  const state = (await h.call('computer-state')).value
+  const args = { botId: 'a', expectedGeneration: 1, expectedRecovery: state.recovery.version }
+  assert.equal((await h.call('computer-reconnect', args)).ok, true)
+  assert.equal((await h.call('computer-reconnect', args)).ok, false)
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const value = (await h.call('computer-state')).value
+    if (value.recovery.status === 'completed') break
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.equal((await h.call('computer-state')).value.recovery.status, 'completed')
+  assert.equal(restarts, 1)
 })
 
 test('installed plugin setup enables scoped tools and reports capability changes in unchanged state replies', async t => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -116,7 +116,77 @@ process.on('message', message => {
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   assert.equal((await provider.inspect(target.record)).phase, 'stopped')
   await assert.rejects(provider.start(target.record), /disconnected/)
-  assert.throws(() => provider.inspect(target.record), /Restart the host/)
+  assert.throws(() => provider.inspect(target.record), /Recover the desktop service/)
+})
+
+test('explicit Broker recovery waits for retirement, accepts cancellation and never replays input', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'ds-bot-broker-recovery-'))
+  const entrypoint = join(home, 'fixture.mjs')
+  const log = join(home, 'events.txt')
+  await writeFile(entrypoint, `
+import {appendFileSync} from 'node:fs'
+const log = ${JSON.stringify(log)}
+appendFileSync(log, 'spawn\\n')
+process.on('disconnect', () => setTimeout(() => process.exit(0), 200))
+process.on('message', message => {
+  if (message.method === 'perform') {
+    appendFileSync(log, 'input\\n')
+    process.disconnect()
+    return
+  }
+  const runtimeKey = 'a'.repeat(64)
+  process.send({id:message.id, ok:true, runtimeKey, value:message.method === 'health' ? {protocolVersion:1,runtimeKey} : {phase:'stopped'}})
+})
+`)
+  const provider = createBrokerProvider({ entrypoint, image })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  await provider.inspect(target.record)
+  await assert.rejects(provider.perform(target.record, {}), /disconnected/)
+  assert.equal(provider.connectionState(), 'disconnected')
+  const controller = new AbortController()
+  const interrupted = provider.reconnect({ signal: controller.signal })
+  controller.abort()
+  await assert.rejects(interrupted, /cancelled/)
+  assert.deepEqual((await readFile(log, 'utf8')).trim().split('\n'), ['spawn', 'input'])
+  const recovering = provider.reconnect()
+  assert.throws(() => provider.inspect(target.record), /recovery is running/)
+  await recovering
+  assert.equal(provider.connectionState(), 'connected')
+  assert.equal((await provider.inspect(target.record)).phase, 'stopped')
+  assert.deepEqual((await readFile(log, 'utf8')).trim().split('\n'), ['spawn', 'input', 'spawn'])
+})
+
+test('recovery refuses a changed engine before dispatching any desktop mutation', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'ds-bot-broker-identity-'))
+  const entrypoint = join(home, 'fixture.mjs')
+  const identity = join(home, 'engine.txt')
+  await writeFile(identity, 'a'.repeat(64))
+  await writeFile(entrypoint, `
+import {readFileSync} from 'node:fs'
+const runtimeKey = readFileSync(${JSON.stringify(identity)}, 'utf8')
+process.on('message', message => process.send({id:message.id, ok:true, runtimeKey,
+value:message.method === 'health' ? {protocolVersion:1,runtimeKey} : {phase:'stopped'}}))
+`)
+  const provider = createBrokerProvider({ entrypoint, image })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  await provider.inspect(target.record)
+  await writeFile(identity, 'b'.repeat(64))
+  await assert.rejects(provider.reconnect(), error => error.code === 'bot/computer-runtime-changed')
+  assert.throws(() => provider.start(target.record), /Recover the desktop service/)
+  await writeFile(identity, 'a'.repeat(64))
+  await provider.reconnect()
+  assert.equal((await provider.inspect(target.record)).phase, 'stopped')
+})
+
+test('a crashed Broker with unconfirmed lifecycle work cannot be replaced in place', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'ds-bot-broker-unsafe-'))
+  const entrypoint = join(home, 'fixture.mjs')
+  await writeFile(entrypoint, `process.on('message', () => process.exit(23))`)
+  const provider = createBrokerProvider({ entrypoint, image })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  await assert.rejects(provider.start(target.record), /disconnected/)
+  await assert.rejects(provider.reconnect(), error => error.code === 'bot/computer-recovery-unsafe')
+  assert.equal(provider.connectionState(), 'disconnected')
 })
 
 test('Windows Broker launch uses fixed WSL argv without a command shell', async () => {

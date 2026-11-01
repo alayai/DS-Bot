@@ -9340,12 +9340,12 @@ var require_websock = __commonJS({
             this._rQlen = 0;
             this._rQi = 0;
           }
-          var u8 = new Uint8Array(e.data);
-          if (u8.length > this._rQbufferSize - this._rQlen) {
-            this._expandCompactRQ(u8.length);
+          var u82 = new Uint8Array(e.data);
+          if (u82.length > this._rQbufferSize - this._rQlen) {
+            this._expandCompactRQ(u82.length);
           }
-          this._rQ.set(u8, this._rQlen);
-          this._rQlen += u8.length;
+          this._rQ.set(u82, this._rQlen);
+          this._rQlen += u82.length;
           if (this._rQlen - this._rQi > 0) {
             this._eventHandlers.message();
           } else {
@@ -10865,24 +10865,24 @@ var require_bigint = __commonJS({
     }
     function bigIntToU8Array(bigint) {
       var padLength = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : 0;
-      var hex = bigint.toString(16);
+      var hex2 = bigint.toString(16);
       if (padLength === 0) {
-        padLength = Math.ceil(hex.length / 2);
+        padLength = Math.ceil(hex2.length / 2);
       }
-      hex = hex.padStart(padLength * 2, "0");
-      var length = hex.length / 2;
+      hex2 = hex2.padStart(padLength * 2, "0");
+      var length = hex2.length / 2;
       var arr = new Uint8Array(length);
       for (var i = 0; i < length; i++) {
-        arr[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        arr[i] = parseInt(hex2.slice(i * 2, i * 2 + 2), 16);
       }
       return arr;
     }
     function u8ArrayToBigInt(arr) {
-      var hex = "0x";
+      var hex2 = "0x";
       for (var i = 0; i < arr.length; i++) {
-        hex += arr[i].toString(16).padStart(2, "0");
+        hex2 += arr[i].toString(16).padStart(2, "0");
       }
-      return BigInt(hex);
+      return BigInt(hex2);
     }
   }
 });
@@ -11928,12 +11928,12 @@ var require_md5 = __commonJS({
       var m = 1732584193, f = -271733879, r = -1732584194, i = 271733878;
       for (var n = 0; n < d.length; n += 16) {
         var h52 = m, t2 = f, _g = r, e = i;
-        f = ii(f = ii(f = ii(f = ii(f = hh(f = hh(f = hh(f = hh(f = gg(f = gg(f = gg(f = gg(f = ff(f = ff(f = ff(f = ff(f, r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 0], 7, -680876936), f, r, d[n + 1], 12, -389564586), m, f, d[n + 2], 17, 606105819), i, m, d[n + 3], 22, -1044525330), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 4], 7, -176418897), f, r, d[n + 5], 12, 1200080426), m, f, d[n + 6], 17, -1473231341), i, m, d[n + 7], 22, -45705983), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 8], 7, 1770035416), f, r, d[n + 9], 12, -1958414417), m, f, d[n + 10], 17, -42063), i, m, d[n + 11], 22, -1990404162), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 12], 7, 1804603682), f, r, d[n + 13], 12, -40341101), m, f, d[n + 14], 17, -1502002290), i, m, d[n + 15], 22, 1236535329), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 1], 5, -165796510), f, r, d[n + 6], 9, -1069501632), m, f, d[n + 11], 14, 643717713), i, m, d[n + 0], 20, -373897302), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 5], 5, -701558691), f, r, d[n + 10], 9, 38016083), m, f, d[n + 15], 14, -660478335), i, m, d[n + 4], 20, -405537848), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 9], 5, 568446438), f, r, d[n + 14], 9, -1019803690), m, f, d[n + 3], 14, -187363961), i, m, d[n + 8], 20, 1163531501), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 13], 5, -1444681467), f, r, d[n + 2], 9, -51403784), m, f, d[n + 7], 14, 1735328473), i, m, d[n + 12], 20, -1926607734), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 5], 4, -378558), f, r, d[n + 8], 11, -2022574463), m, f, d[n + 11], 16, 1839030562), i, m, d[n + 14], 23, -35309556), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 1], 4, -1530992060), f, r, d[n + 4], 11, 1272893353), m, f, d[n + 7], 16, -155497632), i, m, d[n + 10], 23, -1094730640), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 13], 4, 681279174), f, r, d[n + 0], 11, -358537222), m, f, d[n + 3], 16, -722521979), i, m, d[n + 6], 23, 76029189), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 9], 4, -640364487), f, r, d[n + 12], 11, -421815835), m, f, d[n + 15], 16, 530742520), i, m, d[n + 2], 23, -995338651), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 0], 6, -198630844), f, r, d[n + 7], 10, 1126891415), m, f, d[n + 14], 15, -1416354905), i, m, d[n + 5], 21, -57434055), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 12], 6, 1700485571), f, r, d[n + 3], 10, -1894986606), m, f, d[n + 10], 15, -1051523), i, m, d[n + 1], 21, -2054922799), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 8], 6, 1873313359), f, r, d[n + 15], 10, -30611744), m, f, d[n + 6], 15, -1560198380), i, m, d[n + 13], 21, 1309151649), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 4], 6, -145523070), f, r, d[n + 11], 10, -1120210379), m, f, d[n + 2], 15, 718787259), i, m, d[n + 9], 21, -343485551), m = add(m, h52), f = add(f, t2), r = add(r, _g), i = add(i, e);
+        f = ii(f = ii(f = ii(f = ii(f = hh(f = hh(f = hh(f = hh(f = gg(f = gg(f = gg(f = gg(f = ff(f = ff(f = ff(f = ff(f, r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 0], 7, -680876936), f, r, d[n + 1], 12, -389564586), m, f, d[n + 2], 17, 606105819), i, m, d[n + 3], 22, -1044525330), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 4], 7, -176418897), f, r, d[n + 5], 12, 1200080426), m, f, d[n + 6], 17, -1473231341), i, m, d[n + 7], 22, -45705983), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 8], 7, 1770035416), f, r, d[n + 9], 12, -1958414417), m, f, d[n + 10], 17, -42063), i, m, d[n + 11], 22, -1990404162), r = ff(r, i = ff(i, m = ff(m, f, r, i, d[n + 12], 7, 1804603682), f, r, d[n + 13], 12, -40341101), m, f, d[n + 14], 17, -1502002290), i, m, d[n + 15], 22, 1236535329), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 1], 5, -165796510), f, r, d[n + 6], 9, -1069501632), m, f, d[n + 11], 14, 643717713), i, m, d[n + 0], 20, -373897302), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 5], 5, -701558691), f, r, d[n + 10], 9, 38016083), m, f, d[n + 15], 14, -660478335), i, m, d[n + 4], 20, -405537848), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 9], 5, 568446438), f, r, d[n + 14], 9, -1019803690), m, f, d[n + 3], 14, -187363961), i, m, d[n + 8], 20, 1163531501), r = gg(r, i = gg(i, m = gg(m, f, r, i, d[n + 13], 5, -1444681467), f, r, d[n + 2], 9, -51403784), m, f, d[n + 7], 14, 1735328473), i, m, d[n + 12], 20, -1926607734), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 5], 4, -378558), f, r, d[n + 8], 11, -2022574463), m, f, d[n + 11], 16, 1839030562), i, m, d[n + 14], 23, -35309556), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 1], 4, -1530992060), f, r, d[n + 4], 11, 1272893353), m, f, d[n + 7], 16, -155497632), i, m, d[n + 10], 23, -1094730640), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 13], 4, 681279174), f, r, d[n + 0], 11, -358537222), m, f, d[n + 3], 16, -722521979), i, m, d[n + 6], 23, 76029189), r = hh(r, i = hh(i, m = hh(m, f, r, i, d[n + 9], 4, -640364487), f, r, d[n + 12], 11, -421815835), m, f, d[n + 15], 16, 530742520), i, m, d[n + 2], 23, -995338651), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 0], 6, -198630844), f, r, d[n + 7], 10, 1126891415), m, f, d[n + 14], 15, -1416354905), i, m, d[n + 5], 21, -57434055), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 12], 6, 1700485571), f, r, d[n + 3], 10, -1894986606), m, f, d[n + 10], 15, -1051523), i, m, d[n + 1], 21, -2054922799), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 8], 6, 1873313359), f, r, d[n + 15], 10, -30611744), m, f, d[n + 6], 15, -1560198380), i, m, d[n + 13], 21, 1309151649), r = ii(r, i = ii(i, m = ii(m, f, r, i, d[n + 4], 6, -145523070), f, r, d[n + 11], 10, -1120210379), m, f, d[n + 2], 15, 718787259), i, m, d[n + 9], 21, -343485551), m = add2(m, h52), f = add2(f, t2), r = add2(r, _g), i = add2(i, e);
       }
       return Array(m, f, r, i);
     }
     function cmn(d, g, m, f, r, i) {
-      return add(rol(add(add(g, d), add(f, i)), r), m);
+      return add2(rol(add2(add2(g, d), add2(f, i)), r), m);
     }
     function ff(d, g, m, f, r, i, n) {
       return cmn(g & m | ~g & f, d, g, r, i, n);
@@ -11947,7 +11947,7 @@ var require_md5 = __commonJS({
     function ii(d, g, m, f, r, i, n) {
       return cmn(m ^ (g | ~f), d, g, r, i, n);
     }
-    function add(d, g) {
+    function add2(d, g) {
       var m = (65535 & d) + (65535 & g);
       return (d >> 16) + (g >> 16) + (m >> 16) << 16 | 65535 & m;
     }
@@ -12073,7 +12073,7 @@ var require_crypto = __commonJS({
         }
       }, {
         key: "digest",
-        value: function digest(algorithm, data) {
+        value: function digest2(algorithm, data) {
           var alg = this._algorithms[algorithm];
           if (typeof alg !== "function") {
             throw new Error("algorithm is not supported");
@@ -17697,7 +17697,43 @@ var ZH = {
   "Transfer files": "传输文件",
   "Import file": "导入文件",
   "List files": "列出文件",
+  "Listed files": "列表文件",
+  "Delete file": "删除文件",
+  "Confirm file deletion": "确认删除文件",
+  "Desktop service recovery": "桌面服务恢复",
+  "A desktop startup or storage operation was interrupted. Restart DSH and check desktop recovery before continuing.": "桌面启动或存储操作异常中断，请重启 DSH 并检查桌面恢复状态后再继续。",
+  "The desktop engine connection changed. Restore the previous connection before retrying.": "桌面引擎连接已改变，请恢复原来的连接后重试。",
+  "Recover desktop service": "恢复桌面服务",
+  "Confirm service recovery": "确认恢复服务",
+  "Recover service and stop desktops": "恢复服务并停止桌面",
+  "Waiting for desktop operations to stop…": "正在等待桌面操作停止…",
+  "Reconnecting desktop service…": "正在重新连接桌面服务…",
+  "Checking and stopping desktops…": "正在核对并停止桌面…",
+  "Desktop service recovered. Start each desktop when ready.": "桌面服务已恢复，请按需手动启动桌面。",
+  "Recovery could not finish stopping previous work. Wait, then retry.": "恢复时未能确认先前操作已停止，请稍候再试。",
+  "Recovery failed. Check that the container engine is running, then retry. Desktops remain blocked.": "恢复失败，请检查容器引擎已运行后重试。桌面仍处于阻断状态。",
+  "Stop all Bot desktops and recover their shared service? Saved files and checkpoints are kept. Start desktops manually afterward; unconfirmed actions will not be repeated.": "停止所有 Bot 桌面并恢复共用服务？已保存的文件和检查点会保留。之后需手动启动桌面，结果未确认的操作不会重放。",
+  "Restart DSH to recover this desktop bridge.": "请重启 DSH 以恢复此桌面桥接。",
+  "Delete file permanently": "永久删除文件",
+  "Permanently delete this file from the desktop? This cannot be undone.": "从桌面永久删除此文件？此操作无法撤销。",
+  "File deleted.": "文件已删除。",
+  "Deletion could not be confirmed. Refresh the file list before trying again.": "无法确认删除结果，请刷新文件列表后再操作。",
   "Use /home/cua/DSBot inside the desktop. Files up to 256 KiB; folders and overwrites are not supported.": "桌面内使用 /home/cua/DSBot 目录。单个文件最大 256 KiB；暂不支持文件夹或覆盖文件。",
+  "Use /home/cua/DSBot inside the desktop. Files up to 200 MiB; folders and overwrites are not supported.": "桌面内使用 /home/cua/DSBot 目录。单个文件最大 200 MiB；不支持文件夹或覆盖文件。",
+  "A file with this name already exists. Choose a new name.": "已存在同名文件，请使用新名称。",
+  "Finish or cancel the current file transfer first.": "请先完成或取消当前文件传输。",
+  "The file transfer expired or was cancelled. Start a new transfer.": "文件传输已过期或取消，请重新开始。",
+  "File transfer refused. Check the name, size, checksum, free space and existing files in /home/cua/DSBot.": "无法传输文件。请检查文件名、大小、校验值、剩余空间及 /home/cua/DSBot 中的已有文件。",
+  "Files must be at most 200 MiB.": "文件最大为 200 MiB。",
+  "Preparing file…": "正在准备文件…",
+  "Verifying file…": "正在校验文件…",
+  "Transferring file…": "正在传输文件…",
+  "Cancelling transfer…": "正在取消传输…",
+  "File transfer progress": "文件传输进度",
+  "Cancel transfer": "取消传输",
+  "Transfer stopped. Check the destination before retrying.": "传输已停止。重试前请检查目标位置。",
+  "The file length changed.": "文件长度发生变化，请重新选择文件。",
+  "File checksum did not match.": "文件校验失败。",
   "Files must be at most 256 KiB.": "文件最大为 256 KiB。",
   "File imported. Existing files are never overwritten.": "文件已导入，不会覆盖已有文件。",
   "Input was sent, but its effect is unconfirmed. Review the desktop before doing it again.": "已发送输入，但效果未确认。再次操作前请检查桌面。",
@@ -19055,7 +19091,7 @@ var GRADIENTS = { aurora: [[0, "#A4FFB0"], [0.42, "#00F0E4"], [1, "#2E9EF7"]] };
 var ACCENT_INKS = ["deepseek", "charcoal", "graphite", "rose", "sky", "tangerine", "cobalt"];
 var LEGACY_INKS = { kimi: "charcoal", zai: "graphite", minimax: "rose", stepfun: "sky", mimo: "tangerine", qwen: "cobalt" };
 var isHex = (color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color);
-var luminance = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+var luminance = (hex2) => [1, 3, 5].map((index) => parseInt(hex2.slice(index, index + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
 var inkName = (color) => INKS[color] ? color : INKS[LEGACY_INKS[color]] ? LEGACY_INKS[color] : "gray";
 var inkFill = (color) => isHex(color) ? color : `var(--bt-ink-${inkName(color)})`;
 var inkText = (color) => color === "black" ? "var(--bt-ink-gray)" : inkFill(color);
@@ -19473,7 +19509,7 @@ var THEMES = {
 };
 var DARK_INK = "#141414";
 var accentInk = (accent) => (luminance(accent) + 0.05) ** 2 > 1.05 * (luminance(DARK_INK) + 0.05) ? DARK_INK : "#ffffff";
-var rgba = (hex, alpha) => `rgba(${[1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16)).join(",")},${alpha})`;
+var rgba = (hex2, alpha) => `rgba(${[1, 3, 5].map((index) => parseInt(hex2.slice(index, index + 2), 16)).join(",")},${alpha})`;
 function themeVars(mode, dark, accent = mode.accent) {
   return {
     "--bt-ink": mode.text,
@@ -33483,7 +33519,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
     const next = (bot.browserGrants ?? []).filter((grant, position) => position !== index && !expired(grant));
     void run2(actions.updateBot(bot.id, { browserGrants: next.length ? next : null }));
   };
-  const add = (event) => {
+  const add2 = (event) => {
     event.preventDefault();
     if (!selectedBot || kinds.length === 0 || busy) return;
     const now = Date.now();
@@ -33546,7 +33582,7 @@ function BrowserPage({ roster, actions, run: run2, Section, Row: Row3 }) {
       { title: t("Allow an action") },
       (0, import_react40.createElement)(
         "form",
-        { className: "bt-browser-form", onSubmit: add },
+        { className: "bt-browser-form", onSubmit: add2 },
         (0, import_react40.createElement)(
           Row3,
           { label: t("Bot") },
@@ -34126,7 +34162,7 @@ function KnownForm({ view, apply: apply2, actions, onDone }) {
   const [provider, setProvider] = (0, import_react43.useState)("");
   const [key, setKey] = (0, import_react43.useState)("");
   const options = [...view.addable].sort((a, b) => a.name.localeCompare(b.name));
-  const add = () => {
+  const add2 = () => {
     if (provider === "") return;
     void apply2(actions.addProvider({ provider, key })).then((ok) => {
       if (ok) onDone();
@@ -34141,8 +34177,8 @@ function KnownForm({ view, apply: apply2, actions, onDone }) {
       (0, import_react43.createElement)("option", { value: "", disabled: true }, t("Choose a provider")),
       options.map((option) => (0, import_react43.createElement)("option", { key: option.id, value: option.id }, option.name))
     ),
-    (0, import_react43.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react43.createElement)(KeyIcon), (0, import_react43.createElement)(MaskedInput, { value: key, onChange: setKey, onEnter: add, label: t("API key") })),
-    (0, import_react43.createElement)(FormActions, { onCancel: onDone, onAdd: add, ready: provider !== "" })
+    (0, import_react43.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react43.createElement)(KeyIcon), (0, import_react43.createElement)(MaskedInput, { value: key, onChange: setKey, onEnter: add2, label: t("API key") })),
+    (0, import_react43.createElement)(FormActions, { onCancel: onDone, onAdd: add2, ready: provider !== "" })
   );
 }
 function CustomForm({ view, apply: apply2, actions, onDone }) {
@@ -34162,7 +34198,7 @@ function CustomForm({ view, apply: apply2, actions, onDone }) {
     })).finally(() => setAsking(false));
   };
   const toggle = (id) => setPicked((list) => list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
-  const add = () => {
+  const add2 = () => {
     if (!ready) return;
     void apply2(actions.addProvider({ custom: true, provider: draft.provider.trim(), name: draft.name, baseURL: draft.baseURL, api: draft.api, key: draft.key, models })).then((ok) => {
       if (ok) onDone();
@@ -34217,7 +34253,7 @@ function CustomForm({ view, apply: apply2, actions, onDone }) {
       }, (0, import_react43.createElement)("code", null, model.id), picked.includes(model.id) ? (0, import_react43.createElement)(CheckIcon) : null))) : null,
       input("typed", t("Model ids"), t("Model ids, separated by commas"))
     ),
-    (0, import_react43.createElement)(FormActions, { onCancel: onDone, onAdd: add, ready })
+    (0, import_react43.createElement)(FormActions, { onCancel: onDone, onAdd: add2, ready })
   );
 }
 function FormActions({ onCancel, onAdd, ready }) {
@@ -35361,6 +35397,1051 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
   ];
 }
 
+// node_modules/@noble/hashes/utils.js
+function isBytes(a) {
+  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+}
+function anumber(n, title = "") {
+  if (!Number.isSafeInteger(n) || n < 0) {
+    const prefix = title && `"${title}" `;
+    throw new Error(`${prefix}expected integer >= 0, got ${n}`);
+  }
+}
+function abytes(value, length, title = "") {
+  const bytes = isBytes(value);
+  const len = value?.length;
+  const needsLen = length !== void 0;
+  if (!bytes || needsLen && len !== length) {
+    const prefix = title && `"${title}" `;
+    const ofLen = needsLen ? ` of length ${length}` : "";
+    const got = bytes ? `length=${len}` : `type=${typeof value}`;
+    throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+  }
+  return value;
+}
+function ahash(h52) {
+  if (typeof h52 !== "function" || typeof h52.create !== "function")
+    throw new Error("Hash must wrapped by utils.createHasher");
+  anumber(h52.outputLen);
+  anumber(h52.blockLen);
+}
+function aexists(instance, checkFinished = true) {
+  if (instance.destroyed)
+    throw new Error("Hash instance has been destroyed");
+  if (checkFinished && instance.finished)
+    throw new Error("Hash#digest() has already been called");
+}
+function aoutput(out, instance) {
+  abytes(out, void 0, "digestInto() output");
+  const min = instance.outputLen;
+  if (out.length < min) {
+    throw new Error('"digestInto() output" expected to be of length >=' + min);
+  }
+}
+function u8(arr) {
+  return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+function u32(arr) {
+  return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
+}
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
+}
+function createView(arr) {
+  return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+function rotr(word, shift) {
+  return word << 32 - shift | word >>> shift;
+}
+function rotl(word, shift) {
+  return word << shift | word >>> 32 - shift >>> 0;
+}
+var isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68)();
+function byteSwap(word) {
+  return word << 24 & 4278190080 | word << 8 & 16711680 | word >>> 8 & 65280 | word >>> 24 & 255;
+}
+var swap8IfBE = isLE ? (n) => n : (n) => byteSwap(n);
+function byteSwap32(arr) {
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = byteSwap(arr[i]);
+  }
+  return arr;
+}
+var swap32IfBE = isLE ? (u) => u : byteSwap32;
+var hasHexBuiltin = /* @__PURE__ */ (() => (
+  // @ts-ignore
+  typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function"
+))();
+var hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+function bytesToHex(bytes) {
+  abytes(bytes);
+  if (hasHexBuiltin)
+    return bytes.toHex();
+  let hex2 = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex2 += hexes[bytes[i]];
+  }
+  return hex2;
+}
+var asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
+function asciiToBase16(ch) {
+  if (ch >= asciis._0 && ch <= asciis._9)
+    return ch - asciis._0;
+  if (ch >= asciis.A && ch <= asciis.F)
+    return ch - (asciis.A - 10);
+  if (ch >= asciis.a && ch <= asciis.f)
+    return ch - (asciis.a - 10);
+  return;
+}
+function hexToBytes(hex2) {
+  if (typeof hex2 !== "string")
+    throw new Error("hex string expected, got " + typeof hex2);
+  if (hasHexBuiltin)
+    return Uint8Array.fromHex(hex2);
+  const hl = hex2.length;
+  const al = hl / 2;
+  if (hl % 2)
+    throw new Error("hex string expected, got unpadded hex of length " + hl);
+  const array = new Uint8Array(al);
+  for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
+    const n1 = asciiToBase16(hex2.charCodeAt(hi));
+    const n2 = asciiToBase16(hex2.charCodeAt(hi + 1));
+    if (n1 === void 0 || n2 === void 0) {
+      const char = hex2[hi] + hex2[hi + 1];
+      throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
+    }
+    array[ai] = n1 * 16 + n2;
+  }
+  return array;
+}
+var nextTick = async () => {
+};
+async function asyncLoop(iters, tick, cb) {
+  let ts = Date.now();
+  for (let i = 0; i < iters; i++) {
+    cb(i);
+    const diff = Date.now() - ts;
+    if (diff >= 0 && diff < tick)
+      continue;
+    await nextTick();
+    ts += diff;
+  }
+}
+function utf8ToBytes(str) {
+  if (typeof str !== "string")
+    throw new Error("string expected");
+  return new Uint8Array(new TextEncoder().encode(str));
+}
+function kdfInputToBytes(data, errorTitle = "") {
+  if (typeof data === "string")
+    return utf8ToBytes(data);
+  return abytes(data, void 0, errorTitle);
+}
+function concatBytes(...arrays) {
+  let sum = 0;
+  for (let i = 0; i < arrays.length; i++) {
+    const a = arrays[i];
+    abytes(a);
+    sum += a.length;
+  }
+  const res = new Uint8Array(sum);
+  for (let i = 0, pad2 = 0; i < arrays.length; i++) {
+    const a = arrays[i];
+    res.set(a, pad2);
+    pad2 += a.length;
+  }
+  return res;
+}
+function checkOpts(defaults, opts) {
+  if (opts !== void 0 && {}.toString.call(opts) !== "[object Object]")
+    throw new Error("options must be object or undefined");
+  const merged = Object.assign(defaults, opts);
+  return merged;
+}
+function createHasher(hashCons, info = {}) {
+  const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
+  const tmp = hashCons(void 0);
+  hashC.outputLen = tmp.outputLen;
+  hashC.blockLen = tmp.blockLen;
+  hashC.create = (opts) => hashCons(opts);
+  Object.assign(hashC, info);
+  return Object.freeze(hashC);
+}
+function randomBytes(bytesLength = 32) {
+  const cr = typeof globalThis === "object" ? globalThis.crypto : null;
+  if (typeof cr?.getRandomValues !== "function")
+    throw new Error("crypto.getRandomValues must be defined");
+  return cr.getRandomValues(new Uint8Array(bytesLength));
+}
+var oidNist = (suffix) => ({
+  oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+});
+
+// node_modules/@noble/hashes/_md.js
+function Chi(a, b, c) {
+  return a & b ^ ~a & c;
+}
+function Maj(a, b, c) {
+  return a & b ^ a & c ^ b & c;
+}
+var HashMD = class {
+  blockLen;
+  outputLen;
+  padOffset;
+  isLE;
+  // For partial updates less than block size
+  buffer;
+  view;
+  finished = false;
+  length = 0;
+  pos = 0;
+  destroyed = false;
+  constructor(blockLen, outputLen, padOffset, isLE2) {
+    this.blockLen = blockLen;
+    this.outputLen = outputLen;
+    this.padOffset = padOffset;
+    this.isLE = isLE2;
+    this.buffer = new Uint8Array(blockLen);
+    this.view = createView(this.buffer);
+  }
+  update(data) {
+    aexists(this);
+    abytes(data);
+    const { view, buffer, blockLen } = this;
+    const len = data.length;
+    for (let pos = 0; pos < len; ) {
+      const take = Math.min(blockLen - this.pos, len - pos);
+      if (take === blockLen) {
+        const dataView = createView(data);
+        for (; blockLen <= len - pos; pos += blockLen)
+          this.process(dataView, pos);
+        continue;
+      }
+      buffer.set(data.subarray(pos, pos + take), this.pos);
+      this.pos += take;
+      pos += take;
+      if (this.pos === blockLen) {
+        this.process(view, 0);
+        this.pos = 0;
+      }
+    }
+    this.length += data.length;
+    this.roundClean();
+    return this;
+  }
+  digestInto(out) {
+    aexists(this);
+    aoutput(out, this);
+    this.finished = true;
+    const { buffer, view, blockLen, isLE: isLE2 } = this;
+    let { pos } = this;
+    buffer[pos++] = 128;
+    clean(this.buffer.subarray(pos));
+    if (this.padOffset > blockLen - pos) {
+      this.process(view, 0);
+      pos = 0;
+    }
+    for (let i = pos; i < blockLen; i++)
+      buffer[i] = 0;
+    view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE2);
+    this.process(view, 0);
+    const oview = createView(out);
+    const len = this.outputLen;
+    if (len % 4)
+      throw new Error("_sha2: outputLen must be aligned to 32bit");
+    const outLen = len / 4;
+    const state = this.get();
+    if (outLen > state.length)
+      throw new Error("_sha2: outputLen bigger than state");
+    for (let i = 0; i < outLen; i++)
+      oview.setUint32(4 * i, state[i], isLE2);
+  }
+  digest() {
+    const { buffer, outputLen } = this;
+    this.digestInto(buffer);
+    const res = buffer.slice(0, outputLen);
+    this.destroy();
+    return res;
+  }
+  _cloneInto(to) {
+    to ||= new this.constructor();
+    to.set(...this.get());
+    const { blockLen, buffer, length, finished, destroyed, pos } = this;
+    to.destroyed = destroyed;
+    to.finished = finished;
+    to.length = length;
+    to.pos = pos;
+    if (length % blockLen)
+      to.buffer.set(buffer);
+    return to;
+  }
+  clone() {
+    return this._cloneInto();
+  }
+};
+var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+  1779033703,
+  3144134277,
+  1013904242,
+  2773480762,
+  1359893119,
+  2600822924,
+  528734635,
+  1541459225
+]);
+var SHA224_IV = /* @__PURE__ */ Uint32Array.from([
+  3238371032,
+  914150663,
+  812702999,
+  4144912697,
+  4290775857,
+  1750603025,
+  1694076839,
+  3204075428
+]);
+var SHA384_IV = /* @__PURE__ */ Uint32Array.from([
+  3418070365,
+  3238371032,
+  1654270250,
+  914150663,
+  2438529370,
+  812702999,
+  355462360,
+  4144912697,
+  1731405415,
+  4290775857,
+  2394180231,
+  1750603025,
+  3675008525,
+  1694076839,
+  1203062813,
+  3204075428
+]);
+var SHA512_IV = /* @__PURE__ */ Uint32Array.from([
+  1779033703,
+  4089235720,
+  3144134277,
+  2227873595,
+  1013904242,
+  4271175723,
+  2773480762,
+  1595750129,
+  1359893119,
+  2917565137,
+  2600822924,
+  725511199,
+  528734635,
+  4215389547,
+  1541459225,
+  327033209
+]);
+
+// node_modules/@noble/hashes/_u64.js
+var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
+var _32n = /* @__PURE__ */ BigInt(32);
+function fromBig(n, le = false) {
+  if (le)
+    return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
+  return { h: Number(n >> _32n & U32_MASK64) | 0, l: Number(n & U32_MASK64) | 0 };
+}
+function split(lst, le = false) {
+  const len = lst.length;
+  let Ah = new Uint32Array(len);
+  let Al = new Uint32Array(len);
+  for (let i = 0; i < len; i++) {
+    const { h: h52, l } = fromBig(lst[i], le);
+    [Ah[i], Al[i]] = [h52, l];
+  }
+  return [Ah, Al];
+}
+var toBig = (h52, l) => BigInt(h52 >>> 0) << _32n | BigInt(l >>> 0);
+var shrSH = (h52, _l, s) => h52 >>> s;
+var shrSL = (h52, l, s) => h52 << 32 - s | l >>> s;
+var rotrSH = (h52, l, s) => h52 >>> s | l << 32 - s;
+var rotrSL = (h52, l, s) => h52 << 32 - s | l >>> s;
+var rotrBH = (h52, l, s) => h52 << 64 - s | l >>> s - 32;
+var rotrBL = (h52, l, s) => h52 >>> s - 32 | l << 64 - s;
+var rotr32H = (_h, l) => l;
+var rotr32L = (h52, _l) => h52;
+var rotlSH = (h52, l, s) => h52 << s | l >>> 32 - s;
+var rotlSL = (h52, l, s) => l << s | h52 >>> 32 - s;
+var rotlBH = (h52, l, s) => l << s - 32 | h52 >>> 64 - s;
+var rotlBL = (h52, l, s) => h52 << s - 32 | l >>> 64 - s;
+function add(Ah, Al, Bh, Bl) {
+  const l = (Al >>> 0) + (Bl >>> 0);
+  return { h: Ah + Bh + (l / 2 ** 32 | 0) | 0, l: l | 0 };
+}
+var add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
+var add3H = (low, Ah, Bh, Ch) => Ah + Bh + Ch + (low / 2 ** 32 | 0) | 0;
+var add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
+var add4H = (low, Ah, Bh, Ch, Dh) => Ah + Bh + Ch + Dh + (low / 2 ** 32 | 0) | 0;
+var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
+var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
+var u64 = {
+  fromBig,
+  split,
+  toBig,
+  shrSH,
+  shrSL,
+  rotrSH,
+  rotrSL,
+  rotrBH,
+  rotrBL,
+  rotr32H,
+  rotr32L,
+  rotlSH,
+  rotlSL,
+  rotlBH,
+  rotlBL,
+  add,
+  add3L,
+  add3H,
+  add4L,
+  add4H,
+  add5H,
+  add5L
+};
+var u64_default = u64;
+
+// node_modules/@noble/hashes/sha2.js
+var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+  1116352408,
+  1899447441,
+  3049323471,
+  3921009573,
+  961987163,
+  1508970993,
+  2453635748,
+  2870763221,
+  3624381080,
+  310598401,
+  607225278,
+  1426881987,
+  1925078388,
+  2162078206,
+  2614888103,
+  3248222580,
+  3835390401,
+  4022224774,
+  264347078,
+  604807628,
+  770255983,
+  1249150122,
+  1555081692,
+  1996064986,
+  2554220882,
+  2821834349,
+  2952996808,
+  3210313671,
+  3336571891,
+  3584528711,
+  113926993,
+  338241895,
+  666307205,
+  773529912,
+  1294757372,
+  1396182291,
+  1695183700,
+  1986661051,
+  2177026350,
+  2456956037,
+  2730485921,
+  2820302411,
+  3259730800,
+  3345764771,
+  3516065817,
+  3600352804,
+  4094571909,
+  275423344,
+  430227734,
+  506948616,
+  659060556,
+  883997877,
+  958139571,
+  1322822218,
+  1537002063,
+  1747873779,
+  1955562222,
+  2024104815,
+  2227730452,
+  2361852424,
+  2428436474,
+  2756734187,
+  3204031479,
+  3329325298
+]);
+var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+var SHA2_32B = class extends HashMD {
+  constructor(outputLen) {
+    super(64, outputLen, 8, false);
+  }
+  get() {
+    const { A, B, C, D, E, F, G, H } = this;
+    return [A, B, C, D, E, F, G, H];
+  }
+  // prettier-ignore
+  set(A, B, C, D, E, F, G, H) {
+    this.A = A | 0;
+    this.B = B | 0;
+    this.C = C | 0;
+    this.D = D | 0;
+    this.E = E | 0;
+    this.F = F | 0;
+    this.G = G | 0;
+    this.H = H | 0;
+  }
+  process(view, offset) {
+    for (let i = 0; i < 16; i++, offset += 4)
+      SHA256_W[i] = view.getUint32(offset, false);
+    for (let i = 16; i < 64; i++) {
+      const W15 = SHA256_W[i - 15];
+      const W2 = SHA256_W[i - 2];
+      const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+      const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+      SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+    }
+    let { A, B, C, D, E, F, G, H } = this;
+    for (let i = 0; i < 64; i++) {
+      const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+      const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+      const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+      const T2 = sigma0 + Maj(A, B, C) | 0;
+      H = G;
+      G = F;
+      F = E;
+      E = D + T1 | 0;
+      D = C;
+      C = B;
+      B = A;
+      A = T1 + T2 | 0;
+    }
+    A = A + this.A | 0;
+    B = B + this.B | 0;
+    C = C + this.C | 0;
+    D = D + this.D | 0;
+    E = E + this.E | 0;
+    F = F + this.F | 0;
+    G = G + this.G | 0;
+    H = H + this.H | 0;
+    this.set(A, B, C, D, E, F, G, H);
+  }
+  roundClean() {
+    clean(SHA256_W);
+  }
+  destroy() {
+    this.set(0, 0, 0, 0, 0, 0, 0, 0);
+    clean(this.buffer);
+  }
+};
+var _SHA256 = class extends SHA2_32B {
+  // We cannot use array here since array allows indexing by variable
+  // which means optimizer/compiler cannot use registers.
+  A = SHA256_IV[0] | 0;
+  B = SHA256_IV[1] | 0;
+  C = SHA256_IV[2] | 0;
+  D = SHA256_IV[3] | 0;
+  E = SHA256_IV[4] | 0;
+  F = SHA256_IV[5] | 0;
+  G = SHA256_IV[6] | 0;
+  H = SHA256_IV[7] | 0;
+  constructor() {
+    super(32);
+  }
+};
+var _SHA224 = class extends SHA2_32B {
+  A = SHA224_IV[0] | 0;
+  B = SHA224_IV[1] | 0;
+  C = SHA224_IV[2] | 0;
+  D = SHA224_IV[3] | 0;
+  E = SHA224_IV[4] | 0;
+  F = SHA224_IV[5] | 0;
+  G = SHA224_IV[6] | 0;
+  H = SHA224_IV[7] | 0;
+  constructor() {
+    super(28);
+  }
+};
+var K512 = /* @__PURE__ */ (() => split([
+  "0x428a2f98d728ae22",
+  "0x7137449123ef65cd",
+  "0xb5c0fbcfec4d3b2f",
+  "0xe9b5dba58189dbbc",
+  "0x3956c25bf348b538",
+  "0x59f111f1b605d019",
+  "0x923f82a4af194f9b",
+  "0xab1c5ed5da6d8118",
+  "0xd807aa98a3030242",
+  "0x12835b0145706fbe",
+  "0x243185be4ee4b28c",
+  "0x550c7dc3d5ffb4e2",
+  "0x72be5d74f27b896f",
+  "0x80deb1fe3b1696b1",
+  "0x9bdc06a725c71235",
+  "0xc19bf174cf692694",
+  "0xe49b69c19ef14ad2",
+  "0xefbe4786384f25e3",
+  "0x0fc19dc68b8cd5b5",
+  "0x240ca1cc77ac9c65",
+  "0x2de92c6f592b0275",
+  "0x4a7484aa6ea6e483",
+  "0x5cb0a9dcbd41fbd4",
+  "0x76f988da831153b5",
+  "0x983e5152ee66dfab",
+  "0xa831c66d2db43210",
+  "0xb00327c898fb213f",
+  "0xbf597fc7beef0ee4",
+  "0xc6e00bf33da88fc2",
+  "0xd5a79147930aa725",
+  "0x06ca6351e003826f",
+  "0x142929670a0e6e70",
+  "0x27b70a8546d22ffc",
+  "0x2e1b21385c26c926",
+  "0x4d2c6dfc5ac42aed",
+  "0x53380d139d95b3df",
+  "0x650a73548baf63de",
+  "0x766a0abb3c77b2a8",
+  "0x81c2c92e47edaee6",
+  "0x92722c851482353b",
+  "0xa2bfe8a14cf10364",
+  "0xa81a664bbc423001",
+  "0xc24b8b70d0f89791",
+  "0xc76c51a30654be30",
+  "0xd192e819d6ef5218",
+  "0xd69906245565a910",
+  "0xf40e35855771202a",
+  "0x106aa07032bbd1b8",
+  "0x19a4c116b8d2d0c8",
+  "0x1e376c085141ab53",
+  "0x2748774cdf8eeb99",
+  "0x34b0bcb5e19b48a8",
+  "0x391c0cb3c5c95a63",
+  "0x4ed8aa4ae3418acb",
+  "0x5b9cca4f7763e373",
+  "0x682e6ff3d6b2b8a3",
+  "0x748f82ee5defb2fc",
+  "0x78a5636f43172f60",
+  "0x84c87814a1f0ab72",
+  "0x8cc702081a6439ec",
+  "0x90befffa23631e28",
+  "0xa4506cebde82bde9",
+  "0xbef9a3f7b2c67915",
+  "0xc67178f2e372532b",
+  "0xca273eceea26619c",
+  "0xd186b8c721c0c207",
+  "0xeada7dd6cde0eb1e",
+  "0xf57d4f7fee6ed178",
+  "0x06f067aa72176fba",
+  "0x0a637dc5a2c898a6",
+  "0x113f9804bef90dae",
+  "0x1b710b35131c471b",
+  "0x28db77f523047d84",
+  "0x32caab7b40c72493",
+  "0x3c9ebe0a15c9bebc",
+  "0x431d67c49c100d4c",
+  "0x4cc5d4becb3e42b6",
+  "0x597f299cfc657e2a",
+  "0x5fcb6fab3ad6faec",
+  "0x6c44198c4a475817"
+].map((n) => BigInt(n))))();
+var SHA512_Kh = /* @__PURE__ */ (() => K512[0])();
+var SHA512_Kl = /* @__PURE__ */ (() => K512[1])();
+var SHA512_W_H = /* @__PURE__ */ new Uint32Array(80);
+var SHA512_W_L = /* @__PURE__ */ new Uint32Array(80);
+var SHA2_64B = class extends HashMD {
+  constructor(outputLen) {
+    super(128, outputLen, 16, false);
+  }
+  // prettier-ignore
+  get() {
+    const { Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl } = this;
+    return [Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl];
+  }
+  // prettier-ignore
+  set(Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl) {
+    this.Ah = Ah | 0;
+    this.Al = Al | 0;
+    this.Bh = Bh | 0;
+    this.Bl = Bl | 0;
+    this.Ch = Ch | 0;
+    this.Cl = Cl | 0;
+    this.Dh = Dh | 0;
+    this.Dl = Dl | 0;
+    this.Eh = Eh | 0;
+    this.El = El | 0;
+    this.Fh = Fh | 0;
+    this.Fl = Fl | 0;
+    this.Gh = Gh | 0;
+    this.Gl = Gl | 0;
+    this.Hh = Hh | 0;
+    this.Hl = Hl | 0;
+  }
+  process(view, offset) {
+    for (let i = 0; i < 16; i++, offset += 4) {
+      SHA512_W_H[i] = view.getUint32(offset);
+      SHA512_W_L[i] = view.getUint32(offset += 4);
+    }
+    for (let i = 16; i < 80; i++) {
+      const W15h = SHA512_W_H[i - 15] | 0;
+      const W15l = SHA512_W_L[i - 15] | 0;
+      const s0h = rotrSH(W15h, W15l, 1) ^ rotrSH(W15h, W15l, 8) ^ shrSH(W15h, W15l, 7);
+      const s0l = rotrSL(W15h, W15l, 1) ^ rotrSL(W15h, W15l, 8) ^ shrSL(W15h, W15l, 7);
+      const W2h = SHA512_W_H[i - 2] | 0;
+      const W2l = SHA512_W_L[i - 2] | 0;
+      const s1h = rotrSH(W2h, W2l, 19) ^ rotrBH(W2h, W2l, 61) ^ shrSH(W2h, W2l, 6);
+      const s1l = rotrSL(W2h, W2l, 19) ^ rotrBL(W2h, W2l, 61) ^ shrSL(W2h, W2l, 6);
+      const SUMl = add4L(s0l, s1l, SHA512_W_L[i - 7], SHA512_W_L[i - 16]);
+      const SUMh = add4H(SUMl, s0h, s1h, SHA512_W_H[i - 7], SHA512_W_H[i - 16]);
+      SHA512_W_H[i] = SUMh | 0;
+      SHA512_W_L[i] = SUMl | 0;
+    }
+    let { Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl } = this;
+    for (let i = 0; i < 80; i++) {
+      const sigma1h = rotrSH(Eh, El, 14) ^ rotrSH(Eh, El, 18) ^ rotrBH(Eh, El, 41);
+      const sigma1l = rotrSL(Eh, El, 14) ^ rotrSL(Eh, El, 18) ^ rotrBL(Eh, El, 41);
+      const CHIh = Eh & Fh ^ ~Eh & Gh;
+      const CHIl = El & Fl ^ ~El & Gl;
+      const T1ll = add5L(Hl, sigma1l, CHIl, SHA512_Kl[i], SHA512_W_L[i]);
+      const T1h = add5H(T1ll, Hh, sigma1h, CHIh, SHA512_Kh[i], SHA512_W_H[i]);
+      const T1l = T1ll | 0;
+      const sigma0h = rotrSH(Ah, Al, 28) ^ rotrBH(Ah, Al, 34) ^ rotrBH(Ah, Al, 39);
+      const sigma0l = rotrSL(Ah, Al, 28) ^ rotrBL(Ah, Al, 34) ^ rotrBL(Ah, Al, 39);
+      const MAJh = Ah & Bh ^ Ah & Ch ^ Bh & Ch;
+      const MAJl = Al & Bl ^ Al & Cl ^ Bl & Cl;
+      Hh = Gh | 0;
+      Hl = Gl | 0;
+      Gh = Fh | 0;
+      Gl = Fl | 0;
+      Fh = Eh | 0;
+      Fl = El | 0;
+      ({ h: Eh, l: El } = add(Dh | 0, Dl | 0, T1h | 0, T1l | 0));
+      Dh = Ch | 0;
+      Dl = Cl | 0;
+      Ch = Bh | 0;
+      Cl = Bl | 0;
+      Bh = Ah | 0;
+      Bl = Al | 0;
+      const All = add3L(T1l, sigma0l, MAJl);
+      Ah = add3H(All, T1h, sigma0h, MAJh);
+      Al = All | 0;
+    }
+    ({ h: Ah, l: Al } = add(this.Ah | 0, this.Al | 0, Ah | 0, Al | 0));
+    ({ h: Bh, l: Bl } = add(this.Bh | 0, this.Bl | 0, Bh | 0, Bl | 0));
+    ({ h: Ch, l: Cl } = add(this.Ch | 0, this.Cl | 0, Ch | 0, Cl | 0));
+    ({ h: Dh, l: Dl } = add(this.Dh | 0, this.Dl | 0, Dh | 0, Dl | 0));
+    ({ h: Eh, l: El } = add(this.Eh | 0, this.El | 0, Eh | 0, El | 0));
+    ({ h: Fh, l: Fl } = add(this.Fh | 0, this.Fl | 0, Fh | 0, Fl | 0));
+    ({ h: Gh, l: Gl } = add(this.Gh | 0, this.Gl | 0, Gh | 0, Gl | 0));
+    ({ h: Hh, l: Hl } = add(this.Hh | 0, this.Hl | 0, Hh | 0, Hl | 0));
+    this.set(Ah, Al, Bh, Bl, Ch, Cl, Dh, Dl, Eh, El, Fh, Fl, Gh, Gl, Hh, Hl);
+  }
+  roundClean() {
+    clean(SHA512_W_H, SHA512_W_L);
+  }
+  destroy() {
+    clean(this.buffer);
+    this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  }
+};
+var _SHA512 = class extends SHA2_64B {
+  Ah = SHA512_IV[0] | 0;
+  Al = SHA512_IV[1] | 0;
+  Bh = SHA512_IV[2] | 0;
+  Bl = SHA512_IV[3] | 0;
+  Ch = SHA512_IV[4] | 0;
+  Cl = SHA512_IV[5] | 0;
+  Dh = SHA512_IV[6] | 0;
+  Dl = SHA512_IV[7] | 0;
+  Eh = SHA512_IV[8] | 0;
+  El = SHA512_IV[9] | 0;
+  Fh = SHA512_IV[10] | 0;
+  Fl = SHA512_IV[11] | 0;
+  Gh = SHA512_IV[12] | 0;
+  Gl = SHA512_IV[13] | 0;
+  Hh = SHA512_IV[14] | 0;
+  Hl = SHA512_IV[15] | 0;
+  constructor() {
+    super(64);
+  }
+};
+var _SHA384 = class extends SHA2_64B {
+  Ah = SHA384_IV[0] | 0;
+  Al = SHA384_IV[1] | 0;
+  Bh = SHA384_IV[2] | 0;
+  Bl = SHA384_IV[3] | 0;
+  Ch = SHA384_IV[4] | 0;
+  Cl = SHA384_IV[5] | 0;
+  Dh = SHA384_IV[6] | 0;
+  Dl = SHA384_IV[7] | 0;
+  Eh = SHA384_IV[8] | 0;
+  El = SHA384_IV[9] | 0;
+  Fh = SHA384_IV[10] | 0;
+  Fl = SHA384_IV[11] | 0;
+  Gh = SHA384_IV[12] | 0;
+  Gl = SHA384_IV[13] | 0;
+  Hh = SHA384_IV[14] | 0;
+  Hl = SHA384_IV[15] | 0;
+  constructor() {
+    super(48);
+  }
+};
+var T224_IV = /* @__PURE__ */ Uint32Array.from([
+  2352822216,
+  424955298,
+  1944164710,
+  2312950998,
+  502970286,
+  855612546,
+  1738396948,
+  1479516111,
+  258812777,
+  2077511080,
+  2011393907,
+  79989058,
+  1067287976,
+  1780299464,
+  286451373,
+  2446758561
+]);
+var T256_IV = /* @__PURE__ */ Uint32Array.from([
+  573645204,
+  4230739756,
+  2673172387,
+  3360449730,
+  596883563,
+  1867755857,
+  2520282905,
+  1497426621,
+  2519219938,
+  2827943907,
+  3193839141,
+  1401305490,
+  721525244,
+  746961066,
+  246885852,
+  2177182882
+]);
+var _SHA512_224 = class extends SHA2_64B {
+  Ah = T224_IV[0] | 0;
+  Al = T224_IV[1] | 0;
+  Bh = T224_IV[2] | 0;
+  Bl = T224_IV[3] | 0;
+  Ch = T224_IV[4] | 0;
+  Cl = T224_IV[5] | 0;
+  Dh = T224_IV[6] | 0;
+  Dl = T224_IV[7] | 0;
+  Eh = T224_IV[8] | 0;
+  El = T224_IV[9] | 0;
+  Fh = T224_IV[10] | 0;
+  Fl = T224_IV[11] | 0;
+  Gh = T224_IV[12] | 0;
+  Gl = T224_IV[13] | 0;
+  Hh = T224_IV[14] | 0;
+  Hl = T224_IV[15] | 0;
+  constructor() {
+    super(28);
+  }
+};
+var _SHA512_256 = class extends SHA2_64B {
+  Ah = T256_IV[0] | 0;
+  Al = T256_IV[1] | 0;
+  Bh = T256_IV[2] | 0;
+  Bl = T256_IV[3] | 0;
+  Ch = T256_IV[4] | 0;
+  Cl = T256_IV[5] | 0;
+  Dh = T256_IV[6] | 0;
+  Dl = T256_IV[7] | 0;
+  Eh = T256_IV[8] | 0;
+  El = T256_IV[9] | 0;
+  Fh = T256_IV[10] | 0;
+  Fl = T256_IV[11] | 0;
+  Gh = T256_IV[12] | 0;
+  Gl = T256_IV[13] | 0;
+  Hh = T256_IV[14] | 0;
+  Hl = T256_IV[15] | 0;
+  constructor() {
+    super(32);
+  }
+};
+var sha256 = /* @__PURE__ */ createHasher(
+  () => new _SHA256(),
+  /* @__PURE__ */ oidNist(1)
+);
+var sha224 = /* @__PURE__ */ createHasher(
+  () => new _SHA224(),
+  /* @__PURE__ */ oidNist(4)
+);
+var sha512 = /* @__PURE__ */ createHasher(
+  () => new _SHA512(),
+  /* @__PURE__ */ oidNist(3)
+);
+var sha384 = /* @__PURE__ */ createHasher(
+  () => new _SHA384(),
+  /* @__PURE__ */ oidNist(2)
+);
+var sha512_256 = /* @__PURE__ */ createHasher(
+  () => new _SHA512_256(),
+  /* @__PURE__ */ oidNist(6)
+);
+var sha512_224 = /* @__PURE__ */ createHasher(
+  () => new _SHA512_224(),
+  /* @__PURE__ */ oidNist(5)
+);
+
+// src/shared/computer-files.js
+var FILE_LIMIT = 200 * 1024 * 1024;
+var CHUNK_SIZE = 256 * 1024;
+function checkTransfer(args) {
+  const { operation } = args;
+  const fields = {
+    "begin-write": ["name", "bytes", "sha256"],
+    "begin-read": ["name"],
+    "write-chunk": ["transferId", "offset", "data"],
+    "read-chunk": ["transferId", "offset"],
+    commit: ["transferId"],
+    abort: ["transferId"],
+    delete: ["name", "version"]
+  };
+  if (!Object.hasOwn(fields, operation)) throw new Error("Unknown file transfer operation.");
+  const result = { operation };
+  for (const field of fields[operation]) result[field] = args[field];
+  if (operation.startsWith("begin-") || operation === "delete") {
+    if (typeof args.name !== "string" || !/^[^/\\]{1,120}$/.test(args.name) || args.name.startsWith(".") || Array.from(args.name).some((char) => char.charCodeAt(0) < 32)) throw new Error("Use a plain file name without folders or hidden names.");
+    if (operation === "begin-write" && (!Number.isSafeInteger(args.bytes) || args.bytes < 0 || args.bytes > FILE_LIMIT || typeof args.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(args.sha256))) throw new Error("Files must be at most 200 MiB and have a SHA-256 checksum.");
+  } else if (typeof args.transferId !== "string" || !/^[a-f0-9-]{36}$/.test(args.transferId)) throw new Error("Invalid file transfer identity.");
+  if (operation === "delete" && (typeof args.version !== "string" || !/^[a-f0-9]{64}$/.test(args.version))) throw new Error("List files before deleting.");
+  if (operation.endsWith("-chunk") && (!Number.isSafeInteger(args.offset) || args.offset < 0 || args.offset > FILE_LIMIT)) throw new Error("Invalid file chunk offset.");
+  if (operation === "write-chunk" && (typeof args.data !== "string" || args.data.length > Math.ceil(CHUNK_SIZE / 3) * 4)) throw new Error("Invalid file chunk.");
+  return result;
+}
+async function uploadFile(call2, { name, bytes, sha256: sha2562, chunk, check = () => {
+}, progress = () => {
+} }) {
+  let transfer;
+  try {
+    check();
+    transfer = await call2({ operation: "begin-write", name, bytes, sha256: sha2562 });
+    check();
+    if (transfer.chunkSize !== CHUNK_SIZE || transfer.bytes !== bytes) throw new Error("Invalid file transfer response.");
+    progress(0, bytes);
+    for (let offset = 0; offset < bytes; ) {
+      check();
+      const end = Math.min(offset + CHUNK_SIZE, bytes);
+      const data = await chunk(offset, end);
+      check();
+      const result2 = await call2({ operation: "write-chunk", transferId: transfer.transferId, offset, data });
+      check();
+      if (result2.offset !== end || result2.total !== bytes) throw new Error("Invalid file transfer acknowledgement.");
+      offset = end;
+      progress(offset, bytes);
+    }
+    check();
+    const result = await call2({ operation: "commit", transferId: transfer.transferId });
+    transfer = null;
+    check();
+    return result;
+  } finally {
+    if (transfer) await call2({ operation: "abort", transferId: transfer.transferId }).catch(() => {
+    });
+  }
+}
+async function downloadFile(call2, { name, chunk, verify, check = () => {
+}, progress = () => {
+} }) {
+  let transfer;
+  try {
+    check();
+    transfer = await call2({ operation: "begin-read", name });
+    check();
+    if (!Number.isSafeInteger(transfer.bytes) || transfer.bytes < 0 || transfer.bytes > FILE_LIMIT || transfer.chunkSize !== CHUNK_SIZE || !/^[a-f0-9]{64}$/.test(transfer.sha256)) throw new Error("Invalid export snapshot.");
+    progress(0, transfer.bytes);
+    for (let offset = 0; offset < transfer.bytes; ) {
+      check();
+      const result = await call2({ operation: "read-chunk", transferId: transfer.transferId, offset });
+      check();
+      const expected2 = Math.min(CHUNK_SIZE, transfer.bytes - offset);
+      if (result.bytes !== expected2 || result.offset !== offset + expected2 || result.total !== transfer.bytes || typeof result.data !== "string" || result.data.length > Math.ceil(CHUNK_SIZE / 3) * 4) throw new Error("Invalid export chunk.");
+      await chunk(result.data, expected2);
+      offset += expected2;
+      progress(offset, transfer.bytes);
+    }
+    check();
+    await verify(transfer.sha256);
+    check();
+    await call2({ operation: "commit", transferId: transfer.transferId });
+    const completed = transfer;
+    transfer = null;
+    check();
+    return completed;
+  } finally {
+    if (transfer) await call2({ operation: "abort", transferId: transfer.transferId }).catch(() => {
+    });
+  }
+}
+
+// src/client/computer-files.js
+var hex = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+async function readChunk(file, start, end, check) {
+  check();
+  const bytes = new Uint8Array(await file.slice(start, end).arrayBuffer());
+  check();
+  if (bytes.length !== end - start) throw new Error("The file length changed.");
+  return bytes;
+}
+async function digest(file, check) {
+  const hash = sha256.create();
+  try {
+    for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
+      hash.update(await readChunk(file, offset, Math.min(offset + CHUNK_SIZE, file.size), check));
+    }
+    check();
+    return hex(hash.digest());
+  } finally {
+    hash.destroy();
+  }
+}
+async function importDesktopFile(call2, file, options) {
+  if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT) throw new Error("Files must be at most 200 MiB.");
+  options.check();
+  const checksum = await digest(file, options.check);
+  return uploadFile(call2, {
+    ...options,
+    name: file.name,
+    bytes: file.size,
+    sha256: checksum,
+    async chunk(start, end) {
+      const bytes = await readChunk(file, start, end, options.check);
+      let binary2 = "";
+      for (const byte of bytes) binary2 += String.fromCharCode(byte);
+      return btoa(binary2);
+    }
+  });
+}
+async function exportDesktopFile(call2, name, options) {
+  const chunks = [];
+  const hash = sha256.create();
+  try {
+    await downloadFile(call2, {
+      ...options,
+      name,
+      chunk(data, expected2) {
+        const binary2 = atob(data);
+        if (binary2.length !== expected2 || btoa(binary2) !== data) throw new Error("Invalid export chunk.");
+        const bytes = Uint8Array.from(binary2, (char) => char.charCodeAt(0));
+        hash.update(bytes);
+        chunks.push(new Blob([bytes]));
+      },
+      verify(checksum) {
+        if (hex(hash.digest()) !== checksum) throw new Error("File checksum did not match.");
+      }
+    });
+    return new Blob(chunks, { type: "application/octet-stream" });
+  } finally {
+    hash.destroy();
+  }
+}
+
 // src/shared/computer-stream.js
 var ERRORS = {
   auth: [401, false, "Desktop login expired. Reload DSH and sign in again."],
@@ -36029,12 +37110,17 @@ function ComputerView({ bot, actions, leaving }) {
   const [text, setText] = (0, import_react49.useState)("");
   const [key, setKey] = (0, import_react49.useState)("Enter");
   const [files, setFiles] = (0, import_react49.useState)([]);
+  const [fileStorage, setFileStorage] = (0, import_react49.useState)(null);
+  const [fileDeletion, setFileDeletion] = (0, import_react49.useState)(null);
+  const [transfer, setTransfer] = (0, import_react49.useState)(null);
+  const transferring = (0, import_react49.useRef)(null);
   const [streamFailed, setStreamFailed] = (0, import_react49.useState)(false);
   const [streamProblem, setStreamProblem] = (0, import_react49.useState)(null);
   const [tick, setTick] = (0, import_react49.useState)(0);
   const [diagnostics, setDiagnostics] = (0, import_react49.useState)(null);
   const [targetImage, setTargetImage] = (0, import_react49.useState)("");
   const [confirmation, setConfirmation] = (0, import_react49.useState)(null);
+  const [serviceConfirmation, setServiceConfirmation] = (0, import_react49.useState)(null);
   const session = (0, import_react49.useRef)({ token: null, record: null, pending: false, mounted: true, shown: null, streamReady: false });
   const panel = (0, import_react49.useRef)(null);
   const editing = () => {
@@ -36044,7 +37130,8 @@ function ComputerView({ bot, actions, leaving }) {
   const record = state?.computers.find((item) => item.botId === bot.id && !item.archived);
   const upgradeImages = (state?.images ?? []).slice((state?.images ?? []).indexOf(record?.runtimeImage) + 1);
   const requests = (state?.handoffs ?? []).filter((item) => item.botId === bot.id);
-  const ready = record?.phase === "ready" && record.grant !== "off";
+  const serviceBlocked = Boolean(["running", "failed"].includes(state?.recovery?.status) || state?.recovery?.disconnected);
+  const ready = record?.phase === "ready" && record.grant !== "off" && !serviceBlocked;
   const liveControl = owned && controlMode === "live";
   const inputReady = owned && ready && !busy && !leaving && document.visibilityState !== "hidden" && (liveControl ? session.current.streamReady && Boolean(session.current.liveInput) : !previewBusy && freshFrame(frame) && session.current.shown === frame?.data);
   const call2 = (method, args = {}) => actions.computerCall(method, {
@@ -36057,10 +37144,15 @@ function ComputerView({ bot, actions, leaving }) {
     session.current.shown = null;
     setFrame(null);
   };
+  const clearFiles = () => {
+    setFiles([]);
+    setFileStorage(null);
+    setFileDeletion(null);
+  };
   const forget = () => {
     session.current.token = null;
     setOwned(false);
-    setFiles([]);
+    clearFiles();
   };
   const failure = (reason) => {
     if (!session.current.mounted) return;
@@ -36078,7 +37170,10 @@ function ComputerView({ bot, actions, leaving }) {
     if (!session.current.mounted || editing()) return;
     const next = value.computers.find((item) => item.botId === bot.id && !item.archived);
     const changed = next?.id !== session.current.record?.id || next?.generation !== session.current.record?.generation;
-    if (changed || next?.control !== "human" || next?.humanExpired) forget();
+    const recovering = ["running", "failed"].includes(value.recovery?.status) || value.recovery?.disconnected;
+    if (changed || next?.control !== "human" || next?.humanExpired || recovering) forget();
+    if (changed || value.recovery?.version !== session.current.recoveryVersion) setServiceConfirmation(null);
+    session.current.recoveryVersion = value.recovery?.version;
     if (changed) {
       clearFrame();
       setConfirmation(null);
@@ -36086,7 +37181,7 @@ function ComputerView({ bot, actions, leaving }) {
     }
     session.current.record = next;
     setState(value);
-    if (next?.phase !== "ready" || next.grant === "off") {
+    if (next?.phase !== "ready" || next.grant === "off" || recovering) {
       clearFrame();
       return;
     }
@@ -36098,7 +37193,8 @@ function ComputerView({ bot, actions, leaving }) {
     }
   }
   async function run2(work, reload = true) {
-    if (session.current.pending || leaving) return;
+    if (session.current.polling) await session.current.polling;
+    if (session.current.pending || leaving || !session.current.mounted) return;
     session.current.pending = true;
     setBusy(true);
     setError("");
@@ -36119,8 +37215,9 @@ function ComputerView({ bot, actions, leaving }) {
       setTick((value) => value + 1);
       if (leaving || document.visibilityState === "hidden" || session.current.pending) return;
       session.current.pending = true;
-      void refresh().catch(failure).finally(() => {
+      session.current.polling = refresh().catch(failure).finally(() => {
         session.current.pending = false;
+        session.current.polling = null;
       });
     };
     poll();
@@ -36135,6 +37232,7 @@ function ComputerView({ bot, actions, leaving }) {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", hide);
       session.current.mounted = false;
+      if (transferring.current) transferring.current.cancelled = true;
     };
   }, [bot.id, leaving]);
   const manage = (method) => run2(async () => {
@@ -36146,7 +37244,7 @@ function ComputerView({ bot, actions, leaving }) {
     setStreamProblem(null);
     clearFrame();
     setNotice("");
-    setFiles([]);
+    clearFiles();
   });
   const bind = (grant, approvalMode = record?.approvalMode ?? "required") => run2(async () => {
     await call2("bind", { grant, approvalMode, expectedRevision: state.revision });
@@ -36175,33 +37273,87 @@ function ComputerView({ bot, actions, leaving }) {
     const point = imagePoint(frame, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY);
     if (point) input({ type, ...point, ...type === "click" ? { button: event.type === "contextmenu" ? "right" : "left" } : { deltaY: event.deltaY > 0 ? 3 : -3 } });
   };
-  const loadFiles = async () => setFiles((await call2("files", { operation: "list" })).files);
+  const loadFiles = async () => {
+    const result = await call2("files", { operation: "list" });
+    setFiles(result.files);
+    setFileStorage(result.storage ?? null);
+    setFileDeletion(null);
+  };
+  const askDeleteFile = (file) => setFileDeletion({
+    botId: bot.id,
+    expectedGeneration: record.generation,
+    controlToken: session.current.token,
+    operation: "delete",
+    name: file.name,
+    version: file.version
+  });
+  const deleteFile = () => run2(async () => {
+    const request = fileDeletion;
+    clearFiles();
+    setNotice("");
+    try {
+      const result = await actions.computerCall("files", request);
+      if (result?.deleted !== true || result.name !== request.name) throw new Error("Invalid deletion receipt.");
+    } catch {
+      throw new Error(t("Deletion could not be confirmed. Refresh the file list before trying again."));
+    }
+    setNotice(t("File deleted."));
+    await loadFiles();
+  });
+  const transferFile = (work) => run2(async () => {
+    const identity = { botId: bot.id, expectedGeneration: session.current.record?.generation, controlToken: session.current.token };
+    const task = { cancelled: false };
+    transferring.current = task;
+    setNotice("");
+    setTransfer({ bytes: 0, total: 0, phase: "Preparing file…" });
+    const request = (args) => actions.computerCall("files", { ...identity, ...args });
+    const check = () => {
+      if (task.cancelled || !session.current.mounted || session.current.token !== identity.controlToken || session.current.record?.generation !== identity.expectedGeneration) throw new Error("Transfer stopped. Check the destination before retrying.");
+    };
+    const progress = (bytes, total) => {
+      check();
+      setTransfer({ bytes, total, phase: bytes === total ? "Verifying file…" : "Transferring file…" });
+    };
+    try {
+      await work(request, { check, progress });
+      check();
+    } finally {
+      transferring.current = null;
+      if (session.current.mounted) setTransfer(null);
+    }
+  });
   const upload = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    void run2(async () => {
-      if (file.size > 262144) throw new Error(t("Files must be at most 256 KiB."));
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary2 = "";
-      for (const byte of bytes) binary2 += String.fromCharCode(byte);
-      await call2("files", { operation: "write", name: file.name, data: btoa(binary2) });
+    void transferFile(async (request, options) => {
+      await importDesktopFile(request, file, options);
       await loadFiles();
       setNotice(t("File imported. Existing files are never overwritten."));
     });
   };
-  const download2 = (name) => run2(async () => {
-    const value = await call2("files", { operation: "read", name });
-    const bytes = Uint8Array.from(atob(value.data), (char) => char.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  const download2 = (name) => transferFile(async (request, options) => {
+    const blob = await exportDesktopFile(request, name, options);
+    options.check();
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = value.name;
+    link.download = name;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 3e4);
   });
   const removeCopy = (method, args, label) => setConfirmation({ method, args: { ...args, botId: bot.id, expectedGeneration: record.generation }, label });
-  const button = (label, onClick, disabled = false) => (0, import_react49.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || disabled || leaving, onClick }, t(label));
+  const recoverService = () => run2(async () => {
+    const args = serviceConfirmation;
+    setServiceConfirmation(null);
+    forget();
+    clearFrame();
+    session.current.streamReady = false;
+    setStreamFailed(false);
+    setStreamProblem(null);
+    await actions.computerCall("reconnect", args);
+  });
+  const button = (label, onClick, disabled = false, recoveryAction = false) => (0, import_react49.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || disabled || leaving || serviceBlocked && !recoveryAction, onClick }, t(label));
   return (0, import_react49.createElement)(
     "div",
     { ref: panel, className: "bt-computer", "data-tick": tick },
@@ -36213,7 +37365,7 @@ function ComputerView({ bot, actions, leaving }) {
       t("Bot access"),
       (0, import_react49.createElement)(
         "select",
-        { value: record?.grant ?? "off", disabled: busy || !state || leaving, onChange: (event) => {
+        { value: record?.grant ?? "off", disabled: busy || !state || leaving || serviceBlocked, onChange: (event) => {
           void bind(event.target.value);
         } },
         (0, import_react49.createElement)("option", { value: "off" }, t("Off — keep files")),
@@ -36230,7 +37382,7 @@ function ComputerView({ bot, actions, leaving }) {
         {
           "aria-label": t("CUA approval mode"),
           value: record?.approvalMode ?? "required",
-          disabled: busy || record?.grant !== "operate" || leaving,
+          disabled: busy || record?.grant !== "operate" || leaving || serviceBlocked,
           onChange: (event) => {
             void bind(record.grant, event.target.value);
           }
@@ -36245,12 +37397,39 @@ function ComputerView({ bot, actions, leaving }) {
       { className: "bt-computer-row" },
       button("Start desktop", () => manage("start"), !record || record.grant === "off" || ready || record.control === "human" || record.recoveryPending),
       button("Stop desktop", () => manage("stop"), !record || record.phase === "stopped"),
-      button("Refresh", () => run2(refresh, false)),
+      button("Refresh", () => run2(refresh, false), false, true),
       streamFailed ? button("Retry live stream", () => {
         setStreamFailed(false);
         setStreamProblem(null);
       }, !ready) : null
     ),
+    state?.recovery?.supported ? (0, import_react49.createElement)(
+      "section",
+      { className: "bt-computer-help", "aria-label": t("Desktop service recovery") },
+      state.recovery.status === "running" ? (0, import_react49.createElement)(
+        "p",
+        { role: "status" },
+        t({ settling: "Waiting for desktop operations to stop…", reconnecting: "Reconnecting desktop service…", checking: "Checking and stopping desktops…" }[state.recovery.stage]),
+        ` ${state.recovery.completed} / ${state.recovery.total}`
+      ) : null,
+      state.recovery.status === "completed" && !state.recovery.disconnected ? (0, import_react49.createElement)("p", { role: "status" }, t("Desktop service recovered. Start each desktop when ready.")) : null,
+      state.recovery.status === "failed" ? (0, import_react49.createElement)("p", { role: "alert" }, t(state.recovery.problem === "interrupted-management" ? "A desktop startup or storage operation was interrupted. Restart DSH and check desktop recovery before continuing." : state.recovery.problem === "runtime-changed" ? "The desktop engine connection changed. Restore the previous connection before retrying." : state.recovery.problem === "unsettled" ? "Recovery could not finish stopping previous work. Wait, then retry." : "Recovery failed. Check that the container engine is running, then retry. Desktops remain blocked.")) : null,
+      serviceConfirmation ? (0, import_react49.createElement)(
+        "div",
+        { role: "group", "aria-label": t("Confirm service recovery") },
+        (0, import_react49.createElement)("p", null, t("Stop all Bot desktops and recover their shared service? Saved files and checkpoints are kept. Start desktops manually afterward; unconfirmed actions will not be repeated.")),
+        (0, import_react49.createElement)(
+          "div",
+          { className: "bt-computer-row" },
+          button("Recover service and stop desktops", recoverService, state.recovery.status === "running", true),
+          button("Cancel", () => setServiceConfirmation(null), false, true)
+        )
+      ) : button("Recover desktop service", () => setServiceConfirmation({
+        botId: bot.id,
+        expectedGeneration: record.generation,
+        expectedRecovery: state.recovery.version
+      }), !record || state.recovery.status === "running", true)
+    ) : state?.recovery?.disconnected ? (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Restart DSH to recover this desktop bridge.")) : null,
     (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
@@ -36285,7 +37464,7 @@ function ComputerView({ bot, actions, leaving }) {
         })) : null
       )
     )),
-    error ? (0, import_react49.createElement)("div", { className: "bt-error", role: "alert" }, error) : null,
+    error ? (0, import_react49.createElement)("div", { className: "bt-error", role: "alert" }, t(error)) : null,
     previewBusy ? (0, import_react49.createElement)("div", { className: "bt-muted", role: "status" }, t("The desktop is busy. Keeping the last preview until it is available again.")) : null,
     notice ? (0, import_react49.createElement)("div", { className: "bt-muted", role: "status" }, notice) : null,
     (0, import_react49.createElement)(
@@ -36414,19 +37593,52 @@ function ComputerView({ bot, actions, leaving }) {
       ) : null
     ) : null,
     (0, import_react49.createElement)("strong", null, t("Transfer files")),
-    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Use /home/cua/DSBot inside the desktop. Files up to 256 KiB; folders and overwrites are not supported.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Use /home/cua/DSBot inside the desktop. Files up to 200 MiB; folders and overwrites are not supported.")),
+    transfer ? (0, import_react49.createElement)(
+      "div",
+      { className: "bt-computer-row" },
+      (0, import_react49.createElement)("span", { role: "status", "aria-live": "polite" }, t(transfer.phase), ` ${transfer.bytes} / ${transfer.total} B`),
+      (0, import_react49.createElement)("progress", { value: transfer.bytes, max: transfer.total || 1, "aria-label": t("File transfer progress") }),
+      (0, import_react49.createElement)("button", {
+        type: "button",
+        className: "bt-soft bt-soft-sm",
+        disabled: transfer.phase === "Cancelling transfer…",
+        onClick: () => {
+          if (transferring.current) transferring.current.cancelled = true;
+          setTransfer((value) => ({ ...value, phase: "Cancelling transfer…" }));
+        }
+      }, t("Cancel transfer"))
+    ) : null,
     (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
       (0, import_react49.createElement)("label", null, t("Import file"), (0, import_react49.createElement)("input", { type: "file", "aria-label": t("Import file"), disabled: busy || !owned || !ready, onChange: upload })),
       button("List files", () => run2(loadFiles), !owned || !ready)
     ),
+    fileStorage ? (0, import_react49.createElement)(
+      "p",
+      { className: "bt-muted", role: "status" },
+      `${t("Listed files")}: ${files.length} · ${(fileStorage.bytes / 1048576).toFixed(1)} MiB · ${t("Disk available")}: ${(fileStorage.freeBytes / 1073741824).toFixed(1)} GiB`
+    ) : null,
+    fileDeletion ? (0, import_react49.createElement)(
+      "div",
+      { className: "bt-computer-help", role: "group", "aria-label": t("Confirm file deletion") },
+      (0, import_react49.createElement)("strong", null, fileDeletion.name),
+      (0, import_react49.createElement)("p", null, t("Permanently delete this file from the desktop? This cannot be undone.")),
+      (0, import_react49.createElement)(
+        "div",
+        { className: "bt-computer-row" },
+        button("Delete file permanently", deleteFile, !owned || !ready),
+        button("Cancel", () => setFileDeletion(null))
+      )
+    ) : null,
     files.map((file) => (0, import_react49.createElement)(
       "div",
       { key: file.name, className: "bt-computer-row" },
       (0, import_react49.createElement)("span", { className: "bt-computer-name" }, file.name),
       (0, import_react49.createElement)("span", { className: "bt-muted" }, `${file.bytes} B`),
-      button("Download", () => download2(file.name), !owned || !ready || file.bytes > 262144)
+      button("Download", () => download2(file.name), !owned || !ready || file.bytes > FILE_LIMIT),
+      button("Delete file", () => askDeleteFile(file), !owned || !ready || !file.version)
     ))
   );
 }
@@ -40048,6 +41260,9 @@ function apply(ctx) {
 @novnc/novnc/lib/ra2.js:
 @novnc/novnc/lib/rfb.js:
   (*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/facebook/regenerator/blob/main/LICENSE *)
+
+@noble/hashes/utils.js:
+  (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */
 return Object.defineProperty({ ...module.exports }, Symbol.toStringTag, { value: 'Module' })
   },

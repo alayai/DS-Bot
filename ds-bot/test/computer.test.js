@@ -11,6 +11,15 @@ import { createFakeComputer } from '../src/host/computer/providers/fake.js'
 import { install as installApprovals } from '../src/host/approvals.js'
 
 const fails = code => error => error.code === `bot/computer-${code}`
+const recoverable = () => Object.assign(createFakeComputer(), { recoverySupported: true, reconnect: async () => {} })
+async function recoveryDone(service) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const state = await service.state()
+    if (state.recovery.status !== 'running') return state
+    await delay(5)
+  }
+  assert.fail('Desktop service recovery did not settle.')
+}
 async function setup(t, { provider = createFakeComputer(), options } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-computer-'))
   const owners = new Map([['a', 'a'], ['a-group', 'a'], ['b', 'b']])
@@ -89,6 +98,83 @@ test('Computer starts only on an explicit management request and survives servic
   const second = createComputerService(h.rt, h.provider)
   t.after(() => second.dispose())
   assert.equal((await second.state()).computers[0].id, record.id)
+})
+
+test('service recovery drains input, revokes both desktops and preserves unknown receipts and files', async t => {
+  const h = await setup(t, { provider: recoverable() })
+  const a = await h.start(), b = await h.start('b')
+  const first = await h.manage('takeover')
+  await h.service.files({ botId: 'a', expectedGeneration: a.generation, controlToken: first.controlToken, operation: 'write', name: 'kept', data: 'YQ==' })
+  const entered = Promise.withResolvers(), resume = Promise.withResolvers(), reconnecting = Promise.withResolvers()
+  let inputs = 0
+  h.provider.perform = async (_, { signal }) => {
+    inputs++
+    entered.resolve()
+    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('lost input reply')), { once: true }))
+  }
+  h.provider.reconnect = async () => { reconnecting.resolve(); await resume.promise }
+  const frame = await h.observe('b')
+  const input = h.service.act(h.click(frame), h.exec('b'))
+  await entered.promise
+  const before = await h.service.state()
+  const args = { botId: 'a', expectedGeneration: a.generation, expectedRecovery: before.recovery.version }
+  assert.equal((await h.service.reconnect(args)).recovery.status, 'running')
+  await reconnecting.promise
+  assert.equal((await input).outcome, 'unknown')
+  await assert.rejects(h.service.reconnect(args), fails('conflict'))
+  await assert.rejects(h.service.observe(h.exec('b')), fails('recovery-required'))
+  await assert.rejects(h.service.manage('start', { botId: 'b', expectedGeneration: b.generation }), fails('recovery-required'))
+  await assert.rejects(h.service.files({ botId: 'a', expectedGeneration: a.generation, controlToken: first.controlToken, operation: 'list' }), fails('recovery-required'))
+  resume.resolve()
+  const after = await recoveryDone(h.service)
+  assert.equal(after.recovery.status, 'completed')
+  assert.equal(after.recovery.completed, 2)
+  assert.ok(after.computers.every(record => record.phase === 'stopped' && record.control === 'none' && record.generation === 2))
+  assert.equal(h.provider.targets.get(a.id).files.get('kept'), 'YQ==')
+  const registry = JSON.parse(await readFile(join(h.home, 'computers/registry.json')))
+  assert.equal(Object.values(registry.operations)[0].outcome, 'unknown')
+  await assert.rejects(h.service.files({ botId: 'a', expectedGeneration: 2, controlToken: first.controlToken, operation: 'list' }), fails('stale-control'))
+  await h.manage('start', 'b')
+  await assert.rejects(h.service.act(h.click(frame), h.exec('b')), fails('stale-observation'))
+  assert.equal(inputs, 1)
+})
+
+test('partial recovery fails closed, refuses stale consent and retries without discarding metadata', async t => {
+  const h = await setup(t, { provider: recoverable() })
+  const a = await h.start()
+  await h.start('b')
+  const stop = h.provider.stop.bind(h.provider)
+  h.provider.stop = async record => { if (record.botId === 'b') throw new Error('engine unavailable'); await stop(record) }
+  const args = { botId: 'a', expectedGeneration: a.generation, expectedRecovery: (await h.service.state()).recovery.version }
+  h.readOnly('another host owns the team')
+  await assert.rejects(h.service.reconnect(args), fails('read-only'))
+  h.readOnly(undefined)
+  await h.service.reconnect(args)
+  const failed = await recoveryDone(h.service)
+  assert.equal(failed.recovery.status, 'failed')
+  assert.equal(failed.recovery.completed, 1)
+  assert.ok(failed.computers.every(record => record.control === 'blocked' && record.generation === 1))
+  await assert.rejects(h.manage('start'), fails('recovery-required'))
+  await assert.rejects(h.service.reconnect(args), fails('conflict'))
+  h.provider.stop = stop
+  await h.service.reconnect({ ...args, expectedRecovery: failed.recovery.version })
+  const done = await recoveryDone(h.service)
+  assert.equal(done.recovery.status, 'completed')
+  assert.ok(done.computers.every(record => record.generation === 2 && record.phase === 'stopped'))
+})
+
+test('recovery refuses an active lifecycle change instead of racing its journal', async t => {
+  const h = await setup(t, { provider: recoverable() })
+  const record = await h.bind()
+  const entered = Promise.withResolvers(), finish = Promise.withResolvers()
+  h.provider.start = async () => { entered.resolve(); await finish.promise }
+  const pending = h.service.manage('start', { botId: 'a', expectedGeneration: record.generation })
+  await entered.promise
+  const before = await h.service.state()
+  await assert.rejects(h.service.reconnect({ botId: 'a', expectedGeneration: record.generation, expectedRecovery: before.recovery.version }), fails('busy'))
+  finish.resolve()
+  await pending
+  assert.equal((await h.service.state()).recovery.version, before.recovery.version)
 })
 
 test('off, unknown Sessions, archived parts and subagents cannot reach the provider', async t => {
@@ -660,6 +746,30 @@ test('stale, changed and replaced human frames cannot input', async t => {
   assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
 })
 
+test('file deletion requires current human ownership, never exposes model deletion and does not retry lost replies', async t => {
+  const h = await setup(t)
+  const record = await h.start()
+  const requests = []
+  h.provider.chunkedFiles = true
+  h.provider.files = async (_, args) => { requests.push(args); throw new Error('lost reply') }
+  const args = { botId: 'a', expectedGeneration: record.generation, operation: 'delete', name: 'file', version: 'a'.repeat(64) }
+  await assert.rejects(h.service.modelFiles('delete', args, h.exec()), fails('invalid'))
+  await assert.rejects(h.service.files(args), fails('stale-control'))
+  const { controlToken } = await h.manage('takeover')
+  await assert.rejects(h.service.files({ ...args, controlToken, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
+  await assert.rejects(h.service.files({ ...args, controlToken, version: null }), fails('invalid'))
+  await assert.rejects(h.service.files({ ...args, controlToken, name: '../file' }), fails('invalid'))
+  assert.equal(requests.length, 0)
+  await assert.rejects(h.service.files({ ...args, controlToken, temporary: '/host', recursive: true }), /lost reply/)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].temporary, undefined)
+  assert.equal(requests[0].recursive, undefined)
+  assert.equal(requests[0].version, args.version)
+  await h.manage('release')
+  await assert.rejects(h.service.files({ ...args, controlToken }), fails('stale-control'))
+  assert.equal(requests.length, 1)
+})
+
 test('file transfer requires current human ownership and rejects traversal and oversized input', async t => {
   const h = await setup(t)
   const record = await h.start()
@@ -737,6 +847,38 @@ test('model file tools import current-context attachments, export refs and dedup
   await assert.rejects(h.service.modelFiles('import', { ...args, name: 'other' }, h.exec()), fails('conflict'))
   await h.service.release(h.exec())
   await assert.rejects(h.service.modelFiles('import', args, h.exec('a-group')), fails('owner-denied'))
+})
+
+test('chunked file requests recheck control and generation and never forward guest paths', async t => {
+  const h = await setup(t)
+  const record = await h.start()
+  const identity = { botId: 'a', expectedGeneration: record.generation }
+  const first = await h.service.manage('takeover', identity)
+  const calls = []
+  h.provider.chunkedFiles = true
+  h.provider.files = async (_record, options) => { calls.push(options); return { transferId: 'a'.repeat(36) } }
+  await h.service.files({ ...identity, controlToken: first.controlToken, operation: 'begin-read', name: 'file', temporary: '/host/path' })
+  assert.equal(calls[0].temporary, undefined)
+  const second = await h.service.manage('takeover', identity)
+  const chunk = { ...identity, operation: 'read-chunk', transferId: 'a'.repeat(36), offset: 0 }
+  await assert.rejects(h.service.files({ ...chunk, controlToken: first.controlToken }), fails('stale-control'))
+  await assert.rejects(h.service.files({ ...chunk, controlToken: second.controlToken, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
+  await assert.rejects(h.service.files({ ...chunk, controlToken: second.controlToken, offset: -1 }), fails('invalid'))
+  await assert.rejects(h.service.files({ ...identity, controlToken: second.controlToken, operation: 'begin-write', name: 'file', bytes: 200 * 1024 * 1024 + 1, sha256: 'a'.repeat(64) }), fails('invalid'))
+  assert.equal(calls.length, 1)
+})
+
+test('a slow file snapshot keeps its control ticket, then returns to normal expiry', async t => {
+  let now = 0
+  const h = await setup(t, { options: { now: () => now } })
+  const record = await h.start()
+  const identity = { botId: 'a', expectedGeneration: record.generation }
+  const takeover = await h.service.manage('takeover', identity)
+  h.provider.chunkedFiles = true
+  h.provider.files = async () => { now += 100_000; return { transferId: 'a'.repeat(36) } }
+  await h.service.files({ ...identity, controlToken: takeover.controlToken, operation: 'begin-read', name: 'large.bin' })
+  now += 60_001
+  await assert.rejects(h.service.files({ ...identity, controlToken: takeover.controlToken, operation: 'list' }), fails('stale-control'))
 })
 
 test('model import respects approval, observe grants, offloaded refs and human pauses', async t => {

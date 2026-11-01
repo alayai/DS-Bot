@@ -90,3 +90,43 @@ Fetch viewer 的回退路径。`CUA_STREAM_REPORT` 可选，只在整套功能�
 真实模型回合或模型截图链路的性能保证。报告记录平台、Node、镜像 ID 和传输模式，
 不保存截图、用户文件或凭据。可比较证据见
 `computer-runtime/evidence/stream-performance.json` 与 `computer-runtime/VALIDATION.md`。
+
+
+## 组合输入与文件传输
+
+固定镜像下，`computer-smoke.mjs` 通过 DSH 公共工具调用验证 Ctrl+A、双击和
+拖拽的独立网页 marker，以及 1 MiB 模型附件的分块导入/导出。
+`computer-files-smoke.mjs` 加载真正的 ComputerView 和真实 Broker/guest，
+检查浏览器文件选择、下载字节、确认进度、在途块取消和禁止覆盖；不读取用户资料。
+同一面板流程还验证删除确认：取消后保留原字节，确认前修改文件则拒绝，
+重新列出并确认后才删除；最后直接核对 guest 目录为空。
+
+```sh
+node --import ./ds-bot/test/harness-resolve.mjs ds-bot/dev/computer-smoke.mjs sha256:<prepared-image-id>
+CUA_TEST_IMAGE=sha256:<prepared-image-id> \
+CUA_BROWSER_DEPS=/path/to/browser-test-dependencies \
+CUA_CHROME=/path/to/chromium \
+node ds-bot/dev/computer-files-smoke.mjs
+python3 -m unittest discover -s computer-runtime/test -p files_test.py
+```
+
+面板测试会故意暂停一块上传，确认进度仍为 0 后点取消，再放行该块；
+取消完成后直接读取 guest 的目录，要求没有部分文件或临时文件。浏览器失败时
+输出只含合成测试页面的状态与错误文本，不输出接管凭据或请求正文。
+
+200 MiB 上限的真实面板验收：在上述 `computer-files-smoke.mjs` 命令前增加
+`CUA_TEST_FILE_BYTES=209715200`。测试在独立 Linux 临时目录分块生成文件，
+通过真实文件选择器上传，再下载并比对长度与 SHA-256。每确认 20 MiB 输出一次
+进度；大文件允许较长测试时间，每个业务请求仍遵守生产超时与接管检查。
+
+文件清理的 Python 用例覆盖超出传输上限的稀疏文件、版本过期、同名替换、
+符号链接、硬链接、目录/FIFO 和校验后替换叶子链接；最后一项证明不跟随链接，
+不表示对 guest 并发改名具有原子 compare-and-delete 保证。
+
+## 桌面服务故障恢复
+
+在真实文件面板命令前增加 `CUA_TEST_RECOVERY=1`。测试用独立入口文件记录自己
+启动的 Broker PID，并只终止该进程。两台测试桌面各写入不同 marker；从真实
+面板确认服务恢复后，要求两台都停止、旧接管凭据被拒绝，再显式启动并读取原文件。
+结束时清理两台测试容器、volume 和临时入口，不接触用户 Broker 或容器。
+该测试是原生 Linux Node 链路，不能替代 Windows Electron GUI 或旧 WSL 桥接验收。

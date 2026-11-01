@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
 import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
+import { createTransfers } from './transfers.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
 import { rfbInput } from './rfb.mjs'
 import { discoverEngine, validateEngine, runEngine, engineCommand, engineEnvironment } from '../engine.mjs'
@@ -17,7 +18,9 @@ const allowedImages = process.argv[4] ? JSON.parse(process.argv[4]) : [image]
 if (!Array.isArray(allowedImages) || allowedImages.length > 5 || !allowedImages.includes(image) || allowedImages.some(id => !/^sha256:[a-f0-9]{64}$/.test(id))) throw new Error('Invalid image list.')
 const imageOf = value => value.record.runtimeImage ?? image
 const stdio = process.argv[3] === '--stdio'
+let runtimeKey
 const send = message => {
+  if (message.id !== undefined && runtimeKey) message = { ...message, runtimeKey }
   if (stdio) { if (!process.stdout.destroyed) process.stdout.write(`${JSON.stringify(message)}\n`) }
   else if (process.connected) process.send(message)
 }
@@ -42,6 +45,8 @@ async function localRuntime() {
       await discoverEngine(engine)
       if (engine.kind === 'docker') process.env.DOCKER_HOST = engine.endpoint
       delete process.env.DOCKER_CONTEXT
+      runtimeKey = createHash('sha256').update(JSON.stringify(engine.kind === 'docker'
+        ? ['docker', engine.endpoint, engine.id] : engine)).digest('hex')
       return
     }
     const host = (process.env.DOCKER_CONTEXT ? undefined : process.env.DOCKER_HOST)
@@ -51,6 +56,9 @@ async function localRuntime() {
     // user's default Docker context changes while this Broker is running.
     process.env.DOCKER_HOST = host
     delete process.env.DOCKER_CONTEXT
+    const id = JSON.parse((await docker(['info', '--format', '{{json .ID}}'])).stdout)
+    if (typeof id !== 'string' || !id || id.length > 200) fail('The desktop engine identity could not be verified.')
+    runtimeKey = createHash('sha256').update(JSON.stringify(['docker', host, id])).digest('hex')
   })()
   return runtimeChecked
 }
@@ -268,6 +276,20 @@ function viewerMessage(message) {
   })
 }
 
+async function fileHelper(value, args, signal) {
+  const helper = await readFile(new URL('./files.py', import.meta.url), 'utf8')
+  const timeout = ['begin-read', 'commit'].includes(args.operation) ? 120_000 : 15_000
+  const result = await new Promise((resolve, reject) => {
+    const child = execFile(executable, engineCommand(engine, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', helper]),
+      { signal, ...(engine ? { env: engineEnvironment(engine) } : {}), windowsHide: true, timeout, maxBuffer: 512 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout))
+    child.stdin.on('error', () => {})
+    child.stdin.end(JSON.stringify(args))
+  })
+  const response = JSON.parse(result)
+  if (!response.ok) fail(response.error)
+  return response.value
+}
+
 async function revoke(value) {
   if (value.revoking) return value.revoking
   value.fence = null
@@ -281,6 +303,7 @@ async function revoke(value) {
     try {
       const info = await inspect(value)
       if (info?.State.Running) {
+        await value.transfers?.clear()
         if (!value.reconciled) {
           // A new Broker cannot account for input from a dead predecessor.
           // Stop its container; only an explicit start can resume this desktop.
@@ -370,6 +393,7 @@ async function retireCandidate(value, options, signal, existing) {
 }
 async function dispatch(method, record, options, signal) {
   await localRuntime()
+  if (method === 'health') return { protocolVersion: 1, runtimeKey }
   const value = target(record)
   const image = imageOf(value)
   if (method === 'inspect') {
@@ -453,16 +477,13 @@ async function dispatch(method, record, options, signal) {
     if (method === 'files') {
       const info = await inspect(value, signal)
       if (!info?.State.Running) fail('Start the desktop before transferring files.')
-      const helper = await readFile(new URL('./files.py', import.meta.url), 'utf8')
-      const result = await new Promise((resolve, reject) => {
-        const child = execFile(executable, engineCommand(engine, ['exec', '-i', '--user', '1000:1000', value.name, 'python3', '-c', helper]),
-          { signal, ...(engine ? { env: engineEnvironment(engine) } : {}), windowsHide: true, timeout: 15_000, maxBuffer: 512 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout))
-        child.stdin.on('error', () => {})
-        child.stdin.end(JSON.stringify({ operation: options.operation, name: options.name, data: options.data }))
-      })
-      const response = JSON.parse(result)
-      if (!response.ok) fail(response.error)
-      return response.value
+      if (['list', 'read', 'write'].includes(options.operation)) {
+        return await fileHelper(value, { operation: options.operation, name: options.name, data: options.data }, signal)
+      }
+      value.transfers ??= createTransfers((args, signal) => fileHelper(value, args, signal))
+      if (options.operation === 'expire') { if (value.transfers.expired()) await value.transfers.clear(); return null }
+      try { return await value.transfers.call(options, signal) }
+      catch (error) { fail(error.message) }
     }
     if (method === 'preview') return await preview(value, signal)
     if (method === 'observe') {
@@ -551,5 +572,14 @@ async function shutdown() {
   }))
   process.exit(0)
 }
+const transferReaper = setInterval(() => {
+  if (closing) return
+  for (const value of targets.values()) {
+    if (!value.busy && !value.revoking && value.transfers?.expired()) {
+      void dispatch('files', value.record, { operation: 'expire' }, AbortSignal.timeout(20_000)).catch(() => {})
+    }
+  }
+}, 30_000)
+transferReaper.unref()
 process.once('disconnect', shutdown)
 process.once('SIGTERM', shutdown)

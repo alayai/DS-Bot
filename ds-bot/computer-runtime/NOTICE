@@ -169,3 +169,11 @@ Copyright (c) 2016 Luigi Pinca and contributors
   The optional authenticated desktop WebSocket adapter uses ws as an npm
   runtime dependency. Its original MIT license is also included in
   ds-bot/licenses/ws/LICENSE (licenses/ws/LICENSE in the npm package).
+
+@noble/hashes 2.0.1 (https://github.com/paulmillr/noble-hashes), MIT
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+  The generated ds-bot/client.js bundles the unmodified SHA-256 implementation
+  for incremental desktop file checksums. The original MIT license is included
+  in ds-bot/licenses/noble-hashes/LICENSE (licenses/noble-hashes/LICENSE in the
+  npm package). DS Bot's transfer integration is separate original code.

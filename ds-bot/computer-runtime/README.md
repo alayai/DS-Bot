@@ -157,7 +157,7 @@ Docker endpoint, host mounts or shell arguments.
 | `computer-prune-journal` | `{botId, expectedGeneration}` | Clear this Computer's action/help receipts while stopped; invalidate old generations |
 | `computer-recover` | Same | Reconcile an interrupted storage operation, retaining the authoritative home |
 | `computer-recreate` | `{botId, expectedGeneration}` | Save a checkpoint, then remove the stopped container; next explicit start recreates it |
-| `computer-files` | `{botId, expectedGeneration, controlToken, operation, name?, data?}` | Flat list/read/write in `/home/cua/DSBot`; base64 bytes, 256 KiB maximum |
+| `computer-files` | `{botId, expectedGeneration, controlToken, operation, name?, data?}` | Flat files in `/home/cua/DSBot`; 200 MiB maximum via 256 KiB chunks. Legacy read/write remains capped at 256 KiB |
 
 Read `computer-state` before binding and use its current revision. Use the
 generation returned by binding for lifecycle requests. Rebinding an existing
@@ -204,7 +204,7 @@ its Computer or browser login.
 |---|---|
 | `computer_status` | Reports the assigned Computer without starting it |
 | `computer_observe` | Saves the real PNG through DSH's attachment API and returns an observation ID |
-| `computer_act` | Sends one click, text, key or scroll action; requests approval unless the user enabled YOLO |
+| `computer_act` | Sends one click (including double-click), text, key chord, drag or scroll action; requests approval unless the user enabled YOLO |
 | `computer_release` | Releases the executing Session's lease |
 | `computer_files` | Lists the desktop transfer folder |
 | `computer_import` | Imports a file already attached in this Session's current context; requires operate access and approval unless YOLO |
@@ -403,9 +403,9 @@ failure occurred with Computer disabled; its cause remains unresolved. See
    CUA session and remains visible. A genuine transient busy response keeps the
    last image instead of clearing it, labels it as waiting and disables input
    until a fresh preview arrives.
-4. Select **Take control**. Click/right-click/scroll on the image, or use the text
-   and key controls. Key chords and drag gestures are not implemented. If the frame
-   changed or the result is unknown, inspect a fresh image before repeating anything.
+4. Select **Take control**. Use the live desktop for click, drag, keyboard chords
+   and scrolling, or switch explicitly to snapshot controls. Losing focus pauses
+   live input. Resume manually; inspect the screen before repeating unknown input.
 5. Import a small text file and open `/home/cua/DSBot` inside the desktop. **List files**
    and **Download** should return the exact bytes. Existing names are refused. The
    manual download stays in the browser. Ask the Bot to use `computer_import` on
@@ -433,7 +433,7 @@ failure occurred with Computer disabled; its cause remains unresolved. See
     new checkpoint. Clear operation history; files and chat history should remain.
 
 Guests can reach the internet; egress is not filtered. computer-only isolation,
-drag/key chords and a noVNC-style stream are not acceptance targets
+platform-specific IME behavior and unrestricted host control are not acceptance targets
 for this checkpoint. Missing these is expected; stale input, lost files, wrong Bot
 ownership or a frozen preview accepting input are defects.
 
@@ -586,3 +586,67 @@ recovery, then cleans only its resources. The variants share the same browser
 version; passing is transaction evidence, not a browser version compatibility
 matrix. It also reports warm startup and 10 screenshot timings. See
 [evidence](VALIDATION.md) for the measured scope and remaining release gates.
+
+
+## Model gestures and chunked files
+
+`computer_act` still consumes one current observation for one action. Examples:
+
+```json
+{"type":"click","x":100,"y":120,"count":2}
+{"type":"key","key":"a","modifiers":["Control"]}
+{"type":"drag","x":100,"y":120,"toX":400,"toY":300,"durationMs":500}
+```
+
+Modifiers are Control, Shift, Alt and Super without duplicates. Keys include the
+existing navigation keys, ASCII letters/digits and F1–F12. Drag endpoints must be
+inside the observed screenshot; duration is 100–2000 ms. The pinned driver exposes
+capture binding for clicks; drag and key calls retain Host/Broker observation and
+lease checks. Unknown receipts still require observation, never automatic replay.
+
+Manual and model file transfers support up to 200 MiB. The panel reports confirmed
+bytes, supports cancellation and verifies SHA-256 before reporting completion.
+Browser checksums are incremental; uploads are read one chunk at a time.
+One transfer per desktop is allowed, with a two-minute idle expiry. Imports use
+hidden staging files and atomic publication without overwrite; exports read a
+fixed snapshot. Each IPC message carries at most 256 KiB of file data. Cancel,
+expiry and control revocation clean staging; after a Broker crash, staging files
+older than ten minutes are removed on the next transfer. No automatic transfer
+resume is attempted. A lost final reply can mean publication already happened;
+check the destination before starting again. Legacy single-message read/write
+remains limited to 256 KiB. Temporary free-space checks are not hard disk quotas.
+
+After taking control, choose **List files**, then **Delete file** and confirm the
+name to permanently remove an unwanted transfer file. Cancelling leaves it intact.
+The list shows the total size of listed regular files and runtime disk space;
+it excludes hidden staging files and other home directories. Files above the
+transfer limit can still be deleted. Active transfers must finish or be cancelled
+first. Model file tools do not expose deletion.
+
+Confirmation is tied to the desktop generation and current control ticket. A
+metadata version check refuses files changed or replaced since listing. Deletion
+targets the selected flat name, with no directory traversal or following links;
+the version check is not an atomic inode compare-and-delete against a guest
+concurrently renaming files. If a reply is lost, refresh the list before deciding
+what to do; the panel does not automatically repeat deletion.
+
+## Recovering the desktop service
+
+For a native Broker connection, open **Private desktop → Recover desktop
+service** and confirm the effect on all Bot desktops. Recovery runs in the
+background: it cancels active CUA work, invalidates control tickets and viewers,
+waits for the old Broker to exit, verifies the original engine connection, then
+checks and stops each managed desktop. Saved homes, checkpoints and operation
+receipts are retained. Start the desktops you need afterward; input and chat
+continuations are never replayed automatically.
+
+Closing the panel does not cancel or repeat recovery. A failed recovery keeps
+desktop operations blocked and can be retried after resolving the reported
+problem. A changed Docker connection must be restored before retrying.
+
+The legacy Windows-to-WSL stdio bridge still requires a DSH restart, because
+exiting its Windows launcher does not prove the Linux Broker has exited. A
+Broker crash during an unconfirmed startup or storage operation also requires
+restarting DSH and checking lifecycle recovery; the panel does not assume
+orphaned engine helpers have stopped. Recovery does not reinstall or restart
+the system container engine.
