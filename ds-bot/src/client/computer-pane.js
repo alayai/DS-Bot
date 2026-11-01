@@ -53,7 +53,7 @@ export function ComputerSetup({ bot, actions, leaving } = {}) {
   return h('section', { className: 'bt-computer', 'aria-label': t('Private desktop setup') },
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t('Not configured'))),
     h('p', null, t('Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.')),
-    h('p', { className: 'bt-muted' }, t('Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop has no internet access.')),
+    h('p', { className: 'bt-muted' }, t('Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop can reach the internet; its traffic is not filtered.')),
     h('label', null, t('Container engine'), ' ', h('select', {
       value: state?.engine ?? engineKind ?? state?.environment?.engine ?? 'docker',
       disabled: preparing || blocked || Boolean(state?.engine) || leaving,
@@ -91,10 +91,12 @@ export function ComputerView({ bot, actions, leaving }) {
   const [busy, setBusy] = useState(false)
   const [previewBusy, setPreviewBusy] = useState(false)
   const [owned, setOwned] = useState(false)
+  const [controlMode, setControlMode] = useState('live')
   const [text, setText] = useState('')
   const [key, setKey] = useState('Enter')
   const [files, setFiles] = useState([])
   const [streamFailed, setStreamFailed] = useState(false)
+  const [streamProblem, setStreamProblem] = useState(null)
   const [tick, setTick] = useState(0)
   const [diagnostics, setDiagnostics] = useState(null)
   const [targetImage, setTargetImage] = useState('')
@@ -110,7 +112,10 @@ export function ComputerView({ bot, actions, leaving }) {
   const upgradeImages = (state?.images ?? []).slice((state?.images ?? []).indexOf(record?.runtimeImage) + 1)
   const requests = (state?.handoffs ?? []).filter(item => item.botId === bot.id)
   const ready = record?.phase === 'ready' && record.grant !== 'off'
-  const inputReady = owned && ready && !busy && !previewBusy && !leaving && document.visibilityState !== 'hidden' && freshFrame(frame) && session.current.shown === frame?.data
+  const liveControl = owned && controlMode === 'live'
+  const inputReady = owned && ready && !busy && !leaving && document.visibilityState !== 'hidden'
+    && (liveControl ? session.current.streamReady && Boolean(session.current.liveInput)
+      : !previewBusy && freshFrame(frame) && session.current.shown === frame?.data)
   const call = (method, args = {}) => actions.computerCall(method, {
     botId: bot.id, expectedGeneration: session.current.record?.generation,
     ...(session.current.token ? { controlToken: session.current.token } : {}), ...args,
@@ -138,7 +143,7 @@ export function ComputerView({ bot, actions, leaving }) {
     session.current.record = next
     setState(value)
     if (next?.phase !== 'ready' || next.grant === 'off') { clearFrame(); return }
-    if (session.current.streamReady && !session.current.token) return
+    if (session.current.streamReady) return
     const shot = await call('preview')
     if (session.current.mounted && document.visibilityState !== 'hidden' && !editing()) {
       setFrame({ ...shot, receivedAt: Date.now() })
@@ -184,7 +189,7 @@ export function ComputerView({ bot, actions, leaving }) {
     session.current.token = result.controlToken ?? null
     setOwned(Boolean(result.controlToken))
     session.current.streamReady = false
-    setStreamFailed(false)
+    setStreamFailed(false); setStreamProblem(null)
     clearFrame()
     setNotice('')
     setFiles([])
@@ -193,11 +198,16 @@ export function ComputerView({ bot, actions, leaving }) {
     await call('bind', { grant, approvalMode, expectedRevision: state.revision })
     forget()
     session.current.streamReady = false
-    setStreamFailed(false)
+    setStreamFailed(false); setStreamProblem(null)
     setNotice('')
   })
   const input = action => {
     if (!inputReady) return
+    if (liveControl) {
+      if (action.type === 'text') session.current.liveInput?.text(action.text)
+      else if (action.type === 'key') session.current.liveInput?.key(action.key)
+      return
+    }
     void run(async () => {
       const receipt = await call('input', { actions: [action], frameId: frame.frameId, requestId: crypto.randomUUID() })
       clearFrame()
@@ -207,7 +217,7 @@ export function ComputerView({ bot, actions, leaving }) {
   })
 }
   const pointer = (event, type) => {
-    if (!inputReady) return
+    if (!inputReady || liveControl) return
     event.preventDefault()
     const point = imagePoint(frame, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY)
     if (point) input({ type, ...point, ...(type === 'click' ? { button: event.type === 'contextmenu' ? 'right' : 'left' } : { deltaY: event.deltaY > 0 ? 3 : -3 }) })
@@ -241,7 +251,7 @@ export function ComputerView({ bot, actions, leaving }) {
   const button = (label, onClick, disabled = false) => h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || disabled || leaving, onClick }, t(label))
   return h('div', { ref: panel, className: 'bt-computer', 'data-tick': tick },
     h('div', { className: 'bt-computer-head' }, h('strong', null, t('Private desktop')), h('span', { className: 'bt-chip' }, t(PHASE[record?.phase] ?? 'Not assigned'))),
-    h('p', { className: 'bt-muted' }, t('Offline Linux container. Other Bot tools still run with their existing permissions.')),
+    h('p', { className: 'bt-muted' }, t('Linux container with open internet access. Other Bot tools still run with their existing permissions.')),
     h('label', { className: 'bt-computer-row' }, t('Bot access'),
       h('select', { value: record?.grant ?? 'off', disabled: busy || !state || leaving, onChange: event => { void bind(event.target.value) } },
         h('option', { value: 'off' }, t('Off — keep files')),
@@ -258,10 +268,17 @@ export function ComputerView({ bot, actions, leaving }) {
       button('Start desktop', () => manage('start'), !record || record.grant === 'off' || ready || record.control === 'human' || record.recoveryPending),
       button('Stop desktop', () => manage('stop'), !record || record.phase === 'stopped'),
       button('Refresh', () => run(refresh, false)),
-      streamFailed && !owned ? button('Retry live stream', () => setStreamFailed(false), !ready) : null),
+      streamFailed ? button('Retry live stream', () => { setStreamFailed(false); setStreamProblem(null) }, !ready) : null),
     h('div', { className: 'bt-computer-row' },
       button(owned ? 'Renew control' : 'Take control', () => manage('takeover'), !ready),
-      button('Give back to Bot', () => manage('release'), !owned)),
+      button('Give back to Bot', () => manage('release'), !owned),
+      owned ? button(liveControl ? 'Use snapshot control' : 'Use live control', () => {
+        session.current.streamReady = false
+        session.current.liveInput = null
+        setControlMode(liveControl ? 'snapshot' : 'live')
+        setStreamFailed(false); setStreamProblem(null)
+        clearFrame()
+      }) : null),
     h('p', { className: 'bt-muted', role: 'status' }, owned
       ? t('You control this desktop. Closing the panel keeps the Bot paused.')
       : record?.control === 'human' || record?.control === 'blocked'
@@ -284,15 +301,19 @@ export function ComputerView({ bot, actions, leaving }) {
     notice ? h('div', { className: 'bt-muted', role: 'status' }, notice) : null,
     h('div', { className: 'bt-computer-screen', 'data-control': inputReady || undefined },
       h(ComputerScreen, {
-        live: Boolean(ready && !owned && !streamFailed && !leaving), botId: bot.id, generation: record?.generation,
+        live: Boolean(ready && (!owned || liveControl) && !streamFailed && !leaving), botId: bot.id, generation: record?.generation,
+        controlToken: liveControl ? session.current.token : undefined,
+        onControls: controls => { session.current.liveInput = controls },
         frame, onPointer: pointer,
         onPresented: data => { session.current.shown = data; if (!editing()) setTick(value => value + 1) },
-        onReady: () => { session.current.streamReady = true; setPreviewBusy(false) },
-        onLost: () => { session.current.streamReady = false },
-        onFallback: () => { session.current.streamReady = false; setStreamFailed(true) },
+        onReady: () => { session.current.streamReady = true; setPreviewBusy(false); setStreamProblem(null); setTick(value => value + 1) },
+        onLost: () => { session.current.streamReady = false; if (session.current.mounted) setTick(value => value + 1) },
+        onFallback: detail => { session.current.streamReady = false; setStreamFailed(true); setStreamProblem(detail) },
       })),
+    streamFailed && streamProblem ? h('p', { className: 'bt-error', role: 'status' }, t(streamProblem.message)) : null,
     h('p', { className: 'bt-muted' }, t(owned
-      ? 'Control uses verified snapshots. The last image stays visible while the next one loads.'
+      ? liveControl ? 'Live control: click the desktop to type or drag. Losing window focus pauses input.'
+        : 'Control uses verified snapshots. The last image stays visible while the next one loads.'
       : streamFailed ? 'Live desktop streaming is unavailable. Showing PNG snapshots instead.' : 'Live desktop stream (read-only).')),
     h('div', { className: 'bt-computer-row' },
       h('select', { 'aria-label': t('Desktop key'), value: key, onChange: event => setKey(event.target.value) }, KEYS.map(value => h('option', { key: value, value }, value))),
@@ -360,7 +381,10 @@ export const COMPUTER_CSS = `
 .bt-computer-screen{position:relative;flex:none;border:1px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card);min-height:120px;aspect-ratio:16 / 10;display:flex;align-items:center;justify-content:center}
 .bt-computer-screen[data-control] canvas{cursor:crosshair}
 .bt-computer-display{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.bt-computer-decoder{position:absolute;inset:0;visibility:hidden;pointer-events:none}
+.bt-computer-decoder{position:absolute;inset:0;visibility:hidden;pointer-events:none;z-index:1}
+.bt-computer-decoder[data-live]{visibility:visible}
+.bt-computer-decoder[data-live][data-interactive]{pointer-events:auto}
+.bt-computer-stream-status{z-index:2}
 .bt-computer-canvas{display:block;max-width:100%;max-height:100%;width:auto;height:auto;user-select:none}
 .bt-computer-canvas[hidden]{display:none}
 .bt-computer-stream-status{position:absolute;right:8px;bottom:8px;padding:3px 7px;border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font-size:11px}

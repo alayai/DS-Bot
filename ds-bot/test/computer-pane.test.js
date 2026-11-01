@@ -107,15 +107,41 @@ function viewer({ setup = false } = {}) {
     failPreview: code => { previewError = code ? Object.assign(new Error('Preview failed'), { code }) : null },
     advance: value => { now += value },
     unmount: () => { for (const cell of slots) cell.stop?.() },
-    async own() {
+    async own({ live = false } = {}) {
       render()
       await tick()
       button('Take control').props.onClick()
       await tick()
+      if (!live) {
+        button('Use snapshot control').props.onClick()
+        for (const fn of timers) fn()
+        await tick()
+      }
       image().props.onLoad()
     },
   }
 }
+
+test('live takeover passes its token to the stream and never submits snapshot input', async () => {
+  const view = viewer()
+  await view.own({ live: true })
+  const screen = () => find(view.render(), node => typeof node.type === 'function' && node.type.name === 'ComputerScreen')
+  assert.equal(screen().props.live, true)
+  assert.equal(screen().props.controlToken, 'synthetic-ticket')
+  assert.equal(view.button('Send key').props.disabled, true)
+  const keys = []
+  screen().props.onControls({ key: key => keys.push(key) })
+  screen().props.onReady()
+  view.button('Send key').props.onClick()
+  assert.deepEqual(keys, ['Enter'])
+  assert.equal(view.calls.some(call => call.method === 'input'), false)
+  screen().props.onControls(null)
+  screen().props.onLost()
+  assert.equal(view.button('Send key').props.disabled, true)
+  view.button('Use snapshot control').props.onClick()
+  assert.equal(screen().props.live, false)
+  assert.equal(screen().props.controlToken, undefined)
+})
 
 test('unchanged desktop images keep fresh input enabled without another image load', async () => {
   const view = viewer()
@@ -130,7 +156,7 @@ test('unchanged desktop images keep fresh input enabled without another image lo
   send()
   await tick()
   assert.equal(view.calls.filter(call => call.method === 'input').length, 1)
-  assert.equal(view.calls.find(call => call.method === 'input').args.frameId, 'frame-3')
+  assert.equal(view.calls.find(call => call.method === 'input').args.frameId, 'frame-4')
   assert.equal(view.button('Send key').props.disabled, true)
   view.image().props.onLoad()
   assert.equal(Boolean(view.button('Send key').props.disabled), false)

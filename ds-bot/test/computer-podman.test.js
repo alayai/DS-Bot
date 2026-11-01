@@ -84,7 +84,7 @@ test('Podman representation normalization does not supply missing isolation sett
     Image: id, Config: { User: '1000:1000', Labels: {
       'org.ds-bot.computer.id': 'fixture', 'org.ds-bot.computer.owner': 'owner', 'org.ds-bot.computer.protocol': '1',
     } },
-    HostConfig: { NetworkMode: 'none', CapDrop: ['all'], SecurityOpt: ['no-new-privileges=true'],
+    HostConfig: { NetworkMode: 'podman', CapDrop: ['all'], SecurityOpt: ['no-new-privileges=true'],
       Memory: 4 * 1024 ** 3, MemorySwap: 4 * 1024 ** 3, NanoCpus: 0, CpuPeriod: 100000, CpuQuota: 200000,
       PidsLimit: 512, RestartPolicy: { Name: '' } },
     Mounts: [{ Name: 'home', Destination: '/home/cua', Type: 'volume', RW: true }],

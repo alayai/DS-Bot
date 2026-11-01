@@ -12,13 +12,16 @@ export function assertVolume(data, value) {
   }
 }
 
+// Open egress on the engine bridge. Host networking and the old offline mode are both rejected.
+const OPEN_NETWORK = new Set(['bridge', 'podman'])
+
 export function assertContainer(data, value, image) {
   const labels = data?.Config?.Labels ?? {}
   const config = data?.HostConfig ?? {}
   const mount = data?.Mounts?.[0]
   if (labels['org.ds-bot.computer.id'] !== value.record.id || labels['org.ds-bot.computer.owner'] !== value.record.botId
     || labels['org.ds-bot.computer.protocol'] !== '1' || data.Image !== image
-    || data.Config.User !== '1000:1000' || config.Privileged || config.NetworkMode !== 'none'
+    || data.Config.User !== '1000:1000' || config.Privileged || !OPEN_NETWORK.has(config.NetworkMode)
     || config.PidMode === 'host' || config.IpcMode === 'host' || config.UTSMode === 'host'
     || config.Devices?.length || config.DeviceRequests?.length || config.Binds?.length || config.CapAdd?.length
     || !config.CapDrop?.includes('ALL') || !config.SecurityOpt?.includes('no-new-privileges')

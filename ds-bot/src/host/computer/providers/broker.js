@@ -159,7 +159,9 @@ export function createBrokerProvider(config = {}) {
       const stream = makeStream(peer, id)
       streams.set(id, stream)
       try {
-        await call('viewer-open', record, { ...options, stream: id })
+        const result = await call('viewer-open', record, { ...options, stream: id })
+        stream.interactive = result?.interactive === true
+        if (options.interactive && !stream.interactive) throw refused('viewer-unavailable', 'Update the runtime before using live control.')
         return stream
       } catch (error) {
         stream.close()

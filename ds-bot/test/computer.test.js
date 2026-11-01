@@ -1268,6 +1268,55 @@ function fakeViewer() {
   }
 }
 
+test('interactive viewers require a current takeover, are exclusive and block snapshot input', async t => {
+  const provider = createFakeComputer()
+  const opened = []
+  provider.openViewer = async (_record, options) => {
+    const stream = Object.assign(fakeViewer(), { interactive: options.interactive })
+    opened.push(stream)
+    return stream
+  }
+  const h = await setup(t, { provider })
+  const record = await h.start()
+  const args = { botId: 'a', expectedGeneration: record.generation }
+  await assert.rejects(h.service.openViewer({ ...args, controlToken: 'invented' }), fails('stale-control'))
+  const { controlToken } = await h.manage('takeover')
+  const stream = await h.service.openViewer({ ...args, controlToken })
+  assert.equal(stream.interactive, true)
+  await assert.rejects(h.service.openViewer({ ...args, controlToken }), fails('busy'))
+  await assert.rejects(h.service.humanAct({ ...args, controlToken }), fails('busy'))
+  const watcher = await h.service.openViewer(args)
+  assert.equal(watcher.interactive, false)
+  await h.manage('takeover')
+  await assert.rejects(stream.write(Buffer.from([4])), fails('viewer-unavailable'))
+  await assert.rejects(h.service.openViewer({ ...args, controlToken }), fails('stale-control'))
+})
+
+test('interactive stream writes cannot extend an already expired human lease', async t => {
+  let now = 0
+  const provider = createFakeComputer()
+  let writes = 0
+  provider.openViewer = async () => Object.assign(fakeViewer(), { interactive: true, write() { writes++ } })
+  const h = await setup(t, { provider, options: { now: () => now } })
+  const record = await h.start()
+  const { controlToken } = await h.manage('takeover')
+  const stream = await h.service.openViewer({ botId: 'a', expectedGeneration: record.generation, controlToken })
+  now = 60_001
+  await assert.rejects(stream.write(Buffer.from([4])), fails('stale-control'))
+  assert.equal(writes, 0)
+})
+
+test('old providers cannot silently open an interactive viewer', async t => {
+  const provider = createFakeComputer()
+  const stream = fakeViewer()
+  provider.openViewer = async () => stream
+  const h = await setup(t, { provider })
+  const record = await h.start()
+  const { controlToken } = await h.manage('takeover')
+  await assert.rejects(h.service.openViewer({ botId: 'a', expectedGeneration: record.generation, controlToken }), fails('viewer-unavailable'))
+  assert.equal(stream.closed, true)
+})
+
 test('viewers survive model turn fences but close on binding changes and read-only ownership', async t => {
   const provider = createFakeComputer()
   const opened = []
@@ -1275,6 +1324,9 @@ test('viewers survive model turn fences but close on binding changes and read-on
   const h = await setup(t, { provider })
   const record = await h.start()
   const stream = await h.service.openViewer({ botId: 'a', expectedGeneration: record.generation })
+  await h.observe()
+  await h.service.release(h.exec())
+  assert.equal(opened[0].closed, false)
   await h.observe()
   await h.service.endTurn('a', 1)
   assert.equal(opened[0].closed, false)

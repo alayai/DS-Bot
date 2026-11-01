@@ -160,3 +160,12 @@ Copyright (C) 2022 The noVNC Authors
   source-1.5.0.tar.gz contains core/, vendor/pako/ and their notices. The
   original source is transformed only by the npm distribution and esbuild;
   DS Bot's viewer integration is separate original code.
+
+ws 8.22.0 (https://github.com/websockets/ws), MIT
+Copyright (c) 2011 Einar Otto Stangvik
+Copyright (c) 2013 Arnout Kazemier and contributors
+Copyright (c) 2016 Luigi Pinca and contributors
+
+  The optional authenticated desktop WebSocket adapter uses ws as an npm
+  runtime dependency. Its original MIT license is also included in
+  ds-bot/licenses/ws/LICENSE (licenses/ws/LICENSE in the npm package).

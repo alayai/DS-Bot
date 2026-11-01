@@ -18,7 +18,7 @@ function container() {
       'org.ds-bot.computer.owner': target.record.botId, 'org.ds-bot.computer.protocol': '1',
     } },
     HostConfig: {
-      NetworkMode: 'none', CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges'],
+      NetworkMode: 'bridge', CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges'],
       Memory: 4 * 1024 ** 3, MemorySwap: 4 * 1024 ** 3, NanoCpus: 2_000_000_000,
       PidsLimit: 512, RestartPolicy: { Name: 'no' },
     },
@@ -33,6 +33,7 @@ test('Broker refuses changed ownership, resource limits, host access and runtime
     value => { value.Image = 'another-image' },
     value => { value.Config.User = 'root' },
     value => { value.HostConfig.NetworkMode = 'host' },
+    value => { value.HostConfig.NetworkMode = 'none' },
     value => { value.HostConfig.Memory = 0 },
     value => { value.HostConfig.MemorySwap = -1 },
     value => { value.HostConfig.NanoCpus = 0 },

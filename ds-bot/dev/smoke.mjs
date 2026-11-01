@@ -48,11 +48,19 @@ async function login() {
 
 const cookie = await login()
 async function api(endpoint, payload = {}) {
-  const response = await fetch(`${BASE}/api/bot`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ endpoint, payload }),
-  })
+  const began = Date.now()
+  let response
+  try {
+    response = await fetch(`${BASE}/api/bot`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ endpoint, payload }),
+    })
+  } catch (error) {
+    const code = error.cause?.code
+    const detail = typeof code === 'string' && /^(?:E[A-Z]+|UND_ERR_[A-Z_]+)$/.test(code) ? code : 'transport error'
+    throw new Error(`${endpoint}: no response (${detail}, ${Date.now() - began} ms); request was not retried`, { cause: error })
+  }
   const result = await response.json()
   if (!result.ok) throw new Error(`${endpoint}: ${result.error?.message ?? JSON.stringify(result)}`)
   return result.value
@@ -62,17 +70,17 @@ const state = () => readJson(join(HOME, 'bot', 'state.json'))
 const botNamed = wanted => Object.values(state().bots).find(bot => bot.name === wanted)
 const roomNamed = wanted => Object.values(state().rooms).find(room => room.name === wanted)
 
-// Quiet: no Bot shows an activity and the mock has taken no call for QUIET_MS. Deliveries
-// start a moment after a turn ends, so activity alone is not enough.
+// Card tools hide the activity hint before their save/turn completes. Wait for
+// running turns too; otherwise a slow disk makes the next step overtake the card.
 async function settle() {
   const deadline = Date.now() + STEP_TIMEOUT_MS
   let calls = mockLog().length
   let since = Date.now()
   while (Date.now() < deadline) {
     await sleep(400)
-    const { activity = {} } = await api('state')
+    const { activity = {}, work = {} } = await api('state')
     const now = mockLog().length
-    if (now !== calls || Object.keys(activity).length > 0) {
+    if (now !== calls || Object.keys(activity).length > 0 || Object.keys(work.turns ?? {}).length > 0) {
       calls = now
       since = Date.now()
     } else if (Date.now() - since >= QUIET_MS) {

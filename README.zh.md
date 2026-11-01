@@ -17,7 +17,7 @@ DS Bot 是一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 
 ## 安装
 
-**实验性 Computer runtime（源码开发版）：**可选的 Linux CUA 容器后端已加入私有桌面面板、人类接管、Bot 逐次审批或可选 YOLO 免审批输入、聊天文件附件、接管回答后返回原聊天续跑，以及停止状态下的备份、恢复、镜像与 home 成对升级/回滚、存储诊断和备份/操作历史清理。Windows 源码版可通过 `start-cua.ps1` 使用 WSL 桥接。本分支构建的应用也会携带 Broker 运行时并在使用前校验，已有 home 在显式迁移通过前始终绑定原镜像。插件现已携带 Broker，并提供“准备并启动”：Windows x64 或 Linux x64 上已有运行中的本地 Docker 时，可自动准备镜像、保存连接，无需填写 Broker 路径或另装 Linux Node。准备由用户点击触发，初始仅授予观察权限，桌面仍断网；原有 WSL 配置继续兼容。现已增加实验性 Podman 选择与 Windows 专用虚机准备，已有引擎选择保持固定。Podman 实机验收、自动安装系统环境、实际 OCI 镜像发行和 Windows GUI 验收仍需分别处理。使用步骤与限制见 [开发说明](computer-runtime/README.md)。
+**实验性 Computer runtime（源码开发版）：**可选的 Linux CUA 容器后端已加入私有桌面面板、人类接管、Bot 逐次审批或可选 YOLO 免审批输入、聊天文件附件、接管回答后返回原聊天续跑，以及停止状态下的备份、恢复、镜像与 home 成对升级/回滚、存储诊断和备份/操作历史清理。Windows 源码版可通过 `start-cua.ps1` 使用 WSL 桥接。本分支构建的应用也会携带 Broker 运行时并在使用前校验，已有 home 在显式迁移通过前始终绑定原镜像。插件现已携带 Broker，并提供“准备并启动”：Windows x64 或 Linux x64 上已有运行中的本地 Docker 时，可自动准备镜像、保存连接，无需填写 Broker 路径或另装 Linux Node。准备由用户点击触发，初始仅授予观察权限，桌面可以访问互联网且流量不做过滤；原有 WSL 配置继续兼容。现已增加实验性 Podman 选择与 Windows 专用虚机准备，已有引擎选择保持固定。Podman 实机验收、自动安装系统环境、实际 OCI 镜像发行和 Windows GUI 验收仍需分别处理。使用步骤与限制见 [开发说明](computer-runtime/README.md)。
 
 **桌面应用（Windows、macOS、Linux）**
 

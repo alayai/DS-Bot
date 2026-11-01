@@ -35,7 +35,7 @@ Installing the plugin alone does not start or download anything. An explicit
 explicit Broker/WSL configurations continue to work and are never migrated to
 a different engine automatically. Desktops initially allow observation only;
 select **Observe and operate** to enable Bot input and optionally choose YOLO.
-Running desktops are offline; other Bot tools retain their existing permissions.
+Running desktops can reach the internet and their traffic is not filtered; other Bot tools retain their existing permissions.
 
 `start-cua.ps1` remains available for the separate source-app WSL test setup.
 See the included `computer-runtime/README.md` for configuration and limitations.

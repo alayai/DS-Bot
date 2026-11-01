@@ -1,5 +1,8 @@
 FROM docker.io/trycua/xfce-cua@sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b
 
+# The base image curls a noVNC port this entrypoint does not serve.
+HEALTHCHECK NONE
+
 USER root
 COPY requirements.txt /opt/dsbot/requirements.txt
 RUN /opt/venv/bin/python3 -m pip install --no-deps --require-hashes -r /opt/dsbot/requirements.txt \

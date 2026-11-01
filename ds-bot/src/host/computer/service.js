@@ -421,7 +421,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     const lease = held.get(record.id)
     if (lease && (lease.sessionId !== who.sessionId || lease.turnId !== who.turnId)) throw refused('busy', 'Another Session owns this desktop.')
     return administration(who.botId, async () => {
-      await barrier(record)
+      await barrier(record, 'blocked', true)
       controls.set(record.id, 'none')
       return { released: true }
     })
@@ -528,9 +528,12 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   }
   async function openViewer(args) {
     const record = await userRecord(args)
+    const interactive = args.controlToken !== undefined
+    if (interactive) human(record, args.controlToken)
     if (typeof provider.openViewer !== 'function') throw refused('viewer-unavailable', 'Live desktop viewing is unavailable.')
     if (managing.has(record.botId)) throw refused('busy', 'Desktop settings are changing.')
     const current = viewers.get(record.id) ?? new Set()
+    if (interactive && [...current].some(entry => entry.interactive)) throw refused('busy', 'Another live controller is still closing.')
     if (current.size >= 4) throw refused('busy', 'Too many desktop viewers.')
     viewers.set(record.id, current)
     const controller = new AbortController()
@@ -554,21 +557,26 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
         close()
         throw refused('stale-generation', 'The desktop binding changed.')
       }
+      if (interactive) human(latest, args.controlToken).expires = clock() + humanTtl
     }
-    const entry = { close }
+    const entry = { close, interactive }
     current.add(entry)
     args.signal?.addEventListener('abort', close, { once: true })
     try {
       if (args.signal?.aborted) close()
       controller.signal.throwIfAborted()
-      stream = await provider.openViewer(record, { signal: controller.signal })
+      stream = await provider.openViewer(record, { signal: controller.signal, interactive })
+      if (interactive && stream.interactive !== true) throw refused('viewer-unavailable', 'This runtime does not support live control. Update it or use snapshot control.')
       await validate()
       args.signal?.removeEventListener('abort', close)
       stream.onClose(close)
       timer = setInterval(() => { void validate().catch(close) }, 2000)
       timer.unref?.()
       touched.set(record.id, clock())
-      return { close, validate, write: data => stream.write(data), onData: fn => stream.onData(fn), onClose: fn => stream.onClose(fn) }
+      return { close, validate, interactive, write: async data => {
+        await validate()
+        return stream.write(data)
+      }, onData: fn => stream.onData(fn), onClose: fn => stream.onClose(fn) }
     } catch (error) {
       close()
       stream?.close()
@@ -578,6 +586,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   async function humanAct(args) {
     const record = await userRecord(args)
     const ticket = human(record, args.controlToken)
+    if ([...(viewers.get(record.id) ?? [])].some(entry => entry.interactive)) throw refused('busy', 'Pause live control before sending snapshot input.')
     checkId(args.requestId)
     const id = hash([record.id, record.generation, ticket.token, args.requestId])
     const actionHash = hash([args.frameId, args.actions])

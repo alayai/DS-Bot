@@ -42,13 +42,31 @@ test('RFB strips control and clipboard capability advertisements', () => {
   assert.deepEqual([...output.subarray(4)], [0, 0, 0, 0, 0, 0, 0, 7])
 })
 
-function route(t) {
+test('interactive RFB permits fragmented standard input but never clipboard or extended control', () => {
+  const key = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65])
+  const pointer = Buffer.from([5, 1, 0, 50, 0, 60])
+  const packet = Buffer.concat([handshake, key, pointer])
+  const filter = readOnlyInput(true)
+  const output = [...packet].map(byte => filter(Buffer.from([byte])))
+  assert.deepEqual(Buffer.concat(output), packet)
+  assert.deepEqual(filter.release(), Buffer.from([4, 0, 0, 0, 0, 0, 0, 65, 5, 0, 0, 50, 0, 60]))
+  assert.equal(filter.release().length, 0)
+  for (const type of [6, 250, 251, 255]) {
+    const denied = readOnlyInput(true)
+    denied(handshake)
+    assert.throws(() => denied(Buffer.from([type])))
+  }
+  assert.throws(() => filter(Buffer.from([4, 2, 0, 0, 0, 0, 0, 65])))
+})
+
+function route(t, { interactive = false } = {}) {
   let handler, data, closed = false, closing, valid = true, acknowledgements = 0
   const writes = []
   const stream = {
+    interactive,
     onData: fn => { data = fn }, onClose: fn => { closing = fn },
     close: () => { if (!closed) { closed = true; closing?.() } },
-    validate: async () => { if (!valid) throw new Error('revoked') },
+    validate: async () => { if (!valid) throw Object.assign(new Error('revoked'), { code: 'bot/computer-owner-denied' }) },
     write: async bytes => writes.push(bytes),
   }
   const dispose = registerComputerViewer({ ctx: { get: () => ({ fetch: { register: value => { handler = value.fetch; return () => {} } } }) } }, () => ({ openViewer: async () => stream }))
@@ -57,6 +75,20 @@ function route(t) {
   return { call, writes, dispose, revoke: () => { valid = false }, isClosed: () => closed,
     send: bytes => data(bytes, () => acknowledgements++), ack: () => acknowledgements }
 }
+
+test('interactive streams expire without client heartbeats even when the provider is healthy', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  const h = route(t, { interactive: true })
+  const { id } = await (await h.call({ operation: 'open', botId: 'a', generation: 1, controlToken: 'synthetic' })).json()
+  t.mock.timers.tick(5000)
+  assert.equal(h.isClosed(), false)
+  assert.equal((await h.call({ operation: 'heartbeat', id })).status, 200)
+  t.mock.timers.tick(5000)
+  assert.equal(h.isClosed(), false)
+  t.mock.timers.tick(2000)
+  assert.equal(h.isClosed(), true)
+  assert.equal((await h.call({ operation: 'read', id })).status, 410)
+})
 
 test('desktop Fetch transport delays broker acknowledgement until the next read', async t => {
   const h = route(t)
@@ -78,7 +110,7 @@ test('viewer validates ownership on each exchange, bounds data and closes on for
   const { id } = await (await h.call({ operation: 'open', botId: 'a', generation: 1 })).json()
   assert.equal((await h.call({ operation: 'write', id, data: handshake.toString('base64') })).status, 200)
   assert.deepEqual(h.writes, [handshake])
-  assert.equal((await h.call({ operation: 'write', id, data: Buffer.from([5]).toString('base64') })).status, 403)
+  assert.equal((await h.call({ operation: 'write', id, data: Buffer.from([5]).toString('base64') })).status, 400)
   assert.equal(h.isClosed(), true)
   const next = route(t)
   const opened = await (await next.call({ operation: 'open', botId: 'a', generation: 1 })).json()

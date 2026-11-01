@@ -11,11 +11,16 @@ class Fixture(BaseHTTPRequestHandler):
         <style>body{margin:0;background:#fff;height:3000px}button{position:fixed;left:32px;top:32px;width:160px;height:80px}
         input{position:absolute;left:32px;top:150px;width:300px;height:50px;caret-color:transparent}</style>
         <button onclick="fetch('/done',{method:'POST'}).then(()=>this.textContent='Complete')">Run fixture</button>
-        <input aria-label="Fixture input" oninput="fetch('/text',{method:'POST',body:this.value})"
+        <input aria-label="Fixture input" onfocus="fetch('/focus',{method:'POST',body:'ready'})"
+          oninput="fetch('/text',{method:'POST',body:this.value})"
           onkeydown="if(event.key==='Enter'){fetch('/key',{method:'POST',body:this.value});event.preventDefault()}">
+        <button style="left:400px;top:150px;background:rgb(16,128,240)" data-count="0"
+          onclick="const n=Number(this.dataset.count)+1;this.dataset.count=n;
+            this.style.background=n%2?'rgb(240,64,16)':'rgb(16,128,240)';
+            fetch('/pulse',{method:'POST',body:String(n)})">Frame latency</button>
         <script>onscroll=()=>fetch('/scroll',{method:'POST',body:String(scrollY)})</script>""")
     def do_POST(self):
-        if self.path not in ["/done", "/text", "/key", "/scroll"]:
+        if self.path not in ["/done", "/focus", "/text", "/key", "/scroll", "/pulse"]:
             self.send_error(404)
             return
         if self.path == "/done":

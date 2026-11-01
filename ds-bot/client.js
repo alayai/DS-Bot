@@ -17559,6 +17559,26 @@ module.exports = __toCommonJS(index_exports);
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Live desktop": "实时桌面",
+  "Desktop control expired or moved to another window. Take control again.": "桌面控制已过期或已转移到另一窗口，请重新接管。",
+  "Live control paused. The Bot remains paused.": "实时控制已暂停，Bot 仍保持暂停。",
+  "Resume live control": "继续实时控制",
+  "Use snapshot control": "切换到截图控制",
+  "Use live control": "切换到实时控制",
+  "Live control: click the desktop to type or drag. Losing window focus pauses input.": "实时控制：点击桌面可输入或拖拽，窗口失去焦点时会暂停输入。",
+  "Desktop login expired. Reload DSH and sign in again.": "桌面登录已失效，请重新加载 DSH 并登录。",
+  "This connection cannot view the desktop.": "当前连接无权查看此桌面。",
+  "The desktop stream protocol was rejected. Update the plugin and runtime together.": "桌面流协议不兼容，请同步更新插件和运行时。",
+  "The desktop viewer request is invalid.": "桌面查看请求无效。",
+  "The desktop assignment changed. Refresh its controls.": "桌面分配已变化，请刷新控制面板。",
+  "The desktop is stopped or disabled. Start it from desktop controls.": "桌面已停止或禁用，请从控制面板启动。",
+  "The desktop viewer is busy. Close unused viewers and retry.": "桌面连接繁忙，请关闭不用的查看窗口后重试。",
+  "The desktop runtime disconnected. Check the engine and restart DSH if needed.": "桌面运行时已断开，请检查容器引擎，必要时重启 DSH。",
+  "Desktop streaming is unavailable. Check the desktop runtime.": "桌面流暂不可用，请检查桌面运行时。",
+  "The desktop stream closed. Reconnecting…": "桌面流已关闭，正在重新连接…",
+  "The desktop connection timed out. Retry the live stream.": "桌面连接超时，请重试实时桌面流。",
+  "The live desktop stream was interrupted. Retry the stream.": "实时桌面流已中断，请重试。",
+  "The desktop image could not be displayed. Retry the viewer.": "桌面画面无法显示，请重试查看器。",
   "Retry live stream": "重试实时桌面流",
   "Connecting to desktop…": "正在连接桌面…",
   "Reconnecting to desktop…": "正在重新连接桌面…",
@@ -17584,7 +17604,7 @@ var ZH = {
   "Preparation interrupted": "准备被中断",
   "Desktop ready": "桌面已就绪",
   "Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.": "在运行 DSH 的机器上准备私有 Linux 桌面。首次准备需要下载并构建镜像。",
-  "Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop has no internet access.": "默认仅允许观察，设置完成后可开启 Bot 操作权限。桌面无法访问互联网。",
+  "Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop can reach the internet; its traffic is not filtered.": "默认仅允许观察，设置完成后可开启 Bot 操作权限。桌面可以访问互联网，流量不做过滤。",
   "Private desktops are disabled by the DSH profile.": "DSH 配置已禁用私有桌面。",
   "This profile already has an explicit desktop runtime. Use its desktop controls.": "此配置已指定桌面运行时，请使用桌面控制面板。",
   "Docker is ready on the DSH host.": "DSH 所在机器的 Docker 已就绪。",
@@ -17606,7 +17626,7 @@ var ZH = {
   "Set up a private desktop for this Bot.": "为此 Bot 配置私有桌面。",
   "Set up desktop": "设置桌面",
   "The plugin is installed, but its desktop runtime has not been enabled.": "插件已安装，但尚未启用桌面运行时。",
-  "This preview uses an offline Linux container. Windows requires WSL2 and Docker with Linux containers.": "此预览版使用离线 Linux 容器桌面。Windows 需要 WSL2 和运行 Linux 容器的 Docker。",
+  "This preview uses a Linux container that can reach the internet. Windows requires WSL2 and Docker with Linux containers.": "此预览版使用可访问互联网的 Linux 容器桌面。Windows 需要 WSL2 和运行 Linux 容器的 Docker。",
   "Prepare the Computer runtime and desktop image from the DS Bot source checkout.": "从 DS Bot 源码准备 Computer 运行时和桌面镜像。",
   "Enable computer.enabled in the DSH profile and configure the Broker path and immutable image ID. On Windows, also configure the WSL distribution and Linux Node path.": "在 DSH profile 中启用 computer.enabled，并配置 Broker 路径和固定镜像 ID。Windows 还需配置 WSL 发行版和 Linux Node 路径。",
   "Restart DSH, return to this Bot and choose its desktop access.": "重启 DSH，回到此 Bot 并选择桌面访问权限。",
@@ -17653,7 +17673,7 @@ var ZH = {
   "Starting": "启动中",
   "Needs recovery": "需要恢复",
   "Unavailable": "不可用",
-  "Offline Linux container. Other Bot tools still run with their existing permissions.": "离线 Linux 容器。Bot 的其他工具仍按原有权限运行。",
+  "Linux container with open internet access. Other Bot tools still run with their existing permissions.": "Linux 容器可访问互联网，流量不做过滤。Bot 的其他工具仍按原有权限运行。",
   "Bot access": "Bot 访问权限",
   "Off — keep files": "关闭并保留文件",
   "Observe only": "仅观察",
@@ -35341,62 +35361,251 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
   ];
 }
 
-// src/client/computer-stream.js
-var import_react48 = require("react");
+// src/shared/computer-stream.js
+var ERRORS = {
+  auth: [401, false, "Desktop login expired. Reload DSH and sign in again."],
+  forbidden: [403, false, "This connection cannot view the desktop."],
+  protocol: [400, false, "The desktop stream protocol was rejected. Update the plugin and runtime together."],
+  invalid: [400, false, "The desktop viewer request is invalid."],
+  changed: [409, false, "The desktop assignment changed. Refresh its controls."],
+  control: [409, false, "Desktop control expired or moved to another window. Take control again."],
+  stopped: [409, false, "The desktop is stopped or disabled. Start it from desktop controls."],
+  busy: [429, true, "The desktop viewer is busy. Close unused viewers and retry."],
+  broker: [502, true, "The desktop runtime disconnected. Check the engine and restart DSH if needed."],
+  unavailable: [503, true, "Desktop streaming is unavailable. Check the desktop runtime."],
+  closed: [410, true, "The desktop stream closed. Reconnecting…"],
+  timeout: [504, true, "The desktop connection timed out. Retry the live stream."],
+  network: [502, true, "The live desktop stream was interrupted. Retry the stream."],
+  display: [500, false, "The desktop image could not be displayed. Retry the viewer."]
+};
+var ALIASES = {
+  "owner-denied": "forbidden",
+  "read-only": "forbidden",
+  "stale-generation": "changed",
+  "recovery-required": "stopped",
+  off: "stopped",
+  "not-ready": "stopped",
+  "provider-unavailable": "broker",
+  "provider-failed": "broker",
+  "viewer-unavailable": "closed",
+  "result-unknown": "timeout",
+  "stale-control": "control"
+};
+function streamFailure(error, status) {
+  let code = typeof error === "string" ? error : error?.code;
+  code = code?.replace(/^bot\/computer-/, "");
+  code = ALIASES[code] ?? code;
+  if (!Object.hasOwn(ERRORS, code ?? "")) {
+    code = status === 401 ? "auth" : status === 403 ? "forbidden" : status === 429 ? "busy" : status === 410 ? "closed" : status === 400 ? "invalid" : status === 503 ? "unavailable" : "network";
+  }
+  const [httpStatus, retryable, message] = ERRORS[code];
+  return { code, status: httpStatus, retryable, message };
+}
+var ReconnectBudget = class {
+  constructor() {
+    this.attempts = 0;
+    this.failures = [];
+    this.readyAt = null;
+  }
+  ready(now = Date.now()) {
+    this.readyAt = now;
+  }
+  failed(error, now = Date.now()) {
+    if (!streamFailure(error).retryable) return null;
+    if (this.readyAt !== null && now - this.readyAt >= 3e4) this.attempts = 0;
+    this.readyAt = null;
+    this.failures = this.failures.filter((time) => now - time < 12e4);
+    this.failures.push(now);
+    if (++this.attempts >= 4 || this.failures.length >= 6) return null;
+    return Math.min(500 * 2 ** (this.attempts - 1), 5e3);
+  }
+};
+
+// src/client/computer-channel.js
 var ROUTE2 = "api/ds-bot/computer-viewer";
+function viewerSocketUrl(path, base = globalThis.document?.baseURI, transport = globalThis.__DSH_TRANSPORT__?.streamBaseUrl) {
+  if (path !== "/api/ds-bot/computer-viewer/socket") return null;
+  const selected = typeof transport === "string" && transport ? transport : base;
+  if (!selected) return null;
+  try {
+    const origin = new URL(selected);
+    if (!["http:", "https:"].includes(origin.protocol)) return null;
+    const url = new URL(path.slice(1), origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 var ComputerChannel = class {
-  constructor(botId, generation, fetcher = globalThis.fetch) {
+  constructor(botId, generation, fetcher = globalThis.fetch, options = {}) {
     this.readyState = 0;
     this.binaryType = "arraybuffer";
     this.protocol = "";
     this.onopen = this.onmessage = this.onclose = this.onerror = null;
     this.controller = new AbortController();
     this.fetcher = (...args) => fetcher(...args);
+    this.options = options;
     this.queue = [];
     this.queuedBytes = 0;
     this.writing = false;
+    this.transport = "fetch";
     this.start = setTimeout(() => {
       void this.open(botId, generation);
     }, 0);
   }
   async request(operation, args = {}) {
-    const response = await this.fetcher(ROUTE2, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ operation, id: this.id, ...args }),
-      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(3e4)])
-    });
-    if (!response.ok) throw new Error("Desktop stream unavailable.");
+    let response;
+    try {
+      response = await this.fetcher(ROUTE2, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operation, id: this.id, ...args }),
+        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(operation === "heartbeat" ? 3e3 : 3e4)])
+      });
+    } catch (error) {
+      throw streamFailure(error?.name === "TimeoutError" ? "timeout" : "network");
+    }
+    if (!response.ok) {
+      let error;
+      try {
+        error = (await response.json()).error;
+      } catch {
+      }
+      throw streamFailure(error, response.status);
+    }
     return response;
   }
   async open(botId, generation) {
     try {
-      const response = await this.request("open", { botId, generation });
-      this.id = (await response.json()).id;
+      const args = { botId, generation, ...this.options.controlToken ? { controlToken: this.options.controlToken } : {} };
+      const result = await (await this.request("open", args)).json();
+      this.id = result.id;
+      this.interactive = result.interactive === true;
+      if (this.options.controlToken && !this.interactive) throw streamFailure("control");
       if (this.readyState === 3) {
         this.release();
         return;
       }
+      const url = !this.options.forceFetch && viewerSocketUrl(result.webSocket, this.options.base);
+      if (url && (this.options.WebSocket ?? globalThis.WebSocket)) {
+        if (await this.attachSocket(url)) return;
+        if (this.readyState === 3) return;
+        await this.request("close").catch(() => {
+        });
+        const fallback = await (await this.request("open", args)).json();
+        this.id = fallback.id;
+        this.interactive = fallback.interactive === true;
+        if (this.options.controlToken && !this.interactive) throw streamFailure("control");
+        if (this.readyState === 3) {
+          this.release();
+          return;
+        }
+      }
       this.readyState = 1;
+      this.keepControl();
       this.onopen?.();
       while (this.readyState === 1) {
         const data = await (await this.request("read")).arrayBuffer();
         if (this.readyState === 1 && data.byteLength) this.onmessage?.({ data });
       }
-    } catch {
-      this.close();
+    } catch (error) {
+      this.close(error);
     }
+  }
+  attachSocket(url) {
+    return new Promise((resolve2) => {
+      const Socket = this.options.WebSocket ?? globalThis.WebSocket;
+      let socket, settled = false, claimed = false, received = 0;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.controller.signal.removeEventListener("abort", cancel);
+        resolve2(result);
+      };
+      const fallback = () => {
+        if (socket) {
+          socket.onopen = socket.onclose = socket.onerror = socket.onmessage = null;
+          socket.close();
+        }
+        ;
+        finish(false);
+      };
+      const cancel = () => fallback();
+      const timer = setTimeout(fallback, 3e3);
+      this.controller.signal.addEventListener("abort", cancel, { once: true });
+      try {
+        socket = new Socket(url);
+        this.socket = socket;
+        socket.binaryType = "arraybuffer";
+        socket.onopen = () => socket.send(JSON.stringify({ id: this.id }));
+        socket.onmessage = (event) => {
+          try {
+            if (typeof event.data === "string") {
+              if (claimed || !JSON.parse(event.data).ready) throw streamFailure("protocol");
+              claimed = true;
+              this.transport = "websocket";
+              this.readyState = 1;
+              this.keepControl();
+              this.onopen?.();
+              finish(true);
+            } else {
+              if (!claimed || this.readyState !== 1) return;
+              this.onmessage?.({ data: event.data });
+              if (this.readyState === 1) socket.send(JSON.stringify({ ack: ++received }));
+            }
+          } catch (error) {
+            this.close(error?.code ? error : "protocol");
+            finish(true);
+          }
+        };
+        socket.onerror = () => {
+          if (!claimed) fallback();
+          else this.close("network");
+        };
+        socket.onclose = (event) => {
+          if (!claimed) fallback();
+          else this.close(streamFailure(event.reason || "closed"));
+        };
+      } catch {
+        fallback();
+      }
+    });
   }
   send(data) {
     if (this.readyState !== 1 || this.queuedBytes + data.byteLength > 65536) {
-      this.close();
+      this.close("protocol");
       return;
     }
-    const copy2 = new Uint8Array(data);
-    this.queue.push(copy2);
-    this.queuedBytes += copy2.byteLength;
+    if (this.transport === "websocket") {
+      if (this.socket.bufferedAmount + data.byteLength > 65536) {
+        this.close("network");
+        return;
+      }
+      try {
+        this.socket.send(data);
+      } catch {
+        this.close("network");
+      }
+      return;
+    }
+    this.queue.push(new Uint8Array(data));
+    this.queuedBytes += data.byteLength;
     void this.flush();
+  }
+  keepControl() {
+    if (!this.interactive || this.heartbeat) return;
+    this.heartbeat = setInterval(() => {
+      if (this.heartbeatPending || this.readyState !== 1) return;
+      this.heartbeatPending = true;
+      void this.request("heartbeat").catch((error) => this.close(error)).finally(() => {
+        this.heartbeatPending = false;
+      });
+    }, 2e3);
   }
   async flush() {
     if (this.writing || this.readyState !== 1) return;
@@ -35408,8 +35617,8 @@ var ComputerChannel = class {
         this.queuedBytes = 0;
         await this.request("write", { data: btoa(binary2) });
       }
-    } catch {
-      this.close();
+    } catch (error) {
+      this.close(error);
     } finally {
       this.writing = false;
     }
@@ -35427,26 +35636,59 @@ var ComputerChannel = class {
     });
     this.id = null;
   }
-  close() {
+  close(error) {
     if (this.readyState === 3) return;
+    this.error = error ? streamFailure(error) : null;
     this.readyState = 3;
     clearTimeout(this.start);
+    clearInterval(this.heartbeat);
     this.controller.abort();
+    if (this.socket) {
+      this.socket.onclose = this.socket.onerror = null;
+      this.socket.close();
+    }
     this.queue.length = 0;
     this.queuedBytes = 0;
     this.release();
-    this.onclose?.({ code: 1e3, wasClean: true });
+    const event = { code: error ? 4e3 : 1e3, reason: this.error?.code ?? "", wasClean: !error };
+    void Promise.resolve().then(() => this.onclose?.(event));
   }
 };
-function ComputerScreen({ live, botId, generation, frame, onPresented, onReady, onLost, onFallback, onPointer }) {
+
+// src/client/computer-stream.js
+var import_react48 = require("react");
+var KEYS = {
+  Enter: 65293,
+  Tab: 65289,
+  Escape: 65307,
+  Backspace: 65288,
+  Delete: 65535,
+  ArrowUp: 65362,
+  ArrowDown: 65364,
+  ArrowLeft: 65361,
+  ArrowRight: 65363,
+  Home: 65360,
+  End: 65367,
+  PageUp: 65365,
+  PageDown: 65366,
+  Space: 32
+};
+function ComputerScreen({ live, botId, generation, frame, controlToken, onControls, onPresented, onReady, onLost, onFallback, onPointer, channelOptions }) {
   const canvas = (0, import_react48.useRef)(null);
   const decoder = (0, import_react48.useRef)(null);
   const hasPixels = (0, import_react48.useRef)(false);
   const callbacks = (0, import_react48.useRef)(null);
-  callbacks.current = { onPresented, onReady, onLost, onFallback, onPointer };
+  callbacks.current = { onPresented, onReady, onLost, onFallback, onPointer, onControls };
+  const identity = (0, import_react48.useRef)(null);
+  identity.current = `${botId}:${generation}`;
   const [status, setStatus] = (0, import_react48.useState)("connecting");
+  const [problem, setProblem] = (0, import_react48.useState)(null);
   const [painted, setPainted] = (0, import_react48.useState)(false);
   const [visible, setVisible] = (0, import_react48.useState)(document.visibilityState !== "hidden");
+  const [suspended, setSuspended] = (0, import_react48.useState)(false);
+  (0, import_react48.useEffect)(() => {
+    setSuspended(false);
+  }, [controlToken]);
   (0, import_react48.useEffect)(() => {
     const changed = () => setVisible(document.visibilityState !== "hidden");
     document.addEventListener("visibilitychange", changed);
@@ -35486,86 +35728,152 @@ function ComputerScreen({ live, botId, generation, frame, onPresented, onReady, 
     };
   }, [live, frame, botId, generation]);
   (0, import_react48.useEffect)(() => {
-    if (!live || !visible || !decoder.current) return;
-    let stopped = false, current, channel, retry, draw, deadline;
-    let attempts = 0, hadFrame = false, lost = false;
-    const disconnect = () => {
-      clearInterval(draw);
-      clearTimeout(deadline);
-      current?.disconnect();
-      channel?.close();
+    if (!live || !visible || suspended || !decoder.current) return;
+    let stopped = false, current, retry;
+    const budget = new ReconnectBudget();
+    const owner = `${botId}:${generation}`;
+    const capture = (attempt) => {
+      if (!attempt?.hadFrame || identity.current !== owner) return;
+      try {
+        paint(attempt.rfb.getImageData());
+      } catch {
+      }
+    };
+    const disconnect = (attempt) => {
+      if (!attempt) return;
+      callbacks.current.onControls?.(null);
+      clearInterval(attempt.probe);
+      clearTimeout(attempt.deadline);
+      if (!attempt.disconnected) attempt.rfb?.disconnect();
+      attempt.channel?.close();
       decoder.current?.replaceChildren();
     };
-    const failed = () => {
-      if (stopped || lost) return;
-      lost = true;
-      disconnect();
-      callbacks.current.onLost?.();
-      setStatus("reconnecting");
-      if (++attempts >= 4) {
-        callbacks.current.onFallback?.();
+    const fail2 = (attempt, error) => {
+      if (stopped || current !== attempt || attempt.lost) return;
+      attempt.lost = true;
+      const detail = streamFailure(error ?? attempt.channel?.error ?? "closed");
+      capture(attempt);
+      disconnect(attempt);
+      callbacks.current.onLost?.(detail);
+      setProblem(controlToken && detail.code === "closed" ? null : detail);
+      if (controlToken) {
+        setStatus("paused");
+        setSuspended(true);
         return;
       }
-      retry = setTimeout(connect, Math.min(500 * 2 ** (attempts - 1), 5e3));
+      setStatus("reconnecting");
+      const delay = budget.failed(detail);
+      if (delay === null) {
+        callbacks.current.onFallback?.(detail);
+        return;
+      }
+      retry = setTimeout(connect, delay);
     };
     const connect = () => {
       if (stopped) return;
-      lost = false;
-      hadFrame = false;
+      const attempt = { lost: false, hadFrame: false };
+      current = attempt;
       try {
         const RFB = require_rfb().default;
-        channel = new ComputerChannel(botId, generation);
-        current = new RFB(decoder.current, channel, { shared: true });
-        current.viewOnly = true;
-        current.resizeSession = false;
-        const connection = current;
-        current.addEventListener("disconnect", () => {
-          if (current === connection) {
-            current = null;
-            failed();
-          }
+        attempt.channel = new ComputerChannel(botId, generation, globalThis.fetch, { ...channelOptions, controlToken });
+        attempt.rfb = new RFB(decoder.current, attempt.channel, { shared: true });
+        attempt.rfb.viewOnly = true;
+        attempt.rfb.scaleViewport = true;
+        attempt.rfb.resizeSession = false;
+        attempt.rfb.addEventListener("disconnect", () => {
+          attempt.disconnected = true;
+          fail2(attempt);
         });
-        current.addEventListener("securityfailure", failed);
-        deadline = setTimeout(failed, 2e4);
-        draw = setInterval(() => {
-          if (stopped || lost) return;
-          try {
-            const image = current.getImageData();
-            if (!image.width || !image.height) return;
-            if (!hadFrame) {
+        attempt.rfb.addEventListener("securityfailure", () => fail2(attempt, "protocol"));
+        attempt.deadline = setTimeout(() => fail2(attempt, "timeout"), 2e4);
+        attempt.rfb.addEventListener("connect", () => {
+          if (stopped || current !== attempt || attempt.lost) return;
+          attempt.probe = setInterval(() => {
+            if (stopped || current !== attempt || attempt.lost) return;
+            try {
+              const image = attempt.rfb.getImageData();
+              if (!image.width || !image.height) return;
               let opaque = false;
               for (let i = 3; i < image.data.length; i += 4) if (image.data[i]) {
                 opaque = true;
                 break;
               }
               if (!opaque) return;
-              hadFrame = true;
-              attempts = 0;
-              clearTimeout(deadline);
+              paint(image);
+              attempt.hadFrame = true;
+              clearInterval(attempt.probe);
+              clearTimeout(attempt.deadline);
+              budget.ready();
+              if (controlToken) {
+                if (!attempt.channel.interactive) {
+                  fail2(attempt, "control");
+                  return;
+                }
+                attempt.rfb.viewOnly = false;
+                const send = (keys) => {
+                  if (stopped || attempt.lost || !attempt.hadFrame || document.visibilityState === "hidden") return;
+                  for (const key of keys) attempt.rfb.sendKey(key);
+                };
+                callbacks.current.onControls?.({
+                  key: (name) => {
+                    if (KEYS[name]) send([KEYS[name]]);
+                  },
+                  text: (value) => {
+                    if (typeof value !== "string" || !value.length || value.length > 4e3 || value.includes("\0")) return;
+                    send(Array.from(value, (character) => {
+                      const point = character.codePointAt(0);
+                      return point === 10 ? KEYS.Enter : point === 9 ? KEYS.Tab : point <= 255 ? point : 16777216 + point;
+                    }));
+                  }
+                });
+              }
+              setProblem(null);
               setStatus("live");
-              callbacks.current.onReady?.();
+              callbacks.current.onReady?.({ transport: attempt.channel.transport });
+            } catch {
+              fail2(attempt, "display");
             }
-            paint(image);
-          } catch {
-          }
-        }, 66);
+          }, 66);
+        });
       } catch {
-        failed();
+        fail2(attempt, "display");
       }
     };
+    setProblem(null);
     setStatus("connecting");
     connect();
+    const pause = () => {
+      if (!controlToken) return;
+      capture(current);
+      if (current) current.lost = true;
+      disconnect(current);
+      callbacks.current.onLost?.();
+      setProblem(null);
+      setStatus("paused");
+      setSuspended(true);
+    };
+    if (controlToken) window.addEventListener("blur", pause);
     return () => {
       stopped = true;
+      if (controlToken) window.removeEventListener("blur", pause);
+      if (controlToken && document.visibilityState === "hidden") setSuspended(true);
       clearTimeout(retry);
-      disconnect();
+      capture(current);
+      disconnect(current);
       callbacks.current.onLost?.();
     };
-  }, [live, visible, botId, generation]);
+  }, [live, visible, suspended, controlToken, botId, generation]);
   return (0, import_react48.createElement)(
     "div",
     { className: "bt-computer-display" },
-    (0, import_react48.createElement)("div", { ref: decoder, className: "bt-computer-decoder", "aria-hidden": true }),
+    (0, import_react48.createElement)("div", {
+      ref: decoder,
+      className: "bt-computer-decoder",
+      "data-live": live && visible && !suspended && status === "live" || void 0,
+      "data-interactive": Boolean(controlToken) || void 0,
+      "aria-label": t("Live desktop"),
+      "aria-hidden": !controlToken
+    }),
     (0, import_react48.createElement)("canvas", {
       ref: canvas,
       className: "bt-computer-canvas",
@@ -35576,13 +35884,18 @@ function ComputerScreen({ live, botId, generation, frame, onPresented, onReady, 
       onWheel: (event) => callbacks.current.onPointer?.(event, "scroll")
     }),
     !painted ? (0, import_react48.createElement)("p", { className: "bt-muted" }, t("No current desktop image. Input is disabled.")) : null,
-    live && status !== "live" ? (0, import_react48.createElement)("span", { className: "bt-computer-stream-status", role: "status" }, t(status === "connecting" ? "Connecting to desktop…" : "Reconnecting to desktop…")) : null
+    live && (suspended || status !== "live") ? (0, import_react48.createElement)(
+      "span",
+      { className: "bt-computer-stream-status", role: "status" },
+      t(problem?.message ?? (suspended ? "Live control paused. The Bot remains paused." : status === "connecting" ? "Connecting to desktop…" : "Reconnecting to desktop…")),
+      suspended && controlToken ? (0, import_react48.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => setSuspended(false) }, t("Resume live control")) : null
+    ) : null
   );
 }
 
 // src/client/computer-pane.js
 var import_react49 = require("react");
-var KEYS = ["Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Space"];
+var KEYS2 = ["Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Space"];
 var PHASE = { ready: "Running", stopped: "Stopped", starting: "Starting", error: "Needs recovery", unavailable: "Unavailable" };
 var SETUP_PHASE = {
   checking: "Checking the desktop environment",
@@ -35646,7 +35959,7 @@ function ComputerSetup({ bot, actions, leaving } = {}) {
     { className: "bt-computer", "aria-label": t("Private desktop setup") },
     (0, import_react49.createElement)("div", { className: "bt-computer-head" }, (0, import_react49.createElement)("strong", null, t("Private desktop")), (0, import_react49.createElement)("span", { className: "bt-chip" }, t("Not configured"))),
     (0, import_react49.createElement)("p", null, t("Prepare a private Linux desktop on the machine running DSH. The first preparation downloads and builds its image.")),
-    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop has no internet access.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Desktop access starts as observe-only. You can enable Bot actions after setup. The desktop can reach the internet; its traffic is not filtered.")),
     (0, import_react49.createElement)("label", null, t("Container engine"), " ", (0, import_react49.createElement)("select", {
       value: state?.engine ?? engineKind ?? state?.environment?.engine ?? "docker",
       disabled: preparing || blocked || Boolean(state?.engine) || leaving,
@@ -35712,10 +36025,12 @@ function ComputerView({ bot, actions, leaving }) {
   const [busy, setBusy] = (0, import_react49.useState)(false);
   const [previewBusy, setPreviewBusy] = (0, import_react49.useState)(false);
   const [owned, setOwned] = (0, import_react49.useState)(false);
+  const [controlMode, setControlMode] = (0, import_react49.useState)("live");
   const [text, setText] = (0, import_react49.useState)("");
   const [key, setKey] = (0, import_react49.useState)("Enter");
   const [files, setFiles] = (0, import_react49.useState)([]);
   const [streamFailed, setStreamFailed] = (0, import_react49.useState)(false);
+  const [streamProblem, setStreamProblem] = (0, import_react49.useState)(null);
   const [tick, setTick] = (0, import_react49.useState)(0);
   const [diagnostics, setDiagnostics] = (0, import_react49.useState)(null);
   const [targetImage, setTargetImage] = (0, import_react49.useState)("");
@@ -35730,7 +36045,8 @@ function ComputerView({ bot, actions, leaving }) {
   const upgradeImages = (state?.images ?? []).slice((state?.images ?? []).indexOf(record?.runtimeImage) + 1);
   const requests = (state?.handoffs ?? []).filter((item) => item.botId === bot.id);
   const ready = record?.phase === "ready" && record.grant !== "off";
-  const inputReady = owned && ready && !busy && !previewBusy && !leaving && document.visibilityState !== "hidden" && freshFrame(frame) && session.current.shown === frame?.data;
+  const liveControl = owned && controlMode === "live";
+  const inputReady = owned && ready && !busy && !leaving && document.visibilityState !== "hidden" && (liveControl ? session.current.streamReady && Boolean(session.current.liveInput) : !previewBusy && freshFrame(frame) && session.current.shown === frame?.data);
   const call2 = (method, args = {}) => actions.computerCall(method, {
     botId: bot.id,
     expectedGeneration: session.current.record?.generation,
@@ -35774,7 +36090,7 @@ function ComputerView({ bot, actions, leaving }) {
       clearFrame();
       return;
     }
-    if (session.current.streamReady && !session.current.token) return;
+    if (session.current.streamReady) return;
     const shot = await call2("preview");
     if (session.current.mounted && document.visibilityState !== "hidden" && !editing()) {
       setFrame({ ...shot, receivedAt: Date.now() });
@@ -35827,6 +36143,7 @@ function ComputerView({ bot, actions, leaving }) {
     setOwned(Boolean(result.controlToken));
     session.current.streamReady = false;
     setStreamFailed(false);
+    setStreamProblem(null);
     clearFrame();
     setNotice("");
     setFiles([]);
@@ -35836,10 +36153,16 @@ function ComputerView({ bot, actions, leaving }) {
     forget();
     session.current.streamReady = false;
     setStreamFailed(false);
+    setStreamProblem(null);
     setNotice("");
   });
   const input = (action) => {
     if (!inputReady) return;
+    if (liveControl) {
+      if (action.type === "text") session.current.liveInput?.text(action.text);
+      else if (action.type === "key") session.current.liveInput?.key(action.key);
+      return;
+    }
     void run2(async () => {
       const receipt = await call2("input", { actions: [action], frameId: frame.frameId, requestId: crypto.randomUUID() });
       clearFrame();
@@ -35847,7 +36170,7 @@ function ComputerView({ bot, actions, leaving }) {
     });
   };
   const pointer = (event, type) => {
-    if (!inputReady) return;
+    if (!inputReady || liveControl) return;
     event.preventDefault();
     const point = imagePoint(frame, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY);
     if (point) input({ type, ...point, ...type === "click" ? { button: event.type === "contextmenu" ? "right" : "left" } : { deltaY: event.deltaY > 0 ? 3 : -3 } });
@@ -35883,7 +36206,7 @@ function ComputerView({ bot, actions, leaving }) {
     "div",
     { ref: panel, className: "bt-computer", "data-tick": tick },
     (0, import_react49.createElement)("div", { className: "bt-computer-head" }, (0, import_react49.createElement)("strong", null, t("Private desktop")), (0, import_react49.createElement)("span", { className: "bt-chip" }, t(PHASE[record?.phase] ?? "Not assigned"))),
-    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Offline Linux container. Other Bot tools still run with their existing permissions.")),
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Linux container with open internet access. Other Bot tools still run with their existing permissions.")),
     (0, import_react49.createElement)(
       "label",
       { className: "bt-computer-row" },
@@ -35923,13 +36246,24 @@ function ComputerView({ bot, actions, leaving }) {
       button("Start desktop", () => manage("start"), !record || record.grant === "off" || ready || record.control === "human" || record.recoveryPending),
       button("Stop desktop", () => manage("stop"), !record || record.phase === "stopped"),
       button("Refresh", () => run2(refresh, false)),
-      streamFailed && !owned ? button("Retry live stream", () => setStreamFailed(false), !ready) : null
+      streamFailed ? button("Retry live stream", () => {
+        setStreamFailed(false);
+        setStreamProblem(null);
+      }, !ready) : null
     ),
     (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
       button(owned ? "Renew control" : "Take control", () => manage("takeover"), !ready),
-      button("Give back to Bot", () => manage("release"), !owned)
+      button("Give back to Bot", () => manage("release"), !owned),
+      owned ? button(liveControl ? "Use snapshot control" : "Use live control", () => {
+        session.current.streamReady = false;
+        session.current.liveInput = null;
+        setControlMode(liveControl ? "snapshot" : "live");
+        setStreamFailed(false);
+        setStreamProblem(null);
+        clearFrame();
+      }) : null
     ),
     (0, import_react49.createElement)("p", { className: "bt-muted", role: "status" }, owned ? t("You control this desktop. Closing the panel keeps the Bot paused.") : record?.control === "human" || record?.control === "blocked" ? t("Bot paused. Take control here, or stop the desktop to recover.") : t("Read-only preview. Take control to send input or transfer files.")),
     requests.map((item) => (0, import_react49.createElement)(
@@ -35958,9 +36292,13 @@ function ComputerView({ bot, actions, leaving }) {
       "div",
       { className: "bt-computer-screen", "data-control": inputReady || void 0 },
       (0, import_react49.createElement)(ComputerScreen, {
-        live: Boolean(ready && !owned && !streamFailed && !leaving),
+        live: Boolean(ready && (!owned || liveControl) && !streamFailed && !leaving),
         botId: bot.id,
         generation: record?.generation,
+        controlToken: liveControl ? session.current.token : void 0,
+        onControls: (controls) => {
+          session.current.liveInput = controls;
+        },
         frame,
         onPointer: pointer,
         onPresented: (data) => {
@@ -35970,21 +36308,26 @@ function ComputerView({ bot, actions, leaving }) {
         onReady: () => {
           session.current.streamReady = true;
           setPreviewBusy(false);
+          setStreamProblem(null);
+          setTick((value) => value + 1);
         },
         onLost: () => {
           session.current.streamReady = false;
+          if (session.current.mounted) setTick((value) => value + 1);
         },
-        onFallback: () => {
+        onFallback: (detail) => {
           session.current.streamReady = false;
           setStreamFailed(true);
+          setStreamProblem(detail);
         }
       })
     ),
-    (0, import_react49.createElement)("p", { className: "bt-muted" }, t(owned ? "Control uses verified snapshots. The last image stays visible while the next one loads." : streamFailed ? "Live desktop streaming is unavailable. Showing PNG snapshots instead." : "Live desktop stream (read-only).")),
+    streamFailed && streamProblem ? (0, import_react49.createElement)("p", { className: "bt-error", role: "status" }, t(streamProblem.message)) : null,
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t(owned ? liveControl ? "Live control: click the desktop to type or drag. Losing window focus pauses input." : "Control uses verified snapshots. The last image stays visible while the next one loads." : streamFailed ? "Live desktop streaming is unavailable. Showing PNG snapshots instead." : "Live desktop stream (read-only).")),
     (0, import_react49.createElement)(
       "div",
       { className: "bt-computer-row" },
-      (0, import_react49.createElement)("select", { "aria-label": t("Desktop key"), value: key, onChange: (event) => setKey(event.target.value) }, KEYS.map((value) => (0, import_react49.createElement)("option", { key: value, value }, value))),
+      (0, import_react49.createElement)("select", { "aria-label": t("Desktop key"), value: key, onChange: (event) => setKey(event.target.value) }, KEYS2.map((value) => (0, import_react49.createElement)("option", { key: value, value }, value))),
       button("Send key", () => input({ type: "key", key }), !inputReady)
     ),
     (0, import_react49.createElement)(
@@ -36100,7 +36443,10 @@ var COMPUTER_CSS = `
 .bt-computer-screen{position:relative;flex:none;border:1px solid var(--bt-line);border-radius:12px;overflow:hidden;background:var(--bt-card);min-height:120px;aspect-ratio:16 / 10;display:flex;align-items:center;justify-content:center}
 .bt-computer-screen[data-control] canvas{cursor:crosshair}
 .bt-computer-display{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.bt-computer-decoder{position:absolute;inset:0;visibility:hidden;pointer-events:none}
+.bt-computer-decoder{position:absolute;inset:0;visibility:hidden;pointer-events:none;z-index:1}
+.bt-computer-decoder[data-live]{visibility:visible}
+.bt-computer-decoder[data-live][data-interactive]{pointer-events:auto}
+.bt-computer-stream-status{z-index:2}
 .bt-computer-canvas{display:block;max-width:100%;max-height:100%;width:auto;height:auto;user-select:none}
 .bt-computer-canvas[hidden]{display:none}
 .bt-computer-stream-status{position:absolute;right:8px;bottom:8px;padding:3px 7px;border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font-size:11px}

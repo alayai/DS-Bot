@@ -73,13 +73,14 @@ try {
   }
   await manage('start')
   const diagnostics = await rt.computer.diagnostics({ botId: agent.id, expectedGeneration: record.generation })
-  assert.equal(diagnostics.network, 'offline')
+  assert.equal(diagnostics.network, 'open')
   assert.equal(diagnostics.storage.hardQuota, false)
   assert.ok(diagnostics.storage.freeBytes > 0)
   const interfaces = JSON.parse((await docker(['exec', name, 'python3', '-c', 'import json,socket;print(json.dumps([name for _,name in socket.if_nameindex()]))'])).stdout)
-  assert.deepEqual(interfaces, ['lo'])
-  console.log('PASS: storage diagnostics read the actual runtime filesystem; the guest has only loopback networking')
-  console.log('PASS: plugin starts a labelled non-root offline desktop through the Broker')
+  assert.ok(interfaces.includes('lo'))
+  assert.ok(interfaces.some(name => name !== 'lo'))
+  console.log('PASS: storage diagnostics read the actual runtime filesystem; the guest has a non-loopback interface')
+  console.log('PASS: plugin starts a labelled non-root desktop with open egress through the Broker')
   const fixture = await readFile(join(root, 'computer-runtime/test/fixture.py'), 'utf8')
   // Fixture setup is test-only. These Docker operations are never model tools.
   await docker(['exec', name, 'python3', '-c', `from pathlib import Path;Path('/tmp/fixture.py').write_text(${JSON.stringify(fixture)})`])

@@ -92,3 +92,17 @@ test('a Bot message hands work on with 转告 and takes its time with 慢慢做'
   const back = await call(url, [{ role: 'user', content: '[Reply from Coder · for the work Chief asked you for; your answer goes to Chief once everything you handed on is back]\n做完了' }], tools)
   assert.deepEqual([back.text, back.tools], ['Coder 交回了，我把结果交给 Chief。', []])
 })
+
+test('a fresh view request sharing the previous card result reaches the mock', async t => {
+  const url = await startMock(t)
+  const messages = [
+    { role: 'user', content: '视图选项' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'previous-view', name: 'show_view', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'previous-view', content: "The view is on screen; the user's answer arrives as their next message." }] },
+  ]
+  assert.match((await call(url, messages, ['show_view'])).text, /示例数据/)
+  messages.at(-1).content.push({ type: 'text', text: '\n大视图' })
+  const next = await call(url, messages, ['show_view'])
+  assert.deepEqual(next.tools.map(tool => tool.name), ['show_view'])
+  assert.doesNotMatch(next.text, /示例数据/)
+})

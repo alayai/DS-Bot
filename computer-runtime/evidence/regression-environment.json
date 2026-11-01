@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "recordedDate": "2026-11-01",
+  "node": "22.23.2",
+  "harness": "0.2.1-rc.4",
+  "dependencyComparison": {
+    "packages": 654,
+    "versionsAndIntegritiesEqual": true,
+    "sha256": "f724f9a51988dd10e96b23cde7bf98982eb150f2cbb8cb7158bec4afc931c0f1"
+  },
+  "common": {
+    "source": "same Windows-mounted checkout",
+    "data": "independent Linux temporary home",
+    "model": "local mock",
+    "steps": 52
+  },
+  "windowsMountedDependencies": {
+    "passed": 51,
+    "failed": 1,
+    "clientConnectionErrors": 1,
+    "observedFailure": {
+      "code": "ECONNRESET",
+      "clientWaitMs": 19591,
+      "overlappingServerStallMs": 19814,
+      "serverRequestStartedDuringWait": false
+    }
+  },
+  "linuxDependencies": {
+    "passed": 52,
+    "failed": 0,
+    "clientConnectionErrors": 0,
+    "maximumRecordedServerStallMs": 4234
+  },
+  "limits": [
+    "Isolates the WSL test dependency placement; does not modify DSH or HTTP behavior",
+    "Does not prove every historical reset has the same cause",
+    "Does not certify native Windows GUI behavior"
+  ]
+}

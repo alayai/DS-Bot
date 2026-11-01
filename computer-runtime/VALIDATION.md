@@ -555,3 +555,212 @@ Only the staging package version was changed; the repository version remains
 0.2.4. Packaged host files and client match the tested workspace, all runtime
 manifest hashes were checked, and noVNC source/license notices are included.
 SHA-256: `f9f6038d1099a8aae81a05b3e6de02c1927479d7cfd348960cd49498b988b594`.
+
+## 2026-11-01: streaming transport and rendering optimization
+
+The Web host now offers an optional authenticated WebSocket through DSH's public
+upgrade/admission APIs. Desktop carriers without an HTTP(S) document origin use
+Fetch directly; blocked upgrades retire the original viewer before opening a
+fresh Fetch viewer. noVNC's native canvas renders live updates without periodic
+full-frame copies. A separate poster retains pixels through disconnects.
+Reconnect attempts remain bounded across briefly successful connections, and
+both transports share sanitized, actionable failure codes. Model release, like
+normal end-turn revocation, preserves read-only observation.
+
+Final automated checks for the implementation:
+
+| Check | Result |
+|---|---|
+| Full plugin suite | **1,431 passed, 2 skipped, 0 failed** |
+| Generated client and runtime checks | Passed |
+| Plugin lint | Passed; existing warnings remain |
+| Real TigerVNC + Chromium: WebSocket | Passed; zero Fetch reads |
+| Real TigerVNC + Chromium: forced Fetch | Passed |
+| Real TigerVNC + Chromium: rejected upgrade | Passed; fresh-session Fetch fallback |
+| Actual pinned DSH WebSocket admission | Anonymous 401, owner admitted, cross-origin 403 |
+| Whole-team mock smoke | **51 passed, 1 failed**; model-selection request returned `fetch failed` |
+| Windows desktop GUI | User-run; not performed in this session |
+
+Each browser fixture verified incremental updates, retention of the same poster
+canvas, retained pixels during outage/reconnect and invalid PNG decode, and zero
+recurring `getImageData()` calls during steady live viewing. They removed their
+own temporary container, volume and browser. Unit coverage also includes the
+512 KiB receive window, invalid/out-of-order acknowledgement rejection,
+immediate peer revocation, read-only RFB rejection, terminal auth errors, bounded
+retries, exclusive transports and non-HTTP Desktop URL fallback.
+
+The generic smoke investigation found two test-fixture defects. The activity
+hint intentionally disappears for a `show_view` call, but the test treated that
+as completion before the tool finished saving. Recorded events showed the next
+large-view message queued before the preceding view's tool result and turn end.
+The smoke now also waits for `work.turns` to empty. Separately, the mock swallowed
+a fresh user request when it shared a message with the preceding `show_view`
+result; the mock now handles that text and has a regression test. No DSH patch
+or disabled assertion was introduced.
+
+A restart of the mounted Windows-filesystem bench was rejected because its
+generated test credential file appeared with mode 777. The final isolated bench
+uses a Linux temporary directory through `.dsh-test-cua-opt-final`; user DSH data
+and the running user desktop were not used.
+
+The final full smoke completed every step. Options-view persistence and reply,
+large-view history, group memory, compaction, handoff, folder changes and MCP
+attachment/detachment all passed. The model-selection transport failure remains
+unresolved, so the whole-team release gate is **not** reported as passing.
+This is the same symptom recorded at earlier checkpoints, not evidence of its
+underlying cause. No production retry or assertion bypass was added.
+Run logs: `/tmp/cua-opt-tests-final.log`, `/tmp/cua-opt-lint-final.log`,
+`/tmp/cua-opt-bot-smoke-final.log`, `/tmp/cua-opt-ws.log`,
+`/tmp/cua-opt-fetch.log`, `/tmp/cua-opt-blocked.log`.
+Both benches and all fixture processes were stopped; the two bench homes from
+this optimization run were removed after the results were recorded.
+
+Local preview: `artifacts/ds-bot-0.2.5-cua.5.tgz` (1,054,835 bytes).
+SHA-256: `dfd75169d1813ded8a9caf7e0af5734e97a0cf5b458dc1d7587006b32192133d`.
+Only the staging package version changes. The archive was independently
+extracted and checked against the generated client, host/shared modules,
+dependency declarations, runtime manifest hashes and noVNC/ws notices.
+
+Direct human VNC input is still a separate design proposal in
+`docs/plans/2026-11-01-cua-screen-stream.md`. Human control continues to use the
+visibly presented verified PNG and existing frame-bound input API. This batch
+does not claim native Windows GUI acceptance or completion of the other deferred
+main-plan release gates.
+
+## 2026-11-01: live human control
+
+Explicit takeover now enables standard noVNC keyboard/pointer input after the
+first visible frame. The authenticated open body carries the takeover token;
+Host validates the current lease/generation on every write and Broker checks
+the RFB allowlist independently. Only one interactive viewer is permitted.
+Verified snapshot control remains an explicit alternative, and model actions
+retain their existing observation-bound contract.
+
+Window blur, hidden pages and disconnects retain the last pixels and suspend
+control until manual resume. A two-second client heartbeat has a three-second
+request timeout; the route expires after six seconds without client activity,
+checked once a second. Automatic WebSocket pongs do not renew that deadline.
+Closing sends tracked key/button releases on the original VNC connection,
+drains the relay, then clears and verifies X11 input. The real guest test showed
+that XTest release alone did not clear a VNC-owned held button. Failed cleanup
+blocks reuse and marks the desktop unreconciled for stop on revocation.
+
+| Check | Result |
+|---|---|
+| Full plugin unit suite | **1,438 passed, 2 skipped, 0 failed** |
+| App runtime/config tests | **7 passed, 0 failed** |
+| Generated client and runtime checks | Passed |
+| Plugin lint | Passed with existing warnings |
+| Input cleanup Python helper | Syntax checked and executed against real guest |
+| Real WebSocket control | Passed; zero Fetch reads |
+| Real direct Fetch control | Passed |
+| Real rejected-upgrade control | Passed; fresh Fetch viewer |
+| Whole-team mock smoke | **46 passed, 6 failed** |
+| Native Windows GUI/IME | User-run; not accepted by this session |
+
+The real Chromium + TigerVNC fixture checks independent webpage click, focus,
+text and Enter markers (including Chinese text), scaled pointer coordinates,
+dragging with held modifiers, release on window blur and route disconnect,
+manual resume, replaced-token rejection and give-back. Focus is confirmed by
+the remote page before synthetic typing; local browser event dispatch alone
+does not prove the remote input has focus. The desktop menu opened during the
+observation test is dismissed before browser input. Each run removes only its
+own labelled container, volume, browser and temporary home.
+
+Unit coverage adds interactive/read-only RFB separation, fragmented events,
+tracked key/button release, lease expiry, old-provider rejection, controller
+exclusivity, snapshot/live exclusion, heartbeat expiry/renewal and asynchronous
+channel close notification compatible with noVNC.
+
+The generic mock smoke completed all 52 steps. Four `/api/bot` requests failed
+with `ECONNRESET`; two dependent group checks also failed because the preceding
+group result was absent. Initial model selection passed in this run. Sanitized
+Undici diagnostics recorded failures 18–27 seconds into the affected requests,
+so this run does not establish a simple idle-connection reuse cause. The
+underlying defect remains unresolved; no production retries, `Connection: close`
+workaround, skipped assertions or DSH patches were introduced. Its isolated
+Linux bench was stopped and removed.
+
+Run logs: `/tmp/cua-control-full.log`, `/tmp/cua-control-lint.log`,
+`/tmp/cua-control-app-tests.log`, `/tmp/cua-control-ws.log`,
+`/tmp/cua-control-fetch.log`, `/tmp/cua-control-blocked.log`,
+`/tmp/cua-control-smoke.log`, `/tmp/cua-control-http-diagnostics.jsonl`.
+The last file records only timestamps, method/path without query, socket IDs
+and error codes; no headers, credentials or response bodies.
+
+Local preview: `artifacts/ds-bot-0.2.5-cua.6.tgz` (1,057,977 bytes).
+SHA-256: `02678fe45077b5b459de5b972f044c6a04ff3319c977c82cacc27c4c2e647555`.
+Only the staged package version changes; source stays at 0.2.4. The archive was
+extracted independently and compared with 91 host/shared/office/license files,
+the generated client and the two new Broker helpers. All 22 runtime manifest
+hashes match. Broker JavaScript lint passed as well. No user container was
+stopped, replaced or removed by these fixtures.
+
+## 2026-11-01: regression environment and stream latency
+
+The unchanged Windows-mounted dependency installation reproduced the generic
+mock smoke failure: **51 passed, 1 failed**. Dual-sided HTTP diagnostics captured
+a 19,814 ms server event-loop stall overlapping the failed request's 19,591 ms
+wait. No server request-start event occurred during that wait; the socket closed
+as the stalled server resumed. This locates a failure before request handling,
+rather than evidence that the model-selection mutation itself failed.
+
+All 654 installed dependencies were reinstalled into a separate Linux directory
+from the local npm cache. Versions and archive integrity values match exactly.
+The same source checkout and full assertions then passed **all 52 steps**, with
+zero recorded client connection errors; the largest recorded server stall was
+4,234 ms. Both benches used separate Linux temporary data homes. No DSH patch,
+HTTP timeout change, `Connection: close`, mutation retry or assertion bypass was
+used. This supports the WSL test-environment remedy; it does not prove every
+historical reset has the same cause or certify native Windows behavior.
+
+The new opt-in `dev/http-diagnostics.mjs` records request/response timings, socket
+closure and long event-loop stalls. It excludes credentials, queries and bodies,
+does not add timeout listeners, releases completed-request listeners, and cannot
+change an HTTP outcome if writing its log fails. The smoke runner now reports
+which endpoint actually lost its response, the error code and elapsed time.
+Regression tests cover log filtering and listener cleanup.
+
+Final checks:
+
+| Check | Result |
+|---|---|
+| Full plugin unit suite, Linux harness | **1,440 passed, 2 skipped, 0 failed** |
+| Generated client and runtime checks | Passed |
+| Plugin lint | Passed with existing warnings |
+| Generic mock smoke, mounted dependencies | **51 passed, 1 failed** |
+| Generic mock smoke, matching Linux dependencies | **52 passed, 0 failed** |
+| Real streamed control + application pixel checks | Passed over WebSocket, Fetch and rejected-upgrade fallback |
+
+Ten clicks per transport alternate a dedicated guest button's color. The
+measurement runs from browser `mousedown` capture to the expected noVNC canvas
+pixel; a separate guest HTTP marker verifies every click. The guest browser's
+focus, Unicode input, Enter, held modifier/drag, blur/disconnect cleanup, manual
+resume and replaced-token rejection checks remain enabled.
+
+| Measurement (ms) | WebSocket | Fetch | Rejected upgrade → Fetch |
+|---|---:|---:|---:|
+| Cached guest startup | 2276 | 2314 | 2017 |
+| Page navigation to first frame | 522 | 507 | 624 |
+| Observation reconnect after service recovery | 400 | 466 | 555 |
+| Controlled stream ready | 306 | 323 | 705 |
+| Input-to-frame p50 | 44 | 76 | 62 |
+| Input-to-frame p95 | 143 | 159 | 78 |
+| Blur to independently confirmed input release | 180 | 198 | 247 |
+| Disconnect to independently confirmed input release | 193 | 188 | 174 |
+
+These are small local synthetic-page samples, not platform guarantees or model
+turn latency. Fetch and rejected-upgrade measurements overlapped the independent
+mock-team run. Nearest-rank p95 of ten samples is the largest sample.
+
+Raw samples and dependency-comparison evidence:
+`evidence/stream-performance.json`, `evidence/regression-environment.json`.
+Instructions: `docs/dev/cua-verification.md`.
+Logs: `/tmp/cua-next-tests.log`, `/tmp/cua-next-lint.log`,
+`/tmp/cua-next-smoke.log`, `/tmp/cua-local-smoke.log`,
+`/tmp/cua-next-stream-{websocket,fetch,blocked}.log`,
+`/tmp/cua-next-http-*.jsonl`, `/tmp/cua-local-http-*.jsonl`.
+Both benches were stopped; only their temporary homes and fixture resources
+were removed. The matching Linux harness remains available for future checks.
+This batch changes development/verification tooling, not the plugin payload;
+the preceding `0.2.5-cua.6` preview remains the functional test package.

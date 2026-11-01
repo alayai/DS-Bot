@@ -87,9 +87,11 @@ docker image inspect ds-bot-cua-probe:0.37.0 --format '{{.Id}}'
 
 The base image digest, wheel version and wheel SHA-256 are recorded in
 `runtime.lock.json`; pip verifies the hash through `desktop/requirements.txt`.
-The build uses the registry and Python package index. **Running desktops are
-offline** (`--network none`). They cannot browse Internet sites or sign in to
-remote services in this preview.
+The build uses the registry and Python package index. **Running desktops use
+the engine bridge** (`bridge` on Docker, `podman` on Podman) and can reach the
+internet. Egress is not filtered. Host networking stays rejected. An older
+container created with `--network none` is replaced on the next start; its
+volume is kept.
 
 The Broker requires the resulting `sha256:…` **local image ID**, not the tag or
 the base-image manifest digest. It verifies image labels, Bot/Computer labels,
@@ -279,7 +281,7 @@ or image-upgrade migration. Keep backups as private as the desktop itself.
   `computer-only` isolation of the Bot**.
 - Each Computer uses one dedicated Docker volume at `/home/cua`. Host folders,
   `DSH_HOME`, model credentials and the Docker socket are not mounted in it.
-- Containers run as UID/GID 1000, offline, without added capabilities, with
+- Containers run as UID/GID 1000, on the engine bridge network, without added capabilities, with
   `no-new-privileges`, 2 CPUs, 4 GiB RAM and total memory/swap allowance, and
   a 512 PID limit. No host ports are published.
 - A container shares the host kernel. The host-side Broker needs Docker
@@ -430,7 +432,7 @@ failure occurred with Computer disabled; its cause remains unresolved. See
     file. Delete an unused checkpoint/previous home with confirmation, then save a
     new checkpoint. Clear operation history; files and chat history should remain.
 
-Guests are offline. Login to Internet services, computer-only isolation,
+Guests can reach the internet; egress is not filtered. computer-only isolation,
 drag/key chords and a noVNC-style stream are not acceptance targets
 for this checkpoint. Missing these is expected; stale input, lost files, wrong Bot
 ownership or a frozen preview accepting input are defects.

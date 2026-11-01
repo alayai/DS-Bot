@@ -6,6 +6,7 @@ import { McpClient } from './mcp.mjs'
 import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
+import { rfbInput } from './rfb.mjs'
 import { discoverEngine, validateEngine, runEngine, engineCommand, engineEnvironment } from '../engine.mjs'
 
 const run = promisify(execFile)
@@ -78,13 +79,65 @@ function target(record) {
   value.record = { ...record }
   return value
 }
-async function inspect(value, signal) {
-  let data
-  try { data = JSON.parse((await docker(['inspect', value.name], signal)).stdout)[0] }
+function networkMode() {
+  return engine?.kind === 'podman' ? 'podman' : 'bridge'
+}
+function createArgs(value) {
+  return [
+    'create', '--name', value.name,
+    '--label', `org.ds-bot.computer.id=${value.record.id}`, '--label', `org.ds-bot.computer.owner=${value.record.botId}`,
+    '--label', 'org.ds-bot.computer.protocol=1',
+    '--init', '--user', '1000:1000', '--network', networkMode(), '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--pids-limit', '512', '--shm-size', '256m', '--restart', 'no',
+    '--log-opt', 'max-size=5m', '--log-opt', 'max-file=2',
+    '--mount', `type=volume,source=${value.volume},target=/home/cua`, imageOf(value),
+  ]
+}
+async function readContainer(value, signal) {
+  try { return JSON.parse((await docker(['inspect', value.name], signal)).stdout)[0] }
   catch (error) {
     if (/no such (object|container)/i.test(error.stderr ?? '')) return null
     fail('The container runtime could not inspect this desktop.')
   }
+}
+async function waitReady(value, signal) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    signal?.throwIfAborted()
+    try {
+      await docker(['exec', value.name, 'cua-driver', 'status', '--socket', socket], signal)
+      return
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+  }
+  fail('The desktop driver did not become ready.')
+}
+// Network mode is fixed when the container is created. Replace an older offline
+// container and keep its volume so the desktop can reach the internet.
+async function replaceOfflineContainer(value, data, signal) {
+  if (value.replacing) return value.replacing
+  value.replacing = (async () => {
+    const opened = { ...data, HostConfig: { ...data.HostConfig, NetworkMode: networkMode() } }
+    try { assertContainer(opened, value, imageOf(value)) }
+    catch (error) { fail(error.message) }
+    const running = Boolean(data.State?.Running)
+    if (running) await docker(['stop', '--time', '5', value.name], signal)
+    await docker(['rm', value.name], signal)
+    await docker(createArgs(value), signal)
+    if (running) {
+      await docker(['start', value.name], signal)
+      value.reconciled = true
+      await waitReady(value, signal)
+    }
+    return readContainer(value, signal)
+  })()
+  try { return await value.replacing }
+  finally { value.replacing = null }
+}
+async function inspect(value, signal) {
+  let data = await readContainer(value, signal)
+  if (data?.HostConfig?.NetworkMode === 'none') data = await replaceOfflineContainer(value, data, signal)
+  if (!data) return null
   try {
     assertContainer(data, value, imageOf(value))
     const volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0]
@@ -117,12 +170,14 @@ os.set_blocking(0, False)
 os.set_blocking(1, False)
 a = bytearray()
 b = bytearray()
+eof = False
 try:
  while True:
-  r, w, _ = select.select(([0] if len(a)<65536 else []) + ([s] if len(b)<65536 else []), ([s] if a else []) + ([1] if b else []), [], 30)
+  if eof and not a: break
+  r, w, _ = select.select(([0] if not eof and len(a)<65536 else []) + ([s] if len(b)<65536 else []), ([s] if a else []) + ([1] if b else []), [], 1)
   if 0 in r:
    v = os.read(0, 65536-len(a))
-   if not v: break
+   if not v: eof = True
    a.extend(v)
   if s in r:
    v = s.recv(65536-len(b))
@@ -143,23 +198,40 @@ function closeViewer(id) {
   viewers.delete(id)
   viewer.closed = true
   const child = viewer.child
-  if (child) {
-    child.stdin.end()
-    const timer = setTimeout(() => child.kill('SIGKILL'), 2000)
+  const exited = child ? new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null) { resolve(); return }
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Viewer relay did not stop.')) }, 2000)
     timer.unref()
-    child.once('close', () => clearTimeout(timer))
-  }
+    child.once('close', () => { clearTimeout(timer); resolve() })
+    child.stdin.end(viewer.interactive ? viewer.filter.release() : undefined)
+    child.stdout.resume()
+  }) : Promise.resolve()
+  if (viewer.interactive) {
+    // Preserve the cleanup promise until the next open/action/revoke observes it.
+    viewer.value.inputCleanup = Promise.all([viewer.value.inputCleanup, exited]).then(async () => {
+      const info = await inspect(viewer.value)
+      if (!info?.State.Running) return
+      const code = await readFile(new URL('./release-input.py', import.meta.url), 'utf8')
+      await docker(['exec', '--user', '1000:1000', viewer.value.name, 'python3', '-c', code])
+    }).catch(() => {
+      viewer.value.dirty = true
+      viewer.value.reconciled = false
+    })
+  } else void exited.catch(() => {})
   send({ stream: id, type: 'close' })
 }
 function closeViewers(value) {
   for (const [id, viewer] of viewers) if (viewer.value === value) closeViewer(id)
 }
-async function openViewer(value, id, signal) {
+async function openViewer(value, id, signal, interactive = false) {
+  if (typeof interactive !== 'boolean') fail('Invalid viewer mode.')
+  if (interactive && [...viewers.values()].some(viewer => viewer.value === value && viewer.interactive)) fail('A live controller is already connected.')
   if (!/^viewer-[1-9][0-9]{0,15}$/.test(id ?? '') || viewers.has(id) || viewers.size >= 16
     || [...viewers.values()].filter(viewer => viewer.value === value).length >= 4) fail('Invalid viewer identity or limit.')
-  const viewer = { value, closed: false, writing: false }
+  const viewer = { value, interactive, filter: rfbInput(interactive), closed: false, writing: false }
   viewers.set(id, viewer)
   try {
+    await value.inputCleanup
     const info = await inspect(value, signal)
     signal.throwIfAborted()
     if (viewer.closed || closing || !info?.State.Running || value.dirty) fail('Start the desktop before viewing it.')
@@ -174,7 +246,7 @@ async function openViewer(value, id, signal) {
     child.stdin.on('error', () => closeViewer(id))
     child.on('error', () => closeViewer(id))
     child.once('close', () => closeViewer(id))
-    return null
+    return { interactive }
   } catch (error) { closeViewer(id); throw error }
 }
 function viewerMessage(message) {
@@ -186,7 +258,10 @@ function viewerMessage(message) {
   if (message.type !== 'write' || !child || viewer.writing || typeof message.data !== 'string' || message.data.length > 87384
     || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(message.data)) return closeViewer(message.stream)
   viewer.writing = true
-  child.stdin.write(Buffer.from(message.data, 'base64'), error => {
+  let data
+  try { data = viewer.filter(Buffer.from(message.data, 'base64')) }
+  catch { return closeViewer(message.stream) }
+  child.stdin.write(data, error => {
     viewer.writing = false
     if (error) closeViewer(message.stream)
     else if (!viewer.closed) send({ stream: message.stream, type: 'written' })
@@ -200,6 +275,8 @@ async function revoke(value) {
   value.dirty = true
   value.abort?.abort()
   value.revoking = (async () => {
+    for (const [id, viewer] of viewers) if (viewer.value === value && viewer.interactive) closeViewer(id)
+    await value.inputCleanup
     await value.settled
     try {
       const info = await inspect(value)
@@ -268,31 +345,15 @@ async function start(value, signal) {
       try { assertVolume(volume, value); assertHomeImage(volume, record, image) } catch (error) { fail(error.message) }
     }
     if (!volume) await docker(['volume', 'create', '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.image=${image}`, value.volume], signal)
-    await docker([
-      'create', '--name', value.name,
-      '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.owner=${record.botId}`,
-      '--label', 'org.ds-bot.computer.protocol=1',
-      '--init', '--user', '1000:1000', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      '--memory', '4g', '--memory-swap', '4g', '--cpus', '2', '--pids-limit', '512', '--shm-size', '256m', '--restart', 'no',
-      '--log-opt', 'max-size=5m', '--log-opt', 'max-file=2',
-      '--mount', `type=volume,source=${value.volume},target=/home/cua`, image,
-    ], signal)
+    await docker(createArgs(value), signal)
     info = await inspect(value, signal)
   }
   if (!info.State.Running) {
     await docker(['start', value.name], signal)
     value.reconciled = true
   }
-  for (let attempt = 0; attempt < 40; attempt++) {
-    signal.throwIfAborted()
-    try {
-      await docker(['exec', value.name, 'cua-driver', 'status', '--socket', socket], signal)
-      return null
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
-  }
-  fail('The desktop driver did not become ready.')
+  await waitReady(value, signal)
+  return null
 }
 function candidateValue(value, options) {
   if (!/^[a-f0-9-]{36}$/.test(options.homeRevision ?? '') || !allowedImages.includes(options.targetImage)) fail('Invalid upgrade identity.')
@@ -322,8 +383,9 @@ async function dispatch(method, record, options, signal) {
     return { phase: value.dirty ? 'error' : info?.State.Running ? 'ready' : 'stopped', provider: 'local-container', isolation: 'container',
       image: info?.Image ?? volume?.Labels?.['org.ds-bot.computer.image'] ?? null, homeExists: Boolean(info || volume) }
   }
-  if (method === 'viewer-open') return await openViewer(value, options.stream, signal)
+  if (method === 'viewer-open') return await openViewer(value, options.stream, signal, options.interactive ?? false)
   if (method === 'revoke') { await revoke(value); return null }
+  await value.inputCleanup
   if (value.busy || value.revoking) fail('The desktop is busy.')
   if (value.dirty && method !== 'stop') fail('Desktop input must be revoked before this Computer can be reused.')
   value.busy = true
@@ -346,7 +408,7 @@ async function dispatch(method, record, options, signal) {
       if (info?.State.Running) await docker(['stop', '--time', '5', value.name], signal)
       return null
     }
-    if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: 'offline', isolation: 'container' }
+    if (method === 'diagnostics') return { storage: await storageUsage(value, { docker, image, signal }), image, network: 'open', isolation: 'container' }
     if (method === 'cleanup') {
       if (options.targetImage && options.staged) await retireCandidate(value, options, signal)
       return await cleanup(value, options, docker, signal)

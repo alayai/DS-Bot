@@ -1,5 +1,7 @@
 node_modules/
 *.tgz
+# Local plugin packages (npm pack) and their checksums.
+/artifacts/
 # The desktop app's window build (npm run build in app/), its packages (npm run pack, npm run dist)
 # and the next version that checks its update (see app/README.md). The Office runtime payload
 # (npm run runtime in app/) is downloaded per machine.

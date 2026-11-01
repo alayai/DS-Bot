@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "scope": "WSL Linux x64; real isolated Docker/TigerVNC/Chromium; cached image; synthetic offline page",
+  "measurement": "Browser mousedown capture to expected noVNC canvas pixel; independent guest HTTP marker verifies every click",
+  "quantile": "nearest-rank; p95 of 10 samples is the largest sample",
+  "limitations": [
+    "Not native Windows GUI or IME acceptance",
+    "Not a real visual-model or internet-site benchmark",
+    "Fetch and blocked runs overlapped an independent mock-team regression; these small samples are not an SLA"
+  ],
+  "runs": [
+    {
+      "schema": 1,
+      "recordedAt": "2026-11-01T03:04:52.897Z",
+      "node": "v22.23.2",
+      "platform": "linux",
+      "arch": "x64",
+      "engine": "docker",
+      "image": "sha256:e27c29a007f7a2272e12d74e0ddc0022d8e7d5b2010e6c235c74be681f980059",
+      "transport": "websocket",
+      "reads": 0,
+      "upgrades": 5,
+      "timings": {
+        "guestStartMs": 2276,
+        "firstFrameMs": 522,
+        "observerReconnectMs": 400,
+        "liveControlReadyMs": 306,
+        "inputToFrameMs": {
+          "samples": [
+            143,
+            25,
+            45,
+            45,
+            44,
+            61,
+            59,
+            43,
+            44,
+            27
+          ],
+          "min": 25,
+          "p50": 44,
+          "p95": 143,
+          "max": 143
+        },
+        "blurReleaseMs": 180,
+        "disconnectReleaseMs": 193
+      }
+    },
+    {
+      "schema": 1,
+      "recordedAt": "2026-11-01T03:07:19.768Z",
+      "node": "v22.23.2",
+      "platform": "linux",
+      "arch": "x64",
+      "engine": "docker",
+      "image": "sha256:e27c29a007f7a2272e12d74e0ddc0022d8e7d5b2010e6c235c74be681f980059",
+      "transport": "fetch",
+      "reads": 219,
+      "upgrades": 0,
+      "timings": {
+        "guestStartMs": 2314,
+        "firstFrameMs": 507,
+        "observerReconnectMs": 466,
+        "liveControlReadyMs": 323,
+        "inputToFrameMs": {
+          "samples": [
+            159,
+            77,
+            76,
+            75,
+            75,
+            77,
+            76,
+            58,
+            77,
+            61
+          ],
+          "min": 58,
+          "p50": 76,
+          "p95": 159,
+          "max": 159
+        },
+        "blurReleaseMs": 198,
+        "disconnectReleaseMs": 188
+      }
+    },
+    {
+      "schema": 1,
+      "recordedAt": "2026-11-01T03:09:27.798Z",
+      "node": "v22.23.2",
+      "platform": "linux",
+      "arch": "x64",
+      "engine": "docker",
+      "image": "sha256:e27c29a007f7a2272e12d74e0ddc0022d8e7d5b2010e6c235c74be681f980059",
+      "transport": "blocked",
+      "reads": 210,
+      "upgrades": 5,
+      "timings": {
+        "guestStartMs": 2017,
+        "firstFrameMs": 624,
+        "observerReconnectMs": 555,
+        "liveControlReadyMs": 705,
+        "inputToFrameMs": {
+          "samples": [
+            61,
+            60,
+            62,
+            63,
+            77,
+            76,
+            55,
+            78,
+            62,
+            59
+          ],
+          "min": 55,
+          "p50": 62,
+          "p95": 78,
+          "max": 78
+        },
+        "blurReleaseMs": 247,
+        "disconnectReleaseMs": 174
+      }
+    }
+  ]
+}
