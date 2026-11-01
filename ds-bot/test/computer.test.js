@@ -1620,3 +1620,29 @@ test('background restore completion publishes a verified home and can be observe
   assert.equal(state.computers[0].generation, record.generation + 1)
   assert.deepEqual(state.computers[0].previousHomes, [null])
 })
+
+test('cleanup holds a global management barrier and forwards only the persisted registry', async t => {
+  const provider = recoverable()
+  provider.maintenance = async (action, options) => ({ action, options })
+  const h = await setup(t, { provider })
+  const record = await h.bind()
+  let release, entered
+  const entering = new Promise(resolve => { entered = resolve })
+  const task = h.service.maintenance(async request => {
+    const result = await request('scan', { registry: { injected: true } })
+    assert.equal(result.options.registry.computers[record.id].id, record.id)
+    assert.equal(result.options.registry.injected, undefined)
+    entered()
+    await new Promise(resolve => { release = resolve })
+  })
+  await entering
+  await assert.rejects(h.manage('start'), fails('busy'))
+  await assert.rejects(h.bind('b'), fails('busy'))
+  await assert.rejects(h.service.maintenance(() => {}), fails('busy'))
+  const state = await h.service.state()
+  await assert.rejects(h.service.reconnect({ botId: 'a', expectedGeneration: record.generation, expectedRecovery: state.recovery.version }), fails('busy'))
+  release()
+  await task
+  await h.manage('start')
+  assert.equal((await h.service.status(h.exec())).phase, 'ready')
+})

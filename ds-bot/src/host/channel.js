@@ -559,6 +559,12 @@ export function install(rt) {
           return ok(await rt.computerSetup.prepare(body))
         case 'computer-setup-cancel':
           return ok(await rt.computerSetup.cancel(body))
+        case 'computer-image-cleanup-scan':
+          return ok(await rt.computerSetup.updates.scan())
+        case 'computer-image-cleanup-remove':
+          return ok(await rt.computerSetup.updates.remove(body))
+        case 'computer-image-cache-clear':
+          return ok(await rt.computerSetup.updates.clearCache())
         case 'computer-image-state':
           return ok(await rt.computerSetup.updates.state())
         case 'computer-image-check':

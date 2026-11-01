@@ -17559,6 +17559,30 @@ module.exports = __toCommonJS(index_exports);
 // src/client/i18n.js
 var NAMESPACE = "ds-bot";
 var ZH = {
+  "Interrupted downloads keep their progress. Check for updates again after restarting, then download to continue.": "下载中断后会保留进度。重启后请重新检查更新，再点击下载即可继续。",
+  "Cached download": "已缓存下载",
+  "Clear download cache": "清除下载缓存",
+  "Desktop storage cleanup": "桌面存储清理",
+  "Scan for unused images and orphan storage. Current desktops, saved checkpoints and rollback homes are protected.": "扫描闲置镜像和遗留存储。当前桌面、已保存备份和回退目录均受到保护。",
+  "Scan unused resources": "扫描闲置资源",
+  "No managed resources found.": "未找到托管资源。",
+  "Storage volume": "存储卷",
+  "Image is already absent; remove its saved entry.": "镜像已不存在，可移除登记记录。",
+  "Unused resource": "未引用资源",
+  "Shared image layers may remain on disk.": "共享镜像层可能仍保留在磁盘上。",
+  "Permanently delete this resource? This cannot be undone.": "永久删除此资源？此操作无法撤销。",
+  "Delete unused resource": "删除闲置资源",
+  "Default desktop image": "默认桌面镜像",
+  "Current desktop home": "当前桌面目录",
+  "Current desktop image": "当前桌面镜像",
+  "Retained home for rollback": "用于回退的保留目录",
+  "Retained image for rollback": "用于回退的保留镜像",
+  "Saved checkpoint": "已保存的备份",
+  "Saved checkpoint image": "备份所需镜像",
+  "Referenced by a container": "仍被容器引用",
+  "Referenced by desktop storage": "仍被桌面存储引用",
+  "Storage image identity is unknown": "存储对应镜像身份不明",
+  "Ownership cannot be verified for this team": "无法确认此资源属于当前团队",
   "Image task cancelled": "镜像任务已取消",
   "Checkpoint size limit (GiB)": "备份容量上限（GiB）",
   "Desktop image updates": "桌面镜像更新",
@@ -37098,6 +37122,7 @@ var PHASE = {
 function ComputerUpdates({ call: call2, changed }) {
   const [state, setState] = (0, import_react49.useState)(null);
   const [error, setError] = (0, import_react49.useState)("");
+  const [confirmation, setConfirmation] = (0, import_react49.useState)(null);
   const [pending, setPending] = (0, import_react49.useState)(false);
   const alive = (0, import_react49.useRef)(false);
   (0, import_react49.useEffect)(() => {
@@ -37126,6 +37151,7 @@ function ComputerUpdates({ call: call2, changed }) {
     if (pending) return;
     setPending(true);
     setError("");
+    setConfirmation(null);
     try {
       const value = await call2(method, args);
       if (alive.current) {
@@ -37162,12 +37188,46 @@ function ComputerUpdates({ call: call2, changed }) {
       { className: "bt-computer-row" },
       button("Check for image updates", "image-check", {}, !state?.supported || state.busy),
       candidate && !state.busy ? button("Download and verify image", "image-download", { candidateId: candidate.id }, !state.supported || !state.canDownload || job.phase === "prepared") : null,
-      state?.busy ? button("Cancel image task", "image-cancel", { jobId: job.id }, job.phase === "cancelling") : null
+      state?.imageBusy && job ? button("Cancel image task", "image-cancel", { jobId: job.id }, job.phase === "cancelling") : null
     ),
     job ? (0, import_react49.createElement)("p", { role: "status" }, t(PHASE[job.phase] ?? job.phase)) : null,
     candidate ? (0, import_react49.createElement)("p", null, `${candidate.tag} · ${candidate.image.slice(0, 23)} · ${new Date(candidate.publishedAt).toLocaleDateString()}`) : null,
     job?.error ? (0, import_react49.createElement)("p", { className: "bt-error", role: "status" }, job.error) : null,
-    job?.log ? (0, import_react49.createElement)("pre", { className: "bt-computer-log", "aria-label": t("Image download progress") }, job.log) : null
+    job?.log ? (0, import_react49.createElement)("pre", { className: "bt-computer-log", "aria-label": t("Image download progress") }, job.log) : null,
+    (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Interrupted downloads keep their progress. Check for updates again after restarting, then download to continue.")),
+    state?.cache?.bytes > 0 ? (0, import_react49.createElement)(
+      "div",
+      { className: "bt-computer-row" },
+      (0, import_react49.createElement)("span", null, `${t("Cached download")}: ${(state.cache.bytes / 1024 ** 2).toFixed(1)} MiB`),
+      button("Clear download cache", "image-cache-clear", {}, state.busy)
+    ) : null,
+    (0, import_react49.createElement)(
+      "details",
+      { className: "bt-computer-help" },
+      (0, import_react49.createElement)("summary", null, t("Desktop storage cleanup")),
+      (0, import_react49.createElement)("p", { className: "bt-muted" }, t("Scan for unused images and orphan storage. Current desktops, saved checkpoints and rollback homes are protected.")),
+      button("Scan unused resources", "image-cleanup-scan", {}, !state?.supported || state.busy),
+      state?.cleanup?.items.length === 0 ? (0, import_react49.createElement)("p", null, t("No managed resources found.")) : null,
+      ...(state?.cleanup?.items ?? []).map((item) => (0, import_react49.createElement)(
+        "div",
+        { key: `${item.kind}:${item.id}`, className: "bt-computer-help" },
+        (0, import_react49.createElement)("p", { style: { overflowWrap: "anywhere" } }, `${t(item.kind === "image" ? "Image" : "Storage volume")}: ${item.id}`),
+        (0, import_react49.createElement)("p", { className: "bt-muted" }, item.reason ? t(item.reason) : t(item.missing ? "Image is already absent; remove its saved entry." : "Unused resource")),
+        item.bytes > 0 ? (0, import_react49.createElement)("p", { className: "bt-muted" }, `${(item.bytes / 1024 ** 2).toFixed(1)} MiB · ${t("Shared image layers may remain on disk.")}`) : null,
+        item.removable ? confirmation?.id === item.id && confirmation.token === state.cleanup.token ? (0, import_react49.createElement)(
+          "div",
+          null,
+          (0, import_react49.createElement)("p", { className: "bt-error" }, t("Permanently delete this resource? This cannot be undone.")),
+          button("Confirm deletion", "image-cleanup-remove", confirmation, state.busy),
+          (0, import_react49.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => setConfirmation(null) }, t("Cancel"))
+        ) : (0, import_react49.createElement)("button", {
+          type: "button",
+          className: "bt-soft bt-soft-sm",
+          disabled: pending || state.busy,
+          onClick: () => setConfirmation({ token: state.cleanup.token, id: item.id, kind: item.kind })
+        }, t("Delete unused resource")) : null
+      ))
+    )
   );
 }
 

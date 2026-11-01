@@ -2,14 +2,51 @@ import { randomUUID } from 'node:crypto'
 import { refused } from './contract.js'
 
 export function createImageUpdates({ load, data, save, writable, payload, service, available, now = Date.now }) {
+  let cleanup = null, cache = { bytes: 0 }
   let operation, starting = false, stopping = false, candidate, startingTask
   const view = () => ({
-    supported: available(), busy: Boolean(starting || operation),
+    cleanup, cache,
+    supported: available(), busy: Boolean(starting || operation), imageBusy: Boolean(operation),
     canDownload: Boolean(candidate && candidate.id === data().imageUpdate?.candidate?.id),
     images: data().config ? [data().config.image, ...(data().config.images ?? [])] : [],
     job: data().imageUpdate ?? null,
   })
-  async function state() { await load(); return view() }
+  async function state() {
+    await load()
+    if (available()) cache = await (await payload()).downloadCacheState?.() ?? cache
+    return view()
+  }
+  async function maintain(method, args = {}) {
+    await load()
+    writable()
+    if (stopping || !available()) throw refused('unavailable', 'Cleanup requires a desktop prepared by this plugin.')
+    if (starting || operation) throw refused('busy', 'Wait for the current image or cleanup task to finish.')
+    starting = true
+    let finished
+    startingTask = new Promise(resolve => { finished = resolve })
+    try {
+      if (method === 'cache-clear') {
+        await (await payload()).clearDownloadCache()
+        cache = { bytes: 0 }
+      } else await service().maintenance(async request => {
+        if (method === 'remove') {
+          if (!cleanup || args.token !== cleanup.token) throw refused('conflict', 'Scan again before deleting.')
+          const result = await request('remove', { token: args.token, id: args.id, kind: args.kind })
+          if (result.kind === 'image') {
+            data().config.images = (data().config.images ?? []).filter(id => id !== result.removed)
+            if (data().imageUpdate?.candidate?.image === result.removed) {
+              data().imageUpdate.phase = 'available'
+            }
+            await save()
+          }
+        }
+        cleanup = await request('scan')
+      })
+      starting = false
+      return view()
+    } catch (error) { cleanup = null; throw error }
+    finally { starting = false; finished(); startingTask = undefined }
+  }
   async function update(fields) {
     data().imageUpdate = { ...data().imageUpdate, ...fields, updatedAt: now() }
     await save()
@@ -22,7 +59,7 @@ export function createImageUpdates({ load, data, save, writable, payload, servic
     if (method === 'download' && (!candidate || candidate.id !== candidateId)) throw refused('conflict', 'Check for image updates again before downloading.')
     if (!['check', 'download'].includes(method)) throw refused('invalid', 'Unknown image operation.')
     if (method === 'download' && (data().config.images?.length ?? 0) >= 4 && !view().images.includes(candidate.image)) {
-      throw refused('resource-limit', 'The four prepared image slots are full. Retain images used by previous homes; image pruning requires manual maintenance.')
+      throw refused('resource-limit', 'The four prepared image slots are full. Open Desktop storage cleanup to remove unused images.')
     }
     starting = true
     let started
@@ -96,5 +133,5 @@ export function createImageUpdates({ load, data, save, writable, payload, servic
     operation?.controller.abort()
     await operation?.done
   }
-  return { state, check: args => begin('check', args), download: args => begin('download', args), cancel, dispose }
+  return { state, get busy() { return Boolean(starting || operation) }, scan: () => maintain('scan'), remove: args => maintain('remove', args), clearCache: () => maintain('cache-clear'), check: args => begin('check', args), download: args => begin('download', args), cancel, dispose }
 }

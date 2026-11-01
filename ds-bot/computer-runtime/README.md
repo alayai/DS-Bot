@@ -288,8 +288,7 @@ progress and cancellation; closing it does not stop the task. Cancellation may
 require **Finish recovery** to discard staging storage. Two
 checkpoints and two previous restored homes are retained per desktop. At those
 limits, operations refuse rather than delete data automatically. The recovery panel
-provides explicit deletion of saved copies. Full disk quotas and discovery of
-legacy orphan volumes without a recovery intent remain unimplemented.
+provides explicit deletion of saved copies. Full disk quotas remain unavailable. The cleanup panel discovers labelled orphan volumes; only volumes whose ownership can be proven against this team are eligible for deletion.
 
 Restore checks Computer/Bot/image identity and the manifest/content hashes, builds
 a fresh volume, verifies it, removes only the stopped container, then atomically
@@ -315,7 +314,7 @@ release asset API; both routes enforce the pinned manifest and archive hashes.
 It checks the archive and local image platform, driver, protocol and user before
 saving the immutable pin. Downloading does not stop, upgrade or change the default
 image of any existing desktop. Check again after a host restart if a download was
-interrupted; storage mutations and downloads are not automatically replayed.
+interrupted; storage mutations and downloads are not automatically replayed. Retrying reuses verified cached parts and requests the remaining bytes of partial parts. If the server ignores Range, only that part restarts. Every part is hashed again before import.
 
 After verification, stop the intended desktop, select the image in **Desktop
 recovery**, choose **Upgrade desktop**, then **Confirm upgrade**. The confirmation
@@ -325,8 +324,27 @@ migrated candidate before publication. The previous home and image remain paired
 for rollback. Start explicitly after upgrading or switching back.
 
 The managed configuration retains the original image plus up to four prepared
-images across Broker/host restarts. Image pruning is manual; never remove an image
-referenced by a current or retained home. Explicit runtime profiles still manage
+images across Broker/host restarts. Open **Desktop storage cleanup** inside the
+image updates panel, then **Scan unused resources**. The panel lists image and
+volume references. Current/archived desktops, saved checkpoints, rollback homes,
+all engine containers and labelled storage protect their images. The default image
+is always retained. A labelled orphan volume is deletable only when its name,
+labels and local-volume boundary prove ownership by this team's registry.
+Unknown-team volumes remain visible and protected. Legacy storage without an image identity conservatively blocks image deletion until its provenance can be established; cleanup does not guess or rewrite its labels. Existing checkpoint/home deletion
+controls release those references before their images become eligible.
+
+Choose **Delete unused resource**, review the exact resource and **Confirm deletion**.
+The service rechecks engine identity, registry revision and resource metadata; a stale
+scan must be refreshed. Cleanup does not stop desktops or run global/forced pruning.
+Successful image deletion also frees its prepared-image slot. An interrupted delete
+is never replayed; scan again to remove an already-absent unused image entry.
+Image sizes include shared layers and do not promise equal reclaimed disk space.
+
+Downloads use one release cache under the plugin's own `computers/image-downloads`.
+Failures, cancellation and host restart retain downloaded bytes. Changing the release
+replaces that cache; successful import clears it. **Clear download cache** explicitly
+discards progress when no image/setup operation is running. A process restart requires
+a new release check before continuing an update. Explicit runtime profiles still manage
 their configured image list themselves; automatic downloads are available for
 plugin-managed setup.
 

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
 import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, quotaArguments, probeHomeQuota } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
+import { maintainStorage } from './maintenance.mjs'
 import { createTransfers } from './transfers.mjs'
 import { driverInput, driverReceipt } from './input.mjs'
 import { rfbInput } from './rfb.mjs'
@@ -14,6 +15,7 @@ const run = promisify(execFile)
 const engine = process.env.DS_BOT_COMPUTER_ENGINE ? validateEngine(JSON.parse(process.env.DS_BOT_COMPUTER_ENGINE)) : null
 const executable = engine?.executable ?? 'docker'
 const image = process.argv[2]
+const baseImage = image
 const allowedImages = process.argv[4] ? JSON.parse(process.argv[4]) : [image]
 if (!Array.isArray(allowedImages) || allowedImages.length > 5 || !allowedImages.includes(image) || allowedImages.some(id => !/^sha256:[a-f0-9]{64}$/.test(id))) throw new Error('Invalid image list.')
 const imageOf = value => value.record.runtimeImage ?? image
@@ -404,6 +406,16 @@ async function dispatch(method, record, options, signal, onProgress) {
     await validateImage(options.image, signal)
     if (!allowedImages.includes(options.image)) allowedImages.push(options.image)
     return { image: options.image }
+  }
+  if (method === 'maintenance') {
+    if (engine) await discoverEngine(engine)
+    else {
+      const id = JSON.parse((await docker(['info', '--format', '{{json .ID}}'], signal)).stdout)
+      if (createHash('sha256').update(JSON.stringify(['docker', process.env.DOCKER_HOST, id])).digest('hex') !== runtimeKey) fail('The desktop engine changed. Restore the original engine before cleanup.')
+    }
+    const result = await maintainStorage(options.action, options, { docker, signal, images: allowedImages, baseImage, runtimeKey })
+    if (result.kind === 'image') allowedImages.splice(allowedImages.indexOf(result.removed), 1)
+    return result
   }
   if (method === 'health') return { protocolVersion: 1, runtimeKey }
   const value = target(record)

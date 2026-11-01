@@ -284,3 +284,22 @@ process.on('message',m=>{
   assert.deepEqual(progress, [{ stage: 'copying', doneBytes: 20, totalBytes: 30 }])
   await assert.rejects(provider.registerImage('mutable:latest'), /immutable/)
 })
+
+test('removed image pins stay absent from the Broker allowlist after reconnect', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'dsbot-broker-cleanup-'))
+  const entrypoint = join(home, 'fixture.mjs'), next = `sha256:${'b'.repeat(64)}`
+  await writeFile(entrypoint, `
+const images=process.argv[4]?JSON.parse(process.argv[4]):[process.argv[2]];const runtimeKey='a'.repeat(64);
+process.on('message',m=>{
+ let value=m.method==='health'?{protocolVersion:1,runtimeKey}:{images};
+ if(m.method==='maintenance') {images.splice(images.indexOf(m.options.id),1);value={kind:'image',removed:m.options.id};}
+ process.send({id:m.id,ok:true,runtimeKey,value});
+});process.on('disconnect',()=>process.exit(0));
+`)
+  const provider = createBrokerProvider({ entrypoint, image, images: [next] })
+  t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
+  await provider.maintenance('remove', { id: next, kind: 'image', token: 'checked' })
+  assert.deepEqual(provider.images, [image])
+  await provider.reconnect()
+  assert.deepEqual((await provider.inspect(target.record)).images, [image])
+})

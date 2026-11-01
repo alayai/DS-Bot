@@ -18,7 +18,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
   let data = { version: 1 }
   let loaded, loadingRuntime, restoring, operation, starting, disposed = false, stopping = false, fault, environment, inspectedAt = 0
   let writing = Promise.resolve()
-  const payload = () => loadingRuntime ??= runtime().catch(error => { loadingRuntime = undefined; throw error })
+  const payload = () => loadingRuntime ??= runtime({ cacheRoot: join(directory, 'image-downloads') }).catch(error => { loadingRuntime = undefined; throw error })
   const explicit = () => rt.config.computer?.enabled === true
   const disabled = () => rt.config.computer?.enabled === false
   const pending = () => Boolean(starting || operation || (data.job && data.job.phase !== 'ready' && !explicit()))
@@ -253,6 +253,7 @@ export function createComputerSetup(rt, activate, { runtime = loadSetupRuntime, 
   }
   async function prepare({ botId, jobId, engineKind, prepareRuntime, installSystem, installConsent } = {}, automatic = false) {
     await load()
+    if (updates.busy) throw refused('busy', 'Wait for the current image or cleanup task to finish.')
     writable()
     if (stopping) throw refused('unavailable', 'Desktop setup is stopping.')
     if (explicit()) throw refused('configured', 'This profile already has an explicit desktop runtime. Use its desktop controls.')

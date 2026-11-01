@@ -130,3 +130,102 @@ test('blocked release pages fall back to the official asset API with unchanged h
     assert.deepEqual(await readdir(h.root), [])
   }
 })
+
+test('a cancelled partial download resumes with Range, verifies bytes and clears cache on success', async t => {
+  const h = await fixture(t), cacheRoot = join(h.root, 'cache')
+  let first = true
+  const controller = new AbortController(), requests = []
+  h.deps.fetcher = async (url, options) => {
+    if (url.endsWith('.json')) return new Response(h.manifest)
+    requests.push(options.headers?.Range)
+    if (first) {
+      first = false
+      return new Response(new ReadableStream({
+        async start(stream) {
+          stream.enqueue(h.bytes.subarray(0, 8))
+          await new Promise(resolve => setTimeout(resolve, 30))
+          controller.abort(Error('cancelled'))
+          stream.error(Error('cancelled'))
+        },
+      }))
+    }
+    assert.equal(options.headers.Range, 'bytes=8-')
+    return new Response(h.bytes.subarray(8), { status: 206, headers: { 'Content-Range': `bytes 8-${h.bytes.length - 1}/${h.bytes.length}` } })
+  }
+  await assert.rejects(loadImageArchive({}, h.lock, { cacheRoot, signal: controller.signal }, h.deps), /cancelled/)
+  assert.equal(h.loads.length, 0)
+  assert.deepEqual(await readFile(join(cacheRoot, 'archive/desktop-image.part-000')), h.bytes.subarray(0, 8))
+  await loadImageArchive({}, h.lock, { cacheRoot }, h.deps)
+  assert.deepEqual(requests, [undefined, 'bytes=8-'])
+  assert.deepEqual(h.loads, [h.bytes])
+  assert.deepEqual(await readdir(cacheRoot), [])
+})
+
+test('completed cached parts are rehashed, reused after engine failure, and corrupted parts are downloaded again', async t => {
+  for (const corrupt of [false, true]) {
+    const h = await fixture(t), cacheRoot = join(h.root, 'cache')
+    const task = h.deps.task
+    h.deps.task = async () => { throw Error('engine offline') }
+    await assert.rejects(loadImageArchive({}, h.lock, { cacheRoot }, h.deps), /engine offline/)
+    const path = join(cacheRoot, 'archive/desktop-image.part-000')
+    if (corrupt) await writeFile(path, Buffer.alloc(h.bytes.length))
+    let downloads = 0
+    const fetcher = h.deps.fetcher
+    h.deps.fetcher = (url, opts) => { if (!url.endsWith('.json')) downloads++; return fetcher(url, opts) }
+    h.deps.task = task
+    await loadImageArchive({}, h.lock, { cacheRoot }, h.deps)
+    assert.equal(downloads, corrupt ? 1 : 0)
+    assert.deepEqual(h.loads, [h.bytes])
+  }
+})
+
+test('ignored Range restarts one part while malformed ranges and corrupt resumed bytes never load', async t => {
+  const { prepareImageCache } = await import('../src/host/computer/image-cache.js')
+  const { mkdir } = await import('node:fs/promises')
+  for (const kind of ['ignored', 'wrong-range', 'corrupt']) {
+    const h = await fixture(t), cacheRoot = join(h.root, 'cache')
+    await mkdir(cacheRoot)
+    const cache = await prepareImageCache(cacheRoot, h.lock.publishedArchive.sha256)
+    await writeFile(join(cache, 'desktop-image.part-000'), h.bytes.subarray(0, 8))
+    h.deps.fetcher = async (url, opts) => {
+      if (url.endsWith('.json')) return new Response(h.manifest)
+      assert.equal(opts.headers.Range, 'bytes=8-')
+      if (kind === 'ignored') return new Response(h.bytes)
+      return new Response(kind === 'corrupt' ? Buffer.alloc(h.bytes.length - 8) : h.bytes.subarray(8), {
+        status: 206, headers: { 'Content-Range': `bytes ${kind === 'wrong-range' ? 9 : 8}-${h.bytes.length - 1}/${h.bytes.length}` },
+      })
+    }
+    if (kind === 'ignored') { await loadImageArchive({}, h.lock, { cacheRoot }, h.deps); assert.deepEqual(h.loads, [h.bytes]) }
+    else { await assert.rejects(loadImageArchive({}, h.lock, { cacheRoot }, h.deps), /range|checksum/); assert.equal(h.loads.length, 0) }
+  }
+})
+
+test('API fallback preserves byte ranges and a new release discards the old cache', async t => {
+  const { mkdir } = await import('node:fs/promises')
+  const { prepareImageCache, imageCacheState, clearImageCache, withImageCache } = await import('../src/host/computer/image-cache.js')
+  const h = await fixture(t), cacheRoot = join(h.root, 'cache')
+  await mkdir(cacheRoot)
+  let directory = await prepareImageCache(cacheRoot, 'old-release')
+  await writeFile(join(directory, 'desktop-image.part-000'), Buffer.from('old'))
+  directory = await prepareImageCache(cacheRoot, h.lock.publishedArchive.sha256)
+  assert.deepEqual(await readdir(directory), ['identity'])
+  await writeFile(join(directory, 'desktop-image.part-000'), h.bytes.subarray(0, 8))
+  assert.equal((await imageCacheState(cacheRoot)).bytes, 8)
+  await withImageCache(cacheRoot, async () => { await assert.rejects(clearImageCache(cacheRoot), /busy/) })
+  h.deps.fetcher = async (url, options) => {
+    if (url.startsWith('https://github.com/')) throw Error('blocked')
+    if (url.includes('/tags/')) {
+      assert.equal(options.headers.Range, undefined)
+      return Response.json({ tag_name: `cua-desktop-${'c'.repeat(40)}`, assets: [
+        { id: 1, name: 'desktop-manifest.json' }, { id: 2, name: 'desktop-image.part-000' },
+      ] })
+    }
+    if (url.endsWith('/1')) return new Response(h.manifest)
+    assert.equal(options.headers.Range, 'bytes=8-')
+    return new Response(h.bytes.subarray(8), { status: 206, headers: { 'Content-Range': `bytes 8-${h.bytes.length - 1}/${h.bytes.length}` } })
+  }
+  await loadImageArchive({}, h.lock, { cacheRoot }, h.deps)
+  assert.deepEqual(h.loads, [h.bytes])
+  await clearImageCache(cacheRoot)
+  assert.equal((await imageCacheState(cacheRoot)).bytes, 0)
+})

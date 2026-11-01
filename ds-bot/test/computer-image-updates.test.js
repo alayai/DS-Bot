@@ -141,3 +141,32 @@ test('a failed new check invalidates the previous selection; incompatible images
   await assert.rejects(h.manager.download({ candidateId: 'checked' }), /again/)
   assert.equal((await h.manager.state()).canDownload, false)
 })
+
+test('cleanup removes configuration pins only after a confirmed deletion and refuses concurrent downloads', async t => {
+  const data = { config: { image, images: [next], engine: {} } }, calls = []
+  let release
+  const inventory = { token: 'verified-scan', items: [{ kind: 'image', id: next, removable: true }] }
+  const manager = createImageUpdates({ load: async () => {}, data: () => data, writable: () => {},
+    save: async () => { calls.push('save'); assert.deepEqual(data.config.images, []) }, available: () => true,
+    payload: async () => ({ downloadCacheState: async () => ({ bytes: 8 }), clearDownloadCache: async () => {} }),
+    service: () => ({ maintenance: work => work(async action => {
+      if (action === 'scan') return inventory
+      calls.push('remove')
+      assert.deepEqual(data.config.images, [next])
+      await new Promise(resolve => { release = resolve })
+      return { kind: 'image', removed: next }
+    }) }),
+  })
+  t.after(() => manager.dispose())
+  await assert.rejects(manager.remove({ token: 'old', kind: 'image', id: next }), /Scan again/)
+  await manager.scan()
+  const removing = manager.remove({ token: inventory.token, kind: 'image', id: next })
+  await until(() => release)
+  await assert.rejects(manager.check(), /already running/)
+  await assert.rejects(manager.clearCache(), /finish/)
+  release()
+  await removing
+  assert.deepEqual(calls, ['remove', 'save'])
+  assert.deepEqual(data.config.images, [])
+  assert.equal((await manager.state()).cache.bytes, 8)
+})

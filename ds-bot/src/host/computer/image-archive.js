@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, open, rm, statfs } from 'node:fs/promises'
+import { mkdtemp, open, rm, stat, statfs, lstat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { imageDownload } from './image-download.js'
+import { downloadPart, prepareImageCache, withImageCache } from './image-cache.js'
 
 const MAX_ARCHIVE = 8 * 1024 ** 3
 const MAX_PART = 256 * 1024 ** 2
@@ -54,35 +55,61 @@ export async function loadImageArchive(engine, lock, options = {}, {
   const pieces = []
   await receive(source.url, 65536, { signal, fetcher, consume: chunk => pieces.push(Buffer.from(chunk)) })
   const manifest = archiveManifest(Buffer.concat(pieces), source, lock)
-  const space = await capacity(temporaryRoot)
-  if (space.bavail * space.bsize < manifest.bytes + 512 * 1024 ** 2) throw new Error('Free temporary disk space before downloading the desktop image.')
-  const directory = await mkdtemp(join(temporaryRoot, 'dsbot-image-'))
-  try {
-    const path = join(directory, 'desktop-image.tar.gz')
-    const file = await open(path, 'wx', 0o600)
-    let total = 0
-    let reported = 0
+  const run = async () => {
+    const directory = await mkdtemp(join(temporaryRoot, 'dsbot-image-'))
     try {
+      const cache = options.cacheRoot ? await prepareImageCache(options.cacheRoot, source.sha256) : directory
+      let remaining = manifest.bytes
+      for (const part of manifest.parts) {
+        try {
+          const info = await lstat(join(cache, part.name))
+          if (info.isFile() && info.size <= part.bytes) remaining -= info.size
+        } catch (error) { if (error.code !== 'ENOENT') throw error }
+      }
+      const space = await capacity(temporaryRoot), cacheSpace = await capacity(cache)
+      const sameDisk = (await stat(temporaryRoot)).dev === (await stat(cache)).dev
+      const reserve = 512 * 1024 ** 2
+      if (space.bavail * space.bsize < manifest.bytes + (sameDisk ? remaining : 0) + reserve
+        || cacheSpace.bavail * cacheSpace.bsize < remaining + reserve) throw new Error('Free temporary disk space before downloading the desktop image.')
+      const path = join(directory, 'desktop-image.tar.gz')
+      let total = 0, reported = 0
       for (const part of manifest.parts) {
         signal.throwIfAborted()
-        const hash = createHash('sha256')
         options.log?.(`Downloading desktop image: ${total} / ${manifest.bytes} bytes\n`)
-        const length = await receive(new URL(part.name, source.url).href, part.bytes, { signal, fetcher, consume: async chunk => {
-          hash.update(chunk)
-          await file.writeFile(chunk)
-          total += chunk.length
-          if (total - reported >= 16 * 1024 ** 2) {
-            options.log?.(`Downloading desktop image: ${total} / ${manifest.bytes} bytes\n`)
-            reported = total
-          }
-        } })
-        if (length !== part.bytes || hash.digest('hex') !== part.sha256) throw new Error('Desktop image part checksum mismatch. No image was loaded.')
+        await downloadPart(join(cache, part.name), part, new URL(part.name, source.url).href, {
+          fetcher, signal, progress: (bytes, reused) => {
+            if (reused || total + bytes - reported >= 16 * 1024 ** 2) {
+              options.log?.(`${reused ? 'Resuming' : 'Downloading'} desktop image: ${total + bytes} / ${manifest.bytes} bytes\n`)
+              reported = total + bytes
+            }
+          },
+        })
+        total += part.bytes
       }
-      await file.sync()
-    } finally { await file.close() }
-    signal.throwIfAborted()
-    options.log?.(`Verified ${total} bytes. Loading the tested desktop image into the selected engine.\n`)
-    await task(engine, ['load', '--input', path], { ...options, signal })
-    return lock.publishedImageId
-  } finally { await rm(directory, { recursive: true, force: true }) }
+      const file = await open(path, 'wx', 0o600)
+      try {
+        for (const part of manifest.parts) {
+          const input = await open(join(cache, part.name), 'r')
+          const hash = createHash('sha256')
+          let length = 0
+          try {
+            for await (const chunk of input.createReadStream({ autoClose: false })) {
+              signal.throwIfAborted()
+              hash.update(chunk)
+              length += chunk.length
+              await file.writeFile(chunk)
+            }
+          } finally { await input.close() }
+          if (length !== part.bytes || hash.digest('hex') !== part.sha256) throw new Error('Cached desktop image checksum mismatch. No image was loaded.')
+        }
+        await file.sync()
+      } finally { await file.close() }
+      signal.throwIfAborted()
+      options.log?.(`Verified ${total} bytes. Loading the tested desktop image into the selected engine.\n`)
+      await task(engine, ['load', '--input', path], { ...options, signal })
+      if (options.cacheRoot) await rm(cache, { recursive: true, force: true })
+      return lock.publishedImageId
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  }
+  return options.cacheRoot ? withImageCache(options.cacheRoot, run) : run()
 }

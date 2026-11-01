@@ -43,7 +43,7 @@ export function imageDownload(fetcher) {
     if (assets.length !== 1 || !Number.isSafeInteger(assets[0].id) || assets[0].id < 1) throw new Error('The desktop release asset is missing.')
     preferApi = true
     return fetcher(`${api}/releases/assets/${assets[0].id}`, {
-      ...options, headers: { ...headers, Accept: 'application/octet-stream' },
+      ...options, headers: { ...headers, ...options.headers, Accept: 'application/octet-stream' },
     })
   }
 }

@@ -5,9 +5,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyComputerRuntime } from './runtime-bundle.js'
 import { windowsSystemStatus, installWindowsComponent, openWindowsEngine } from './windows-install.js'
 import { findImageRelease } from './image-releases.js'
+import { clearImageCache, imageCacheState } from './image-cache.js'
 import { archiveSource, loadImageArchive } from './image-archive.js'
 
-export async function loadSetupRuntime() {
+export async function loadSetupRuntime({ cacheRoot } = {}) {
   // Container CLIs cannot read Electron's virtual ASAR filesystem.
   const directory = fileURLToPath(new URL('../../../computer-runtime/', import.meta.url)).replace(/\.asar([/\\])/g, '.asar.unpacked$1')
   verifyComputerRuntime(directory)
@@ -26,9 +27,11 @@ export async function loadSetupRuntime() {
   })
   return {
     recipe,
+    clearDownloadCache: () => cacheRoot ? clearImageCache(cacheRoot) : Promise.resolve(),
+    downloadCacheState: () => cacheRoot ? imageCacheState(cacheRoot) : Promise.resolve({ bytes: 0 }),
     findRelease: options => findImageRelease(lock, options),
     async prepareRelease(engine, candidate, options) {
-      await loadImageArchive(engine, candidate.lock, options, { task: runEngineTask })
+      await loadImageArchive(engine, candidate.lock, { ...options, cacheRoot }, { task: runEngineTask })
       await check(engine, candidate.image)
       return candidate.image
     },
@@ -47,7 +50,7 @@ export async function loadSetupRuntime() {
     },
     async prepare(engine, options) {
       if (published) await runEngineTask(engine, ['pull', published], options)
-      else if (archive) await loadImageArchive(engine, lock, options, { task: runEngineTask })
+      else if (archive) await loadImageArchive(engine, lock, { ...options, cacheRoot }, { task: runEngineTask })
       else await buildDesktop(engine, join(directory, 'desktop'), tag, options)
       return this.image(engine)
     },

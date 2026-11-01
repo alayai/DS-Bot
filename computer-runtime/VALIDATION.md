@@ -1083,3 +1083,38 @@ SHA-256: `240af44566a5f28409009d1f2143d85396ae5414e69758c3b02cea8163e5a196`.
 Independent extraction verified all 24 runtime files, the installed setup loader,
 new update/storage modules and exact client bytes. Only the staged package version
 is 0.2.5-cua.14; source remains 0.2.4. Packaging log: `/tmp/cua14-package.log`.
+
+## cua.15 — reference-aware cleanup and resumable downloads
+
+- Unit coverage: desktop/default/rollback/checkpoint/container/volume references,
+  unknown ownership and image provenance, stale engine/registry/resource confirmation,
+  deletion failure, missing unused pins after interruption, manager exclusion,
+  persisted allowlist removal and Broker reconnect.
+- Download coverage: cancelled partial Range continuation, complete-part rehash/reuse,
+  checksum corruption, ignored/invalid Range, official asset API Range propagation,
+  release replacement and cache clearing/exclusion. Existing archive validation remains.
+- `dev/computer-cleanup-smoke.mjs`: real React panel, host manager, native Broker and
+  Docker. Creates its own test desktop/image/orphan; explicit confirmation deletes
+  only the test orphan and preserves a marker inside the still-running desktop.
+  This engine contains pre-existing foreign legacy storage with no image label, so
+  image deletion correctly remained blocked. Real engine image deletion in an engine
+  without that ambiguity is not claimed by this run; deletion/slot persistence and
+  reconnect behavior are covered by unit and Broker IPC tests.
+- `dev/computer-download-smoke.mjs`: real loopback HTTP transfer and Docker load.
+  Interruption retained 131072 bytes; retry sent Range from that offset, verified the
+  complete archive and restored the exact image ID. Cache was removed after import.
+  The isolated small test image tests transport/import only, not guest compatibility.
+- Public release download and Windows native GUI are not retested by these fixtures.
+  No user desktop, legacy volume or engine configuration was modified. Both scripts
+  clean their own images, containers, volumes, temporary teams and servers.
+- Logs for this local run: `/tmp/cua15-final-check.log`, `/tmp/cua15-broker-test.log`,
+  `/tmp/cua15-cleanup-smoke.log`, `/tmp/cua15-download-smoke.log`,
+  `/tmp/cua15b-mock-smoke.log`, `/tmp/cua15-app-test.log`.
+  The earlier `cua15-mock-smoke.log` run used an occupied mock port and was stopped;
+  the isolated rerun on free ports 3315/8815 passed all 52 steps and was stopped.
+- Final verification: 1524 unit tests passed, 2 skipped, 0 failed; client/runtime
+  generation checks and lint passed (existing warnings). App runtime/patch tests
+  passed 7/7; isolated mock DSH smoke passed 52/52. The unpacked `0.2.5-cua.15`
+  plugin verifies all 25 runtime files and loads the installed setup/cache modules.
+  Artifact: `artifacts/ds-bot-0.2.5-cua.15.tgz`, 1,108,363 bytes,
+  SHA-256 `ed57099038e8200770da12fc49d047c8b08b6516560b65602fe5a231fdaaefaa`.

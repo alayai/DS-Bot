@@ -37,6 +37,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     maxRunning: rt.config.computer?.maxRunning ?? DEFAULT_RESOURCE_LIMITS.maxRunning,
     idleStopMs: rt.config.computer?.idleStopMs ?? DEFAULT_RESOURCE_LIMITS.idleStopMs })
   const measurements = new Map()
+  let maintenanceBusy = false
   let sampling
   let closed = false
   let initializing
@@ -45,6 +46,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   let recoveryAbort
   const recoverySupported = provider.recoverySupported === true && typeof provider.reconnect === 'function'
   function operational() {
+    if (maintenanceBusy) throw refused('busy', 'Desktop storage cleanup is running.')
     if (['running', 'failed'].includes(recovery.status)) throw refused('recovery-required', 'Recover the desktop service before continuing.')
   }
   function writable() {
@@ -217,6 +219,19 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
   const storageManager = createComputerStorage({ store, provider, ready, assigned, administration, barrier, exclusive, controls, clock, state, reserveRuntime, limits })
   const storage = storageManager.run
   const storageJobs = createStorageJobs({ ready, assigned, run: storage, now: clock })
+  async function maintenance(work) {
+    await ready()
+    if (!provider.maintenance) throw refused('unavailable', 'Restart with the updated desktop runtime before cleanup.')
+    if (active.size || managing.size) throw refused('busy', 'Wait for desktop operations to finish before cleanup.')
+    maintenanceBusy = true
+    try {
+      const { revision, computers, checkpoints = {}, lifecycle = {} } = await store.load()
+      if (Object.keys(lifecycle).length) throw refused('recovery-required', 'Finish desktop storage recovery before cleanup.')
+      return await work((action, options = {}) => provider.maintenance(action, {
+        ...options, registry: { revision, computers, checkpoints, lifecycle },
+      }))
+    } finally { maintenanceBusy = false }
+  }
   async function registerImage(image) {
     await ready()
     if (!provider.registerImage) throw refused('unavailable', 'This desktop service cannot register images. Restart with the updated plugin.')
@@ -315,7 +330,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (!rt.botOf(args.botId) || !record) throw refused('owner-denied', 'Choose an assigned desktop.')
     if (record.generation !== args.expectedGeneration) throw refused('stale-generation', 'The desktop binding changed. Refresh before recovering.')
     if (args.expectedRecovery !== recovery.version) throw refused('conflict', 'Desktop service recovery changed. Refresh before confirming.')
-    if (recovery.status === 'running' || managing.size) throw refused('busy', 'A desktop management operation is still running.')
+    if (maintenanceBusy || recovery.status === 'running' || managing.size) throw refused('busy', 'A desktop management operation is still running.')
     const records = Object.values(stored.computers)
     const operations = [...active.values()]
     recovery = { version: randomUUID(), status: 'running', stage: 'settling', completed: 0, total: records.length }
@@ -968,5 +983,5 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await provider.dispose?.()
     }
   }
-  return { state, storageStart: storageJobs.start, storageCancel: storageJobs.cancel, registerImage, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
+  return { state, storageStart: storageJobs.start, storageCancel: storageJobs.cancel, maintenance, registerImage, diagnostics, setResourceLimits, sampleResources, reconnect, bind, status, observe, act, release, manage, preview, openViewer, humanAct, files, modelFiles, handoffs, archive, endTurn, storage, reapIdle, dispose }
 }
