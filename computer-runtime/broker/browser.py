@@ -1,6 +1,5 @@
 """Bounded JSON-lines facade for the visible guest Firefox; no caller scripts."""
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess

@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -13,6 +14,20 @@ p = module('portable'); proxy = module('proxy')
 IMAGE = 'sha256:' + 'a' * 64
 
 class PortableTests(unittest.TestCase):
+    def test_export_refuses_unreadable_directories_instead_of_omitting_their_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private = root / 'private'; private.mkdir()
+            (private / 'important').write_bytes(b'must be backed up')
+            scandir = p.os.scandir
+            def checked(path):
+                if Path(path) == private: raise PermissionError('Unreadable backup directory')
+                return scandir(path)
+            output = io.BytesIO()
+            with patch.object(p.os, 'scandir', side_effect=checked):
+                with self.assertRaises(PermissionError): p.export_home(root, output, IMAGE, 1000)
+            self.assertEqual(output.getvalue(), b'')
+
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'in'; root.mkdir(); target = Path(tmp) / 'out'; target.mkdir()

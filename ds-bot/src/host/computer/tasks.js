@@ -93,6 +93,14 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
     if (live?.info?.exchangeId === item.attempt && (item.turnId === undefined || live.turn === item.turnId)) await agent.cancel({ kind: 'user' })
     await rt.ctx.sessions.flush(agent.session)
   }
+  async function stopAttempt(item, record) {
+    // Taking control already revokes Bot input. Task cleanup must preserve the user's ticket.
+    const human = controls.get(record.id) === 'human'
+    if (!human) await barrier(record)
+    await stopDelivery(item)
+    // Cancellation can settle after a concurrent takeover has granted a new ticket.
+    if (!human && controls.get(record.id) === 'blocked') controls.set(record.id, 'none')
+  }
   async function command(method, args) {
     await initialize()
     await administration(args.botId, async () => {
@@ -118,7 +126,7 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
       if (!item || item.botId !== record.botId || item.computerId !== record.id) throw refused('invalid', 'Unknown desktop task.')
       if (method === 'remove') {
         if (!DONE.includes(item.status)) throw refused('invalid', 'Only finished tasks can be removed.')
-        // Keep a tombstone for any old delivery id in the conversation: the prefix guard rejects it.
+        // The prefix guard rejects old delivery ids even after their records are removed.
         await store.update(draft => { delete draft.tasks[item.id] }); return
       }
       if (method === 'resume') {
@@ -142,9 +150,7 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
         current.waitReason = method === 'pause' ? 'Paused by the user.' : 'Cancelled by the user.'
       })
       if (item.attempt) {
-        await barrier(record)
-        await stopDelivery(item)
-        controls.set(record.id, 'none')
+        await stopAttempt(item, record)
       }
     })
     return list(args.botId)
@@ -173,7 +179,7 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
             if (!current || !['sending', 'running'].includes(current.status) || current.attempt !== item.attempt) return false
             current.status = 'paused'; current.waitReason = reason; current.endedAt = now(); return true
           })
-          if (changed) { await barrier(await assigned(item.botId)); await stopDelivery(item); controls.set(item.computerId, 'none') }
+          if (changed) await stopAttempt(item, await assigned(item.botId))
         })
       }
       for (const botId of new Set(all().filter(item => item.status === 'queued').map(item => item.botId))) {
@@ -270,7 +276,7 @@ export function createDesktopTasks(rt, { store, ready, assigned, owner, administ
       })
       if (!changed) continue
       const record = await assigned(item.botId)
-      await barrier(record); await stopDelivery(item); controls.set(record.id, 'none')
+      await stopAttempt(item, record)
     }
   }
   async function interrupt(sessionId) {

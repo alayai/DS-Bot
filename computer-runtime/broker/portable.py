@@ -21,7 +21,9 @@ def digest(path):
 
 def entries(root, limit):
     result, total = [], 0
-    for directory, folders, files in os.walk(root, followlinks=False):
+    def unreadable(error):
+        raise error
+    for directory, folders, files in os.walk(root, followlinks=False, onerror=unreadable):
         for name in sorted(folders + files):
             path = Path(directory) / name
             info = path.lstat()

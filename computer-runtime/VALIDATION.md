@@ -1234,3 +1234,21 @@ SHA-256: `8b68206116b19f3f147190519a8adc5a621de7c315ca8fc99a8b65a5e9207e52`.
 Independent extraction verified all **32** runtime files, the installed setup
 loader, new host/browser modules and generated client bytes. Source version
 remains 0.2.4; only the staged artifact is 0.2.5-cua.18.
+
+## 2026-11-02 code review
+
+- Fixed silent omission of unreadable home directories during portable export.
+  A Linux UID 65534 fixture reproduced success with a missing file before the
+  fix; the fixed exporter refuses the unreadable directory before writing data.
+- Human takeover now interrupts the current desktop task. Task pause, cancel,
+  timeout and interruption preserve existing human control, including a takeover
+  granted while cancellation of the Bot turn is still pending.
+- Final plugin tests: **1561 passed, 2 skipped, 0 failed**. Python boundary tests:
+  **26/26**. App runtime packaging tests: **5/5**. Build, generated checks and
+  lint passed; 45 existing lint warnings remain.
+- Final-source isolated mock Host smoke: **52/52**. Both review benches were
+  stopped, their temporary team data removed and all four test ports closed.
+  Real Firefox, Docker/Podman and Windows Electron GUI acceptance were not rerun.
+
+Scope, reproductions, cleanup and verification:
+[code review record](../docs/plans/2026-11-02-cua-code-review.md).

@@ -338,6 +338,57 @@ test('unfinished receipts become unknown after a host restart', async t => {
   assert.equal((await second.act(args, h.exec())).outcome, 'unknown')
 })
 
+test('human takeover interrupts the desktop task and task cancellation preserves its control token', async t => {
+  const h = await setup(t), record = await h.start()
+  const agent = h.exec().agent
+  let cancelled = 0
+  agent.inbox = { nextTurn: [], nextStep: [] }
+  agent.cancel = async () => { cancelled++ }
+  h.rt.chatOf = () => 'a'
+  h.rt.resolveAgent = async () => agent
+  h.rt.ctx.sessions = { flush: async () => {} }
+  h.rt.deliver = async () => {}
+  h.rt.live.clear()
+  const [item] = await h.service.tasks.command('add', { botId: 'a', expectedGeneration: record.generation, goal: 'Inspect the page' })
+  await h.service.tasks.tick()
+  const [sending] = await h.service.tasks.list('a')
+  h.rt.live.set('a', { turn: 2, info: { exchangeId: sending.attempt } })
+  await h.service.tasks.enter(agent)
+  const { controlToken } = await h.manage('takeover')
+  assert.equal((await h.service.tasks.list('a'))[0].status, 'interrupted')
+  assert.equal(cancelled, 1)
+  await h.service.tasks.command('cancel', { botId: 'a', expectedGeneration: record.generation, id: item.id })
+  await h.service.preview({ botId: 'a', expectedGeneration: record.generation, controlToken })
+  assert.equal((await h.service.state()).computers.find(item => item.botId === 'a').control, 'human')
+})
+
+test('late task cancellation cannot clear control granted during its pending cancellation', async t => {
+  const h = await setup(t), record = await h.start(), agent = h.exec().agent
+  let release, entered
+  const gate = new Promise(resolve => { release = resolve })
+  const cancelling = new Promise(resolve => { entered = resolve })
+  agent.inbox = { nextTurn: [], nextStep: [] }
+  agent.cancel = async () => { entered(); await gate }
+  h.rt.chatOf = () => 'a'
+  h.rt.resolveAgent = async () => agent
+  h.rt.ctx.sessions = { flush: async () => {} }
+  h.rt.deliver = async () => {}
+  h.rt.live.clear()
+  await h.service.tasks.command('add', { botId: 'a', expectedGeneration: record.generation, goal: 'Inspect' })
+  await h.service.tasks.tick()
+  const [item] = await h.service.tasks.list('a')
+  h.rt.live.set('a', { turn: 2, info: { exchangeId: item.attempt } })
+  await h.service.tasks.enter(agent)
+  const pending = h.service.tasks.interrupt('a')
+  try {
+    await cancelling
+    const { controlToken } = await h.manage('takeover')
+    release(); await pending
+    await h.service.preview({ botId: 'a', expectedGeneration: record.generation, controlToken })
+    assert.equal((await h.service.state()).computers.find(item => item.botId === 'a').control, 'human')
+  } finally { release(); await pending }
+})
+
 test('human takeover stops observation, rejects input and invalidates old coordinates', async t => {
   const h = await setup(t)
   await h.start()

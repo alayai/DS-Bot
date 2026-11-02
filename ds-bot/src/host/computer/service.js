@@ -687,6 +687,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (method === 'takeover') {
       if ((await store.load()).lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before taking control.')
       if (record.grant === 'off') throw refused('off', 'Enable this desktop first.')
+      await tasks.interruptComputer(record.id)
       await store.update(draft => { draft.computers[record.id].humanPaused = true })
       await barrier(record, 'taking-over')
       ticket = { token: randomUUID(), expires: clock() + humanTtl, frame: null }

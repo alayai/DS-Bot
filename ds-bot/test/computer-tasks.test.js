@@ -22,7 +22,7 @@ async function fixture(t) {
   let tasks = createDesktopTasks(rt, deps)
   const command = (method, args = {}) => tasks.command(method, { botId: 'a', expectedGeneration: 1, ...args })
   const start = async () => { await command('add', { goal: 'Inspect the desktop and report evidence.' }); await tasks.tick(); const item = (await tasks.list('a'))[0]; rt.live.set('chat', { turn: 1, info: { exchangeId: item.attempt } }); await tasks.enter(agent); return item }
-  return { get store() { return store }, rt, agent, sent, removed, cancelled, command, start, get tasks() { return tasks }, barriers: () => barriers,
+  return { get store() { return store }, rt, agent, sent, removed, cancelled, controls, command, start, get tasks() { return tasks }, barriers: () => barriers,
     now: () => now, advance: ms => { now += ms },
     reload: () => { tasks.dispose(); store = createComputerStore(path, { writable() {} }); tasks = createDesktopTasks(rt, { ...deps, store }); return tasks } }
 }
@@ -224,4 +224,17 @@ test('queue reports blockers and corrupt optional task records are rejected', as
   assert.equal((await h.tasks.list('a'))[0].queueReason, 'bot-busy')
   await assert.rejects(h.store.update(draft => { draft.tasks[item.id].history = [null] }), /Invalid desktop task/)
   await assert.rejects(h.store.update(draft => { draft.tasks[item.id].resumeOnce = 'yes' }), /Invalid desktop task/)
+})
+
+test('task cancellation and watchdog cleanup preserve existing human control', async t => {
+  for (const method of ['pause', 'cancel', 'timeout', 'interrupt']) {
+    const h = await fixture(t), item = await h.start(), before = h.barriers()
+    h.controls.set('cmp_test', 'human')
+    if (method === 'timeout') { h.advance(600000); await h.tasks.tick() }
+    else if (method === 'interrupt') await h.tasks.interruptComputer('cmp_test')
+    else await h.command(method, { id: item.id })
+    assert.equal(h.controls.get('cmp_test'), 'human', method)
+    assert.equal(h.barriers(), before, 'takeover already revoked automatic input')
+    assert.equal(h.cancelled.length, 1, 'the matching Bot turn must still be cancelled')
+  }
 })
