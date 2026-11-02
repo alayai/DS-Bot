@@ -1,7 +1,7 @@
 import { checkpointTask } from './checkpoint-task.mjs'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { assertVolume, assertHomeImage, quotaArguments } from './boundary.mjs'
+import { assertVolume, assertHomeImage, missingVolume, quotaArguments } from './boundary.mjs'
 import { engineCommand, engineEnvironment } from '../engine.mjs'
 
 export const homeVolume = record => `dsbot-${record.id}-home${record.homeRevision ? `-${record.homeRevision}` : ''}`
@@ -25,7 +25,7 @@ export async function checkpoint(method, value, options, { docker, image, signal
     await docker(['volume', 'inspect', destination], signal)
     throw Object.assign(new Error('The staging volume already exists.'), { exists: true })
   } catch (error) {
-    if (error.exists || !/no such volume/i.test(error.stderr ?? '')) throw error
+    if (error.exists || !missingVolume(error)) throw error
   }
   const helper = `dsbot-checkpoint-${randomUUID()}`
   let created = false
@@ -61,7 +61,7 @@ export async function checkpoint(method, value, options, { docker, image, signal
 export async function ownedVolume(name, value, docker, signal, { missing = false } = {}) {
   let data
   try { data = JSON.parse((await docker(['volume', 'inspect', name], signal)).stdout)[0] }
-  catch (error) { if (missing && /no such volume/i.test(error.stderr ?? '')) return null; throw error }
+  catch (error) { if (missing && missingVolume(error)) return null; throw error }
   assertVolume(data, { ...value, volume: name })
   if ((await docker(['ps', '-aq', '--filter', `volume=${name}`], signal)).stdout.trim()) throw new Error('A container still references this volume.')
   return data

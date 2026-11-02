@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { McpClient } from '../../computer-runtime/broker/mcp.mjs'
-import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage } from '../../computer-runtime/broker/boundary.mjs'
+import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, missingVolume } from '../../computer-runtime/broker/boundary.mjs'
 import { driverInput, driverReceipt } from '../../computer-runtime/broker/input.mjs'
 import { createBrokerProvider } from '../src/host/computer/providers/broker.js'
 
@@ -50,6 +50,16 @@ test('Broker refuses changed ownership, resource limits, host access and runtime
     change(value)
     assert.throws(() => assertContainer(value, target, image))
   }
+})
+
+test('Docker Desktop missing-volume wording is absence, not an unknown input failure', () => {
+  const desktop = { code: 1, stderr: 'Error response from daemon: volume dsbot-cmp_fixture-home not found\n', stdout: '[]\n' }
+  assert.equal(missingVolume(desktop), true)
+  assert.equal(missingVolume({ stderr: 'Error: No such volume: dsbot-home\n' }), true)
+  assert.equal(missingVolume({ message: 'Command failed: docker volume inspect x\nError: no volume with name "x" found: no such volume' }), true)
+  assert.equal(missingVolume({ stderr: Buffer.from('volume dsbot-quota-probe-1 not found\n') }), true)
+  assert.equal(missingVolume({ stderr: 'Error: volume driver not found\n' }), false)
+  assert.equal(missingVolume({ stderr: 'error during connect: daemon is not running\n', code: 1 }), false)
 })
 
 test('named volumes cannot hide bind, network or unowned storage', () => {

@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
 import { McpClient } from './mcp.mjs'
-import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, quotaArguments, probeHomeQuota } from './boundary.mjs'
+import { assertContainer, assertLocalEndpoint, assertVolume, assertHomeImage, missingVolume, quotaArguments, probeHomeQuota } from './boundary.mjs'
 import { checkpoint, cleanup, homeVolume, ownedVolume, storageUsage } from './checkpoint.mjs'
 import { portableHome } from './portable.mjs'
 import { prepareNetwork, verifyNetwork, removeNetwork, stopNetwork, proxyEnvironment, browserBootstrap } from './network.mjs'
@@ -387,7 +387,7 @@ async function start(value, signal) {
   if (!info) {
     let volume
     try { volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0] }
-    catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+    catch (error) { if (!missingVolume(error)) throw error }
     if (volume) {
       try { assertVolume(volume, value); assertHomeImage(volume, record, image) } catch (error) { fail(error.message) }
     }
@@ -456,7 +456,7 @@ async function dispatch(method, record, options, signal, onProgress) {
     let volume
     if (!info) {
       try { volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0] }
-      catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+      catch (error) { if (!missingVolume(error)) throw error }
       if (volume) assertVolume(volume, value)
     }
     return { phase: value.dirty ? 'error' : info?.State.Running ? 'ready' : 'stopped', provider: 'local-container', isolation: 'container',

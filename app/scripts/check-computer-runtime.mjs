@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { verifyComputerRuntime } from '../src/computer-runtime.mjs'
+import { missingVolume } from '../../computer-runtime/broker/boundary.mjs'
 import { createBrokerProvider } from '../../ds-bot/src/host/computer/providers/broker.js'
 
 const [directory, image] = process.argv.slice(2)
@@ -40,7 +41,7 @@ async function cleanup() {
   try {
     let owned
     try { owned = JSON.parse((await docker(['volume', 'inspect', volume])).stdout)[0] }
-    catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+    catch (error) { if (!missingVolume(error)) throw error }
     if (owned) {
       assert.equal(owned.Labels?.['org.ds-bot.computer.id'], record.id)
       await docker(['volume', 'rm', volume])

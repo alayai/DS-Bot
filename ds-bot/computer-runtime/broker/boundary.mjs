@@ -1,6 +1,15 @@
 import { desktopPolicy } from './policy.mjs'
 import { randomUUID } from 'node:crypto'
 
+// Docker Desktop reports a missing volume as "volume <name> not found".
+// Older Engine and Podman say "no such volume". A driver failure must not match.
+export function missingVolume(error) {
+  const text = [error?.stderr, error?.stdout, error?.message].map(part => (
+    Buffer.isBuffer(part) ? part.toString('utf8') : String(part ?? '')
+  )).join('\n')
+  return /no such volume|no volume with (?:the )?name|volume (?!driver\b)["']?[\w.-]+["']? not found/i.test(text)
+}
+
 export function quotaArguments(bytes = 0, engine) {
   if (!Number.isSafeInteger(bytes) || (bytes !== 0 && (bytes < 1024 ** 3 || bytes > 1024 ** 4))) throw new Error('Home quotas must be 0 or 1–1024 GiB.')
   if (!bytes) return []
@@ -19,7 +28,7 @@ export async function probeHomeQuota(docker, image, engine, signal) {
     try {
       await docker(['volume', 'inspect', volume], signal)
       throw new Error('Quota probe storage already exists.')
-    } catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+    } catch (error) { if (!missingVolume(error)) throw error }
     attempted = true
     await docker(['volume', 'create', '--opt', 'o=size=67108864', '--opt', 'nocopy', '--uid', '1000', '--gid', '1000',
       '--label', `org.ds-bot.computer.quota-probe=${id}`, volume], signal)
@@ -40,7 +49,7 @@ export async function probeHomeQuota(docker, image, engine, signal) {
         await docker(['rm', '-f', helper])
       }
       try { value = JSON.parse((await docker(['volume', 'inspect', volume])).stdout)[0] }
-      catch (error) { if (!/no such volume/i.test(error.stderr ?? '')) throw error }
+      catch (error) { if (!missingVolume(error)) throw error }
       if (value) {
         if (value.Name !== volume || value.Labels?.['org.ds-bot.computer.quota-probe'] !== id) throw new Error('Quota probe cleanup could not verify its volume.')
         await docker(['volume', 'rm', volume])
