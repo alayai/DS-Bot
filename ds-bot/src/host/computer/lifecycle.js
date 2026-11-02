@@ -79,7 +79,12 @@ export function createComputerStorage({ store, provider, ready, assigned, admini
         task.signal?.throwIfAborted()
         const snapshot = await store.load()
         if (snapshot.lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before making another change.')
-        if ((await provider.inspect(record)).phase !== 'stopped') throw refused('not-stopped', 'Stop the desktop before changing its storage.')
+        // Status can stay unavailable after a volume probe fails even though no desktop is running.
+        // Saving settings only has to refuse a desktop that is actually started.
+        let phase
+        try { phase = (await provider.inspect(record)).phase }
+        catch (error) { if (method !== 'configure') throw error; phase = 'unavailable' }
+        if (method === 'configure' ? phase === 'ready' || phase === 'starting' : phase !== 'stopped') throw refused('not-stopped', 'Stop the desktop before changing its storage.')
         const checkpoints = Object.values(snapshot.checkpoints ?? {}).filter(item => item.computerId === record.id)
         let checkpoint = snapshot.checkpoints?.[args.checkpointId]
         if (['restore', 'delete-checkpoint'].includes(method) && (!checkpoint || checkpoint.computerId !== record.id)) throw refused('invalid', 'Choose a checkpoint belonging to this desktop.')

@@ -1763,6 +1763,19 @@ test('cleanup holds a global management barrier and forwards only the persisted 
   assert.equal((await h.service.status(h.exec())).phase, 'ready')
 })
 
+test('desktop settings can be saved when status is unverified but the desktop is not running', async t => {
+  const provider = createFakeComputer(); provider.configure = async () => {}; provider.capacity = async () => ({ cpu: 4, memoryBytes: 8 * 1024 ** 3 })
+  const h = await setup(t, { provider }); const record = await h.bind()
+  const policy = { cpu: 1, memoryMiB: 1024, network: 'restricted', domains: ['www.baidu.com', 'www.sohu.com'] }
+  provider.inspect = async () => ({ phase: 'unavailable' })
+  await h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy })
+  assert.deepEqual((await h.service.state()).computers[0].policy.domains, ['www.baidu.com', 'www.sohu.com'])
+  provider.inspect = async () => { throw new Error('Computer operation failed (volume, 1).') }
+  const next = (await h.service.state()).computers[0]
+  await h.service.storage('configure', { botId: 'a', expectedGeneration: next.generation, policy: { ...policy, cpu: 2 } })
+  assert.equal((await h.service.state()).computers[0].policy.cpu, 2)
+})
+
 test('per-desktop settings require stopped generation and fit engine capacity', async t => {
   const provider = createFakeComputer(); provider.configure = async () => {}; provider.capacity = async () => ({ cpu: 4, memoryBytes: 8 * 1024 ** 3 })
   const h = await setup(t, { provider }); let record = await h.start()

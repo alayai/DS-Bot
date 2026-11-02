@@ -24,7 +24,7 @@ export function ComputerPolicy({ record, call, changed }) {
     value.network === 'restricted' ? h('label', null, t('Allowed domains (one per line)'), h('textarea', { value: value.domains, disabled: busy,
       onChange: e => { setConfirm(false); setDraft({ ...value, domains: e.target.value }) } })) : null,
     error ? h('p', { className: 'bt-error', role: 'status' }, error) : null,
-    h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || !draft || record.phase !== 'stopped' || record.recoveryPending,
+    h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || !draft || record.phase === 'ready' || record.phase === 'starting' || record.recoveryPending,
       onClick: () => confirm ? void save() : setConfirm(true) }, t(confirm ? 'Confirm desktop settings' : 'Save desktop settings')),
     draft ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy, onClick: () => { setDraft(null); setConfirm(false) } }, t('Discard changes')) : null)
 }

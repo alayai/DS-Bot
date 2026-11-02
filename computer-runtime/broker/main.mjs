@@ -466,7 +466,7 @@ async function dispatch(method, record, options, signal, onProgress) {
   if (method === 'revoke') { await revoke(value); return null }
   await value.inputCleanup
   if (value.busy || value.revoking) fail('The desktop is busy.')
-  if (value.dirty && method !== 'stop') fail('Desktop input must be revoked before this Computer can be reused.')
+  if (value.dirty && method !== 'stop' && method !== 'configure') fail('Desktop input must be revoked before this Computer can be reused.')
   value.busy = true
   let settle
   value.settled = new Promise(resolve => { settle = resolve })
@@ -486,6 +486,7 @@ async function dispatch(method, record, options, signal, onProgress) {
     if (info?.State.Running) fail('Stop the desktop before changing its policy.')
     if (info) await docker(['rm', value.name], signal)
     await removeNetwork(value, { docker, image: baseImage, signal })
+    value.dirty = false
     return { configured: true }
   }
     if (method === 'start') return await start(value, signal)

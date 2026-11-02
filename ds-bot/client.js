@@ -37656,7 +37656,7 @@ function ComputerPolicy({ record, call: call2, changed }) {
     (0, import_react51.createElement)("button", {
       type: "button",
       className: "bt-soft bt-soft-sm",
-      disabled: busy || !draft || record.phase !== "stopped" || record.recoveryPending,
+      disabled: busy || !draft || record.phase === "ready" || record.phase === "starting" || record.recoveryPending,
       onClick: () => confirm ? void save() : setConfirm(true)
     }, t(confirm ? "Confirm desktop settings" : "Save desktop settings")),
     draft ? (0, import_react51.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy, onClick: () => {
