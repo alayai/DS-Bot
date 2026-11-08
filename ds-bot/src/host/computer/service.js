@@ -205,8 +205,10 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       await pending?.promise.catch(() => {})
       // An operation that was already inside a driver may have settled after revoke.
       await provider.revoke(record)
-    } catch {
+    } catch (error) {
       controls.set(record.id, 'blocked')
+      // Keep the desktop blocked, but do not report a runtime failure as a held human session.
+      if (['bot/computer-provider-failed', 'bot/computer-provider-unavailable'].includes(error?.code)) throw error
       throw refused('revoke-failed', 'Input revocation could not be confirmed. This desktop remains blocked.')
     }
   }
@@ -258,17 +260,24 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     const computers = []
     for (const record of Object.values(stored.computers)) {
       let phase = 'unavailable'
+      let problem
       try {
-        const inspected = recovery.status === 'running' ? {} : await provider.inspect(record)
-        if (['ready', 'stopped', 'starting', 'error'].includes(inspected.phase)) phase = inspected.phase
-      } catch {}
+        if (recovery.status !== 'running') {
+          const inspected = await provider.inspect(record)
+          if (['ready', 'stopped', 'starting', 'error'].includes(inspected.phase)) phase = inspected.phase
+        }
+      } catch (error) {
+        problem = typeof error?.message === 'string' && error.message
+          ? error.message.slice(0, 300)
+          : 'The desktop runtime could not be inspected.'
+      }
       computers.push({
         id: record.id, botId: record.botId, generation: record.generation, grant: record.grant,
         archived: record.archived, executionPolicy: record.executionPolicy, approvalMode: record.approvalMode ?? 'required',
         diskProtection: record.diskProtection ?? null, restrictedNetwork: provider.restrictedNetwork !== false, policy: desktopPolicy(record.policy), runtimeImage: record.runtimeImage, previousImages: record.previousImages ?? {}, homeQuotaBytes: record.homeQuotaBytes ?? 0,
         storageJob: storageJobs.view(record.botId),
         previousHomes: record.previousHomes ?? [], recoveryPending: Boolean(stored.lifecycle?.[record.id]),
-        provider: provider.kind, phase, control: controls.get(record.id) ?? 'none',
+        provider: provider.kind, phase, ...(problem ? { problem } : {}), control: controls.get(record.id) ?? 'none',
         humanExpired: controls.get(record.id) === 'human' && (!humans.has(record.id) || humans.get(record.id).expires <= clock()),
         resources: measurements.get(record.id)?.generation === record.generation ? { ...measurements.get(record.id),
           warnings: resourceWarnings(measurements.get(record.id).storage, limits()) } : null,
@@ -700,7 +709,14 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       controls.set(record.id, 'none')
     } else if (method === 'start') {
       if ((await store.load()).lifecycle?.[record.id]) throw refused('recovery-required', 'Finish storage recovery before starting this desktop.')
-      available(record)
+      writable()
+      operational()
+      if (record.grant === 'off') throw refused('off', 'This desktop is disabled. Its files are retained.')
+      // Blocked means revocation was not confirmed. The user can retry it here.
+      // Human control stays until the user gives the desktop back or stops it.
+      if (controls.get(record.id) === 'human') {
+        throw refused('human-control', 'Automatic observation and input are paused. Wait for the user to give back control.')
+      }
       await barrier(record)
       await reserveRuntime(record, () => exclusive(record, undefined, signal => provider.start(record, { signal }))).catch(error => {
         if (['bot/computer-resource-limit', 'bot/computer-busy'].includes(error.code)) controls.set(record.id, 'none')

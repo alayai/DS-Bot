@@ -85,3 +85,35 @@ test('unknown, quiet, waiting, and normal time limits never simulate continuous 
   actor.step(61, 'quiet')
   assert.equal(reservations.size, 0)
 })
+
+test('drink trips keep the cup through filling and normal or interrupted return', () => {
+  for (const groupId of [null, 'g']) for (const drink of groupId === null ? ['water', 'coffee'] : ['water']) {
+    for (const interrupt of ['none', 'out', 'filled']) {
+      const { rooms: [room], presences: [seat] } = layout(1, groupId)
+      const actor = createActivity(seat, room, new Map())
+      let pose, time = 0
+      const advance = until => {
+        for (; time < 600; time += .05) {
+          pose = actor.step(time, 'lively')
+          if (until(pose)) return
+        }
+        assert.fail('expected drink phase was not reached')
+      }
+      advance(p => p.action === 'walk' && p.drink === drink && !p.filled
+        && Math.hypot(p.x - seat.x, p.z - seat.z) > .5)
+      if (interrupt !== 'out') {
+        advance(p => p.action === drink)
+        assert.equal(pose.drink, drink)
+        advance(p => p.action === drink && p.filled)
+      }
+      if (interrupt !== 'none') actor.setState('running', time)
+      advance(p => p.action === 'walk')
+      assert.equal(pose.drink, drink)
+      assert.equal(pose.filled, interrupt !== 'out')
+      advance(p => p.action === (interrupt === 'none' ? 'sit' : 'type'))
+      assert.equal(pose.drink, null)
+      assert.equal(pose.filled, false)
+      actor.dispose()
+    }
+  }
+})

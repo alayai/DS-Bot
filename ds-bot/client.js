@@ -17857,6 +17857,10 @@ var ZH = {
   "Give back to Bot": "交还 Bot",
   "You control this desktop. Closing the panel keeps the Bot paused.": "你正在控制桌面。关闭面板后 Bot 仍保持暂停。",
   "Bot paused. Take control here, or stop the desktop to recover.": "Bot 已暂停。可在这里重新接管，或停止桌面后恢复。",
+  "Desktop access is blocked until input can be revoked. Start the desktop to retry.": "输入尚未确认撤销，桌面访问已锁定。可再次启动桌面重试。",
+  "Automatic observation and input are paused. Wait for the user to give back control.": "自动观察和输入已暂停。请等待用户交还控制。",
+  "The container runtime could not inspect this desktop.": "容器运行时无法检查此桌面。",
+  "Input revocation could not be confirmed. This desktop remains blocked.": "无法确认输入已撤销，此桌面保持锁定。",
   "Read-only preview. Take control to send input or transfer files.": "只读预览。接管后可输入或传输文件。",
   "The desktop is busy. Keeping the last preview until it is available again.": "桌面当前正忙。恢复可用前会保留上一张预览。",
   "Private desktop screenshot": "私有桌面截图",
@@ -38431,7 +38435,7 @@ function ComputerView({ bot, actions, leaving }) {
         clearFrame();
       }) : null
     ),
-    (0, import_react54.createElement)("p", { className: "bt-muted", role: "status" }, owned ? t("You control this desktop. Closing the panel keeps the Bot paused.") : record?.control === "human" || record?.control === "blocked" ? t("Bot paused. Take control here, or stop the desktop to recover.") : t("Read-only preview. Take control to send input or transfer files.")),
+    (0, import_react54.createElement)("p", { className: "bt-muted", role: "status" }, owned ? t("You control this desktop. Closing the panel keeps the Bot paused.") : record?.control === "human" ? t("Bot paused. Take control here, or stop the desktop to recover.") : record?.control === "blocked" ? t("Desktop access is blocked until input can be revoked. Start the desktop to retry.") : t("Read-only preview. Take control to send input or transfer files.")),
     requests.map((item) => (0, import_react54.createElement)(
       "section",
       { key: item.id, className: "bt-computer-help", "aria-label": t("Desktop help requested") },
@@ -38451,7 +38455,7 @@ function ComputerView({ bot, actions, leaving }) {
         })) : null
       )
     )),
-    error ? (0, import_react54.createElement)("div", { className: "bt-error", role: "alert" }, t(error)) : null,
+    error ? (0, import_react54.createElement)("div", { className: "bt-error", role: "alert" }, t(error)) : record?.problem ? (0, import_react54.createElement)("p", { className: "bt-error", role: "alert" }, t(record.problem)) : null,
     previewBusy ? (0, import_react54.createElement)("div", { className: "bt-muted", role: "status" }, t("The desktop is busy. Keeping the last preview until it is available again.")) : null,
     notice ? (0, import_react54.createElement)("div", { className: "bt-muted", role: "status" }, notice) : null,
     (0, import_react54.createElement)(

@@ -149,3 +149,5 @@
   .bh-metrics > div { flex-direction: column; gap: 0; }
   .bh-connection { font-size: 11px; }
 }
+.bh-recent > summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 10px 0; }
+.bh-recent > summary:focus-visible { outline: 2px solid var(--bt-accent, #4169e1); outline-offset: 2px; }

@@ -13,19 +13,24 @@ export function createCharacter(geometry, bodyMaterial, ink, office) {
     const eye = mesh(geometry.eye, ink, head); eye.position.set(x, .02, -.24); return eye
   })
   const limbs = Array.from({ length: 8 }, () => mesh(geometry.limb, bodyMaterial))
+  limbs[1].name = 'left-forearm'; limbs[3].name = 'right-forearm'
   const shoes = [-1, 1].map(() => {
     const shoe = mesh(geometry.head, ink); shoe.scale.set(.4, .22, .6); return shoe
   })
+  shoes[0].name = 'left-shoe'; shoes[1].name = 'right-shoe'
   const prop = (shape, material, scale, parent = group) => {
     const value = mesh(office.geometry[shape], office.materials[material], parent)
     value.scale.set(...scale); return value
   }
   const cup = new Group(); group.add(cup)
+  cup.name = 'cup'
   prop('cylinder', 'white', [.08, .15, .08], cup)
   const liquid = prop('cylinder', 'brown', [.068, .008, .068], cup); liquid.position.y = .079
+  liquid.name = 'drink-liquid'
   const handle = prop('torus', 'white', [.055, .055, .055], cup); handle.position.x = .09
   const steam = Array.from({ length: 3 }, () => prop('sphere', 'white', [.025, .055, .025], cup))
   const pouring = prop('cylinder', 'screenLine', [.01, .06, .01])
+  pouring.name = 'drink-pour'
   const weights = [-1, 1].map(() => {
     const weight = new Group(); group.add(weight)
     prop('cylinder', 'metal', [.025, .38, .025], weight).rotation.z = Math.PI / 2
@@ -58,11 +63,13 @@ export function createCharacter(geometry, bodyMaterial, ink, office) {
     object.scale.set(radius, direction.length(), radius)
     object.quaternion.setFromUnitVectors(up, direction.normalize())
   }
-  const update = ({ action = 'sit', time = 0, counter = false }, dt = 1) => {
+  const update = ({ action = 'sit', time = 0, counter = false, drink = null, filled = false }, dt = 1) => {
     const blend = initialized ? 1 - Math.exp(-dt * 18) : 1
     initialized = true
     const standing = !['sit', 'type', 'sleep'].includes(action), height = standing ? .28 : 0
     const sleeping = action === 'sleep', working = action === 'type', walking = action === 'walk'
+    const drinking = action === 'water' || action === 'coffee'
+    const beverage = drinking ? action : walking && ['water', 'coffee'].includes(drink) ? drink : null
     const wipe = working && time % 7 > 5.4
     const sway = walking ? Math.sin(time * 9) : 0
     const curl = .5 + .5 * Math.sin(time * 2.7)
@@ -81,18 +88,20 @@ export function createCharacter(geometry, bodyMaterial, ink, office) {
       } else if (sleeping) {
         elbow = [side * .32, .94, -.28]; hand = [-side * .12, .96, -.47]
       } else if (standing) {
-        elbow = [side * .3, 1.05, .3 + side * sway * .16]
-        hand = [side * .32, .85, .3 + side * sway * .3]
+        elbow = [side * .3, 1.05, .3 - side * sway * .16]
+        hand = [side * .32, .85, .3 - side * sway * .3]
         if (action === 'stretch') {
           elbow = [side * .48, 1.48 + curl * .12, .25]
           hand = [side * (.25 + curl * .2), 1.77 + curl * .13, .2]
         } else if (action === 'dumbbell') hand = [side * .35, .86 + curl * .55, .15 - curl * .2]
-        else if ((action === 'water' || action === 'coffee') && i === 1) {
+        else if (walking && beverage && i === 1) {
+          elbow = [.4, 1.1, .24]; hand = [.36, 1.1, .02]
+        } else if (drinking && i === 1) {
           const sip = .5 + .5 * Math.sin(time * 1.6)
-          elbow = [.38, 1.16, .13]; hand = [.14, 1.15 + sip * .3, -.02 + sip * .04]
+          elbow = [.38, 1.16, .13]; hand = [.23, 1.15 + sip * .3, -.02 + sip * .04]
           if (time < 2) {
             elbow = [.3, 1.05, -.1]
-            hand = action === 'water' && !counter ? [.1, .72, -.465] : [.15, 1.25, -.565]
+            hand = action === 'water' && !counter ? [.19, .72, -.465] : [.24, 1.25, -.565]
           }
         } else if (action === 'snooker') {
           elbow = [side * .32, 1.17, -.03]
@@ -109,18 +118,19 @@ export function createCharacter(geometry, bodyMaterial, ink, office) {
       weights[i].visible = action === 'dumbbell'
       move(weights[i], hand, blend)
       if (i === 1) {
-        move(cup, [hand[0], hand[1] + .025, hand[2] - .035], blend)
-        cup.rotation.x = time >= 2 && (action === 'water' || action === 'coffee') ? -.25 - curl * .25 : 0
+        move(cup, [hand[0] - .09, hand[1] + .025, hand[2] - .035], blend)
+        cup.rotation.x = time >= 2 && drinking ? -.25 - curl * .25 : 0
       }
     }
-    cup.visible = action === 'water' || action === 'coffee'
-    liquid.material = office.materials[action === 'water' ? 'screenLine' : 'brown']
-    pouring.visible = cup.visible && time < 2
-    pouring.material = office.materials[action === 'water' ? 'screenLine' : 'brown']
+    cup.visible = Boolean(beverage)
+    liquid.visible = drinking ? time > 0 : filled
+    liquid.material = office.materials[beverage === 'water' ? 'screenLine' : 'brown']
+    pouring.visible = drinking && time < 2
+    pouring.material = office.materials[beverage === 'water' ? 'screenLine' : 'brown']
     const dispenser = action === 'water' && !counter
     pouring.position.set(dispenser ? .1 : .15, dispenser ? .83 : 1.39, dispenser ? -.5 : -.6)
     steam.forEach((item, i) => {
-      item.visible = action === 'coffee'
+      item.visible = beverage === 'coffee' && (drinking ? time >= 2 : filled)
       item.position.set(Math.sin(time * 2 + i) * .025, .14 + (time * .15 + i * .08) % .28, 0)
     })
     cue.visible = ball.visible = action === 'snooker'

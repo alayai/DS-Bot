@@ -62,6 +62,7 @@ try {
       const commandId = randomUUID()
       const command = { action: 'send', commandId, entityId: bot.id, groupId: null,
         workspaceId: snapshot.workspaceId, text: `MVP acceptance ${commandId}` }
+      const sentAt = Date.now()
       const replies = await Promise.all([hub(command), hub(command)])
       assert.equal(replies[0].receipt.status, 'accepted')
       assert.deepEqual(replies[0].receipt, replies[1].receipt)
@@ -73,15 +74,18 @@ try {
       const deadline = Date.now() + 60000
       while (Date.now() < deadline && !completed) {
         const current = await hub()
-        completed = current.sessions.filter(session => session.entityId === bot.id)
+        completed = current.sessions.filter(session => session.id === replies[0].receipt.sessionId)
           .flatMap(session => (session.recentRuns ?? []).filter(run => !initial.has(`${session.id}:${run.turn}`)))
-          .find(run => run.outcome === 'completed')
+          .find(run => run.outcome === 'completed' && run.endedAt >= sentAt)
         if (!completed) await new Promise(resolve => setTimeout(resolve, 250))
       }
       assert.ok(completed, 'short turn ending was not observed through the public projection')
-      const calls = (await readFile(join(home, 'mock.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line))
-      assert.equal(calls.filter(item => item.last?.includes(command.text)).length, 1)
-      checks.push('one actual mock request; authoritative short turn completion retained')
+      // The mock log truncates merged user messages to 160 characters. Count
+      // durable user admissions, not a substring in that truncated diagnostic.
+      const chat = await (await call('/api/bot', { endpoint: 'chat', payload: { botId: bot.id } })).json()
+      assert.equal(chat.ok, true)
+      assert.equal(chat.value.items.filter(item => item.kind === 'user' && item.text.includes(command.text)).length, 1)
+      checks.push('one durable user message; authoritative short turn completion retained')
       const conflict = await call('/api/bothub', { ...command, text: 'conflicting payload' })
       assert.equal(conflict.status, 409)
       checks.push('same command ID with changed payload rejected')

@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createComputerService } from '../src/host/computer/service.js'
 import { createLeases } from '../src/host/computer/leases.js'
-import { checkActions, checkFrame, checkBrowserAction } from '../src/host/computer/contract.js'
+import { checkActions, checkFrame, checkBrowserAction, refused } from '../src/host/computer/contract.js'
 import { createFakeComputer } from '../src/host/computer/providers/fake.js'
 import { install as installApprovals } from '../src/host/approvals.js'
 
@@ -395,6 +395,7 @@ test('human takeover stops observation, rejects input and invalidates old coordi
   const args = h.click(await h.observe())
   await h.manage('takeover')
   assert.equal((await h.service.status(h.exec())).control, 'human')
+  await assert.rejects(h.manage('start'), fails('human-control'))
   await assert.rejects(h.observe(), fails('human-control'))
   await assert.rejects(h.service.act(args, h.exec()), fails('human-control'))
   await h.manage('release')
@@ -436,6 +437,37 @@ test('revocation failure keeps the desktop blocked', async t => {
   await h.observe()
   h.provider.revoke = async () => { throw new Error('offline') }
   await assert.rejects(h.manage('takeover'), fails('revoke-failed'))
+  assert.equal((await h.service.status(h.exec())).control, 'blocked')
+  await assert.rejects(h.observe(), fails('human-control'))
+})
+
+test('a blocked desktop starts again once revocation can be confirmed', async t => {
+  const h = await setup(t)
+  const record = await h.start()
+  const revoke = h.provider.revoke
+  h.provider.revoke = async () => { throw new Error('offline') }
+  await assert.rejects(h.manage('stop'), fails('revoke-failed'))
+  assert.equal((await h.service.status(h.exec())).control, 'blocked')
+  await assert.rejects(h.manage('start'), fails('revoke-failed'))
+  await assert.rejects(h.observe(), fails('human-control'))
+  h.provider.revoke = revoke
+  await h.manage('start')
+  const view = await h.service.status(h.exec())
+  assert.equal(view.phase, 'ready')
+  assert.equal(view.control, 'none')
+  assert.equal(view.id, record.id)
+})
+
+test('an engine inspection failure stays visible and is not reported as human control', async t => {
+  const h = await setup(t)
+  await h.start()
+  const message = 'The container runtime could not inspect this desktop.'
+  h.provider.inspect = async () => { throw refused('provider-failed', message) }
+  h.provider.revoke = async () => { throw refused('provider-failed', message) }
+  const view = (await h.service.state()).computers[0]
+  assert.equal(view.phase, 'unavailable')
+  assert.equal(view.problem, message)
+  await assert.rejects(h.manage('start'), error => error.code === 'bot/computer-provider-failed' && error.message === message)
   assert.equal((await h.service.status(h.exec())).control, 'blocked')
   await assert.rejects(h.observe(), fails('human-control'))
 })

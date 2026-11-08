@@ -50,6 +50,9 @@ nap with floating Zzz, or practise snooker. Group offices have a water dispenser
 coffee and snooker stay in the common area. Characters follow aisles and take
 turns at shared facilities. New work interrupts an outing and sends the character
 back to its desk; selection, labels and close-up cameras follow the same member.
+Walking pairs each free arm with the opposite leg. Characters carry a cup to
+the water dispenser or coffee machine and back, keeping the cup upright while
+walking. Pouring happens only at the dispenser or machine.
 
 **Normal** (default) shows up to five seconds of typing after a work-state change.
 **Quiet**, system reduced motion and a lost live connection stop character actions.
@@ -104,7 +107,7 @@ trigger a fresh baseline.
 The stream describes observed current state and bounded recent endings, not a
 complete run history. The companion bridge retains up to 16 endings per observed
 conversation, including turns that finish between samples. Details show the latest
-16 endings across the selected conversations: completed, stopped, failed, or
+16 endings across the selected conversations (expand **Recent finished runs**): completed, stopped, failed, or
 outcome unavailable. Missing or nonresident sessions have no inferred outcome.
 Removed members and rotated conversations drop out of this view. An older bridge
 can still miss very short activity between samples. No message bodies or tool output
@@ -314,13 +317,16 @@ for replay limits, reconnect behavior, verification and current coverage.
 
 ## Release candidate installation and rollback
 
-`0.1.0-rc.1` targets DSH `0.2.1-rc.4` and Cordis `4.0.5`. Install the
+`0.1.0-rc.4` targets DSH `0.2.1-rc.4` and Cordis `4.0.5`. Install the
 companion DS Bot archive from the **same candidate directory** first, then the
 BotHub archive, through the host plugin manager's local bundle installation.
 The DS Bot archive still identifies as `0.2.16`; its version alone cannot prove
 bridge compatibility. Verify the candidate's SHA-256 manifest and restart the
 host after updating both bundles. Keep exactly one enabled copy of each bundle.
 An old published DS Bot is insufficient.
+
+When upgrading from the paired rc.3 candidate, only BotHub needs updating for
+the walking and cup fixes; its companion DS Bot archive is unchanged.
 
 For a first check, open BotHub, confirm Connected, select a Bot in 2D, send a
 short message, check Accepted, then open its original conversation. Switch to

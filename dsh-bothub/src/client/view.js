@@ -90,8 +90,8 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
         h('p', { className: 'bh-note' }, t(!target ? 'runUnavailable'
           : snapshot.readOnly ? 'runReadOnly' : run.groupId != null && entity.kind === 'bot' ? 'runGroupControl' : 'runNativeControl')))
     }),
-    recent.length > 0 && h('div', { className: 'bh-recent' },
-      h('h3', null, t('recentRuns')),
+    recent.length > 0 && h('details', { key: 'recent', className: 'bh-recent' },
+      h('summary', null, `${t('recentRuns')} (${recent.length})`),
       h('p', { className: 'bh-note' }, t('recentCoverage')),
       ...recent.map(run => h('div', { className: 'bh-run', key: run.id, 'data-recent-run': run.id },
         h('strong', null, t(`outcome-${run.outcome}`)),

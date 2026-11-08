@@ -428,8 +428,11 @@ export function ComputerView({ bot, actions, leaving }) {
       }) : null),
     h('p', { className: 'bt-muted', role: 'status' }, owned
       ? t('You control this desktop. Closing the panel keeps the Bot paused.')
-      : record?.control === 'human' || record?.control === 'blocked'
-        ? t('Bot paused. Take control here, or stop the desktop to recover.') : t('Read-only preview. Take control to send input or transfer files.')),
+      : record?.control === 'human'
+        ? t('Bot paused. Take control here, or stop the desktop to recover.')
+        : record?.control === 'blocked'
+          ? t('Desktop access is blocked until input can be revoked. Start the desktop to retry.')
+          : t('Read-only preview. Take control to send input or transfer files.')),
     requests.map(item => h('section', { key: item.id, className: 'bt-computer-help', 'aria-label': t('Desktop help requested') },
       h('strong', null, t('Desktop help requested')),
       h('p', null, item.note),
@@ -443,7 +446,8 @@ export function ComputerView({ bot, actions, leaving }) {
           await call('handoff-answer', { requestId: item.id, outcome: 'skip' })
           forget()
         })) : null))),
-    error ? h('div', { className: 'bt-error', role: 'alert' }, t(error)) : null,
+    error ? h('div', { className: 'bt-error', role: 'alert' }, t(error))
+      : record?.problem ? h('p', { className: 'bt-error', role: 'alert' }, t(record.problem)) : null,
     previewBusy ? h('div', { className: 'bt-muted', role: 'status' }, t('The desktop is busy. Keeping the last preview until it is available again.')) : null,
     notice ? h('div', { className: 'bt-muted', role: 'status' }, notice) : null,
     h('div', { className: 'bt-computer-screen', 'data-control': inputReady || undefined },

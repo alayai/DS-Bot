@@ -5,8 +5,10 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const destination = resolve(process.argv[2] ?? join(root, 'artifacts/bothub-0.1.0-rc.1'))
+const { version } = JSON.parse(await readFile(join(root, 'dsh-bothub/package.json'), 'utf8'))
+const destination = resolve(process.argv[2] ?? join(root, `artifacts/bothub-${version}`))
 if (!process.env.npm_execpath) throw new Error('Run with npm run candidate -- <new-output-directory>')
+await mkdir(dirname(destination), { recursive: true })
 await mkdir(destination, { recursive: false })
 const packages = []
 for (const name of ['ds-bot', 'dsh-bothub']) {

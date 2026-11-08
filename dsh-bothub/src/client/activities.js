@@ -70,11 +70,12 @@ export function createActivity(seat, room, reservations, time = 0) {
           else { reservations.set(key, seat.key); lease = key }
         }
         const path = activityRoute(seat, room, action)
-        trip = { action, path, length: routeLength(path), phase: 'out', started: now }
+        trip = { action, path, length: routeLength(path), phase: 'out', started: now, filled: false }
       }
       if (trip) {
         const age = now - trip.started
         if (trip.phase === 'hold') {
+          if (['water', 'coffee'].includes(trip.action) && age >= 2) trip.filled = true
           if (age >= (trip.action === 'sleep' ? 18 : 10)) startReturn(now)
         } else if (age * 1.5 >= trip.length) {
           if (trip.phase === 'return') { reset(); due = now + 5 + seed % 5 }
@@ -90,7 +91,8 @@ export function createActivity(seat, room, reservations, time = 0) {
           last = { ...routePoint(trip.path, (now - trip.started) * 1.5), action: 'walk', time: now }
         }
       } else last = { x: seat.x, z: seat.z, angle: 0, action: state === 'running' ? 'type' : 'sit', time: now + seed % 9 }
-      return { ...last, counter: room.groupId === null, animate: Boolean(trip) || state === 'running',
+      return { ...last, drink: trip && ['water', 'coffee'].includes(trip.action) ? trip.action : null,
+        filled: trip?.filled ?? false, counter: room.groupId === null, animate: Boolean(trip) || state === 'running',
         wakeAfter: !trip && state === 'idle' ? Math.max(0, due - now) : null }
     },
     dispose: reset,
