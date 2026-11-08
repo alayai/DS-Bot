@@ -13,12 +13,18 @@ export DSH_CLI="${DSH_CLI:-$ROOT/ds-bot/dev/harness/node_modules/.bin/dsh}"
 if [ "$ACTION" = start ] || [ "$ACTION" = reset ]; then
   mkdir -p "$BENCH_HOME/profiles/web"
   node --input-type=module - "$ROOT" "$BENCH_HOME" <<'JS'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const [root, home] = process.argv.slice(2)
+const dependency = (variable, directory) => {
+  const file = process.env[variable]
+  if (!file) return `link:${root}/${directory}`
+  if (!file.startsWith('/') || !file.endsWith('.tgz') || !existsSync(file)) throw new Error(`Invalid ${variable}`)
+  return `file:${file}`
+}
 writeFileSync(join(home, 'profiles/web/package.json'), JSON.stringify({
   name: 'dsh-profile-web', private: true,
-  dependencies: { 'ds-bot': `link:${root}/ds-bot`, 'dsh-bothub': `link:${root}/dsh-bothub` },
+  dependencies: { 'ds-bot': dependency('BENCH_BOT_PACKAGE', 'ds-bot'), 'dsh-bothub': dependency('BENCH_HUB_PACKAGE', 'dsh-bothub') },
   dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'ds-bot', 'dsh-bothub'] } },
 }, null, 2))
 writeFileSync(join(home, 'profiles/web/pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\n')

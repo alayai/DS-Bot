@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createMonitorFeed } from '../src/host/stream.js'
 import { clock, flush } from './helpers/clock.js'
+import { applyFrame } from '../src/client/stream.js'
 
 const base = () => ({ version: 2, workspaceId: 'team', readOnly: false, capturedAt: 1,
   entities: [{ id: 'bot', name: 'Builder' }], sessions: [], runs: [], groups: [] })
@@ -165,4 +166,45 @@ test('a notification during collection triggers a follow-up instead of losing th
   await f.time.advance(150)
   assert.equal((await event(reader)).changes.runs.upsert.length, 100)
   await reader.cancel()
+})
+
+test('100 concurrent runs converge through event storms, terminal retention and scoped deletion', async t => {
+  const f = fixture(); t.after(() => f.feed.dispose())
+  f.data().sessions = Array.from({ length: 100 }, (_, i) => ({
+    id: `s${i}`, entityId: 'bot', groupId: i % 2 ? 'g' : null, status: 'running', blockers: [],
+  }))
+  f.data().runs = f.data().sessions.map(session => ({
+    id: `${session.id}:1`, sessionId: session.id, entityId: 'bot', phase: 'thinking',
+  }))
+  const reader = (await f.feed.open(request())).body.getReader()
+  const first = await event(reader)
+  let client = applyFrame(null, first.type, first)
+  await event(reader)
+  for (let round = 0; round < 20; round++) {
+    f.data().runs = f.data().runs.map(run => ({ ...run, phase: round % 2 ? 'thinking' : 'tool' }))
+    for (let n = 0; n < 10000; n++) f.feed.invalidate()
+    await f.time.advance(150)
+    const patch = await event(reader)
+    client = applyFrame(client, patch.type, patch)
+    assert.equal(client.data.runs.length, 100)
+    assert.deepEqual(client.data.runs, f.data().runs)
+    assert.equal(applyFrame(client, patch.type, patch), client)
+  }
+  f.data().runs = []
+  f.data().sessions = f.data().sessions.map(session => ({ ...session, status: 'idle',
+    recentRuns: [{ turn: 1, seq: 2, startedAt: 1, endedAt: 2, outcome: 'completed' }] }))
+  f.feed.invalidate(); await f.time.advance(150)
+  let patch = await event(reader)
+  client = applyFrame(client, patch.type, patch)
+  assert.equal(client.data.runs.length, 0)
+  assert.equal(client.data.sessions.filter(session => session.recentRuns.length === 1).length, 100)
+  f.data().entities = []; f.data().sessions = []
+  f.feed.invalidate(); await f.time.advance(150)
+  patch = await event(reader)
+  client = applyFrame(client, patch.type, patch)
+  assert.deepEqual(client.data.entities, [])
+  assert.deepEqual(client.data.sessions, [])
+  assert.equal(f.reads, 23)
+  await reader.cancel()
+  assert.equal(f.time.timers.size, 0)
 })

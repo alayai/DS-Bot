@@ -1,6 +1,6 @@
 {
   "name": "dsh-bothub",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-rc.1",
   "description": "A live 2D and 3D workspace for your DS Bot team",
   "type": "module",
   "license": "Apache-2.0",
@@ -12,18 +12,44 @@
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "files": ["index.js", "src/host/", "src/shared/", "client.js", "cordis.patch.yml", "locale/", "icon.svg", "README.md", "README.zh.md", "LICENSE", "NOTICE", "licenses/"],
+  "files": [
+    "index.js",
+    "src/host/",
+    "src/shared/",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "NOTICE",
+    "licenses/"
+  ],
   "dsh": {
-    "client": { "platform": "web" },
-    "bundle": { "patch": "./cordis.patch.yml" }
+    "client": {
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "scripts": {
     "build": "node scripts/build-client.mjs",
     "test": "node --test test/*.test.js",
     "check": "node scripts/build-client.mjs --check",
-    "lint": "oxlint src index.js scripts test"
+    "lint": "oxlint src index.js scripts test",
+    "candidate": "node scripts/pack-candidate.mjs"
   },
-  "dependencies": { "three": "0.182.0" },
-  "peerDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-web": "*" },
-  "devDependencies": { "esbuild": "0.28.2", "oxlint": "1.76.0" }
+  "dependencies": {
+    "three": "0.182.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-web": "0.2.1-rc.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "oxlint": "1.76.0"
+  }
 }

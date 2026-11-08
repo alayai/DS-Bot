@@ -6,6 +6,7 @@ import { allowsShortcut } from './camera.js'
 import { Composer } from './composer.js'
 import { DesktopViewer } from './desktop-viewer.js'
 import { runTarget } from './run-navigation.js'
+import { recentRuns } from './recent-runs.js'
 import css from './style.css'
 
 export function HubIcon({ size = 20 }) {
@@ -42,6 +43,7 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
   const scoped = spaceSnapshot(snapshot, groupId)
   const sessions = scoped.sessions.filter(item => item.entityId === entity.id)
   const runs = scoped.runs.filter(item => item.entityId === entity.id)
+  const recent = recentRuns(sessions)
   const parent = scoped.entities.find(item => item.id === entity.parentEntityId)
   const children = scoped.entities.filter(item => item.parentEntityId === entity.id)
   const room = groupId != null ? snapshot.groups.find(item => item.id === groupId) : null
@@ -88,6 +90,15 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
         h('p', { className: 'bh-note' }, t(!target ? 'runUnavailable'
           : snapshot.readOnly ? 'runReadOnly' : run.groupId != null && entity.kind === 'bot' ? 'runGroupControl' : 'runNativeControl')))
     }),
+    recent.length > 0 && h('div', { className: 'bh-recent' },
+      h('h3', null, t('recentRuns')),
+      h('p', { className: 'bh-note' }, t('recentCoverage')),
+      ...recent.map(run => h('div', { className: 'bh-run', key: run.id, 'data-recent-run': run.id },
+        h('strong', null, t(`outcome-${run.outcome}`)),
+        h('span', null, run.groupId ? snapshot.groups.find(group => group.id === run.groupId)?.name || t('group') : t('own')),
+        run.endedAt !== null && h('small', null, new Date(run.endedAt).toLocaleTimeString()),
+        h('button', { type: 'button', className: 'bh-button', disabled: busy || !connected,
+          onClick: () => void go(run.sessionId, run.groupId) }, t('viewRun'))))),
     h('h3', null, t('contexts')),
     ...sessions.map(session => h('button', {
       className: 'bh-context', type: 'button', key: session.id,

@@ -1,4 +1,8 @@
 export const en = {
+  recentRuns: 'Recent finished runs',
+  recentCoverage: 'Up to 16 recent endings from currently observed conversations. This is not a complete history.',
+  'outcome-completed': 'Completed', 'outcome-aborted': 'Stopped',
+  'outcome-error': 'Failed', 'outcome-unknown': 'Ended · outcome unavailable',
   viewDesktop: 'View desktop', privateDesktop: 'Private desktop', closeDesktop: 'Close',
   desktopSize: 'Desktop display size', desktopFit: 'Fit', desktopActual: 'Actual size',
   desktopReadOnly: 'Read-only preview, updated periodically. Start or control the desktop in DS Bot.',
@@ -73,6 +77,10 @@ export const en = {
 }
 
 export const zh = {
+  recentRuns: '最近结束的运行',
+  recentCoverage: '显示当前可观测会话中最近的最多 16 条结束记录，不是完整历史。',
+  'outcome-completed': '已完成', 'outcome-aborted': '已停止',
+  'outcome-error': '失败', 'outcome-unknown': '已结束 · 结果未知',
   viewDesktop: '查看桌面', privateDesktop: '私有桌面', closeDesktop: '关闭',
   desktopSize: '桌面显示大小', desktopFit: '适应窗口', desktopActual: '原始大小',
   desktopReadOnly: '只读预览，定期刷新。如需启动或操作桌面，请前往 DS Bot。',

@@ -101,8 +101,13 @@ without Web Locks also use polling. Authentication failures clear the view;
 sign in again and use **Refresh**, or let DSH's newly authenticated connection
 trigger a fresh baseline.
 
-The stream describes observed current state, not a complete run history. Very
-short activity between samples may be missed. No message bodies or tool output
+The stream describes observed current state and bounded recent endings, not a
+complete run history. The companion bridge retains up to 16 endings per observed
+conversation, including turns that finish between samples. Details show the latest
+16 endings across the selected conversations: completed, stopped, failed, or
+outcome unavailable. Missing or nonresident sessions have no inferred outcome.
+Removed members and rotated conversations drop out of this view. An older bridge
+can still miss very short activity between samples. No message bodies or tool output
 are included. Existing compatible DS Bot installations only need a BotHub update.
 
 ## Run conversations
@@ -171,7 +176,7 @@ approval text stays in the native conversation.
 
 Details degrade explicitly when projections are unavailable. A legacy question
 already waiting before the monitor loads cannot be reconstructed as a live wait;
-its active tool remains visible. Nonresident sessions and historical outcomes,
+its active tool remains visible. Nonresident sessions and complete historical outcomes,
 scene editing and direct stop/approval controls remain outside this slice.
 
 ## Requirements and installation
@@ -206,7 +211,8 @@ CLI collector. It uses DSH's authenticated connection service and same-origin
 requests. No new server or port is required.
 
 Disabling BotHub removes its channel, UI and renderer. It does not stop the team.
-Monitoring polls every 1.5 seconds while the panel is visible. Hidden pages do
+Monitoring uses an event stream with 5-second reconciliation, or 2.5-second
+fallback polling while the panel is visible. Hidden pages do
 not draw or start additional polls. 3D displays up to 50 contextual seats; 2D
 lists all of them. No external assets or CDN requests are used.
 
@@ -305,3 +311,31 @@ for admission, idempotency, recovery and verification.
 
 See the [projection stream slice](../docs/plans/2026-11-08-dsh-bothub-stream.md)
 for replay limits, reconnect behavior, verification and current coverage.
+
+## Release candidate installation and rollback
+
+`0.1.0-rc.1` targets DSH `0.2.1-rc.4` and Cordis `4.0.5`. Install the
+companion DS Bot archive from the **same candidate directory** first, then the
+BotHub archive, through the host plugin manager's local bundle installation.
+The DS Bot archive still identifies as `0.2.16`; its version alone cannot prove
+bridge compatibility. Verify the candidate's SHA-256 manifest and restart the
+host after updating both bundles. Keep exactly one enabled copy of each bundle.
+An old published DS Bot is insufficient.
+
+For a first check, open BotHub, confirm Connected, select a Bot in 2D, send a
+short message, check Accepted, then open its original conversation. Switch to
+3D, enter a group room and check its destination before sending. A stopped
+desktop should show Standby without starting a container.
+
+Disable BotHub in the plugin manager and restart to remove its panel and monitor
+channel; the Bot team continues in DS Bot. To roll back, disable BotHub, reinstall
+the previously saved BotHub bundle, then restart. Keep the compatible DS Bot
+bridge installed: older BotHub clients ignore the additive recent-run fields.
+Do not delete the team, session data or receipt ledger to roll back. Reinstall
+the candidate bundle to upgrade again. No data migration is required by BotHub.
+
+Validated baseline and platform results are recorded with the candidate. The
+current evidence covers a Linux/WSL DSH Web host and Windows Chrome client;
+Electron, Safari, macOS and real-container private desktops require separate
+validation. Direct run cancellation, embedded approvals, streaming video, full
+history, layout editing and external CLI monitoring are not provided in this MVP.
