@@ -1,10 +1,32 @@
 # BotHub
 
+Group rooms are furnished offices with wooden desks, computers, keyboards,
+office chairs, bookshelves, whiteboards and plants. The common area has a coffee
+bar with a microwave, a snooker table, a lounge and a fitness corner with a
+treadmill, dumbbells and a mat. Shared workstations occupy a separate front area.
+Select a desk or a teammate to inspect their work; the amenities are scenery.
+All models and surface textures are generated locally, with no asset downloads.
+
+The scene follows the host's light/dark theme. Choose **Eco**, **Balanced**
+(default), or **Detailed** in the scene's Quality selector. Eco disables shadows;
+the other levels use bounded shadow resolution and pixel ratio. This browser
+remembers your choice; changing quality preserves your view and selection.
+Crowded labels yield to rooms, selected members and active work. Tab reveals
+hidden labels for keyboard navigation; 2D always offers the full list.
+There are no continuous ambient animations, including with reduced motion.
+
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
 only that group's activity. Direct chats and ordinary Agents live in the common
 area, and subagents follow their actual root conversation. Select a room label
 to enter it, then select a member to open the corresponding group chat.
+
+Selecting a 3D seat enters its room and brings the member into close view.
+Use the location trail or Escape to return from member to room to overview.
+Tab to the scene for keyboard controls: arrow keys rotate, +/− zoom, and Home
+resets the current view. Search fields and selectors keep their normal keys.
+Live updates preserve your camera angle and zoom. Switching to 2D preserves
+a room selection; an aggregate 2D selection is cleared when returning to 3D.
 
 The overview renders up to 24 rooms and 50 seats. Select a group to see a room
 omitted from the overview, or use 2D to see all matching members. Empty groups
@@ -15,14 +37,40 @@ English | [中文](README.zh.md)
 
 An independent DSH plugin that shows your DS Bot team in 2D and an original
 interactive 3D workspace. Select a teammate, inspect each active conversation,
-and open the original chat to send a message, stop work or answer an approval.
+send a quick message, or open the original chat for full replies and controls.
+
+## Quick messages
+
+With the companion DS Bot build exposing `messaging: 1`, Bot details include a
+plain-text composer (up to 4000 characters). Common-area and aggregate 2D
+selections send to that Bot's current private chat. Inside a group room, the
+message goes to the **group chat**, using its normal routing and @ mentions.
+The composer names its destination. Ordinary Agents and subagents still use
+the original conversation.
+
+**Accepted** confirms admission, not completion of the Bot's task. A timeout
+shows **Delivery is unconfirmed**; use **Check receipt** or the original
+conversation. Checking never resends the message. **New message** clears the
+draft and receipt display; it does not cancel the previous delivery.
+
+Drafts stay in plugin memory while switching members or rooms. Reloading keeps
+only command addresses in session storage so receipts can be checked again;
+it does not preserve message text. Read-only hosts cannot send. An older bridge
+continues to monitor and navigate, with quick messages disabled.
+
+The companion bridge persists command identifiers, scope, destination, payload
+hash and acceptance state before dispatch. It stores no message body in its
+receipt ledger. The preview keeps up to 2048 receipts and refuses new quick
+messages at the limit; the native conversation remains available. Do not delete
+the ledger to retry an uncertain request. Receipt recovery checks a bounded
+window of host evidence; missing evidence stays unconfirmed.
 
 ## MVP scope
 
 - Team search, group and state filters, active run and attention counts.
 - Concurrent own-chat and group runs stay separate under one Bot identity.
 - 3D selection, camera orbit and zoom, with equivalent 2D navigation.
-- Read-only monitoring; opening BotHub does not create a Bot or start a model.
+- Passive monitoring; opening BotHub does not create a Bot or start a model.
 - Unknown activity is labelled **Not observed**, never assumed idle.
 - Connection failures preserve the last snapshot and disable conversation
   actions; authentication failures clear the snapshot.
@@ -45,13 +93,15 @@ approval text stays in the native conversation.
 Details degrade explicitly when projections are unavailable. A legacy question
 already waiting before the monitor loads cannot be reconstructed as a live wait;
 its active tool remains visible. Nonresident sessions and historical outcomes,
-SSE replay, scene editing and direct execution controls remain outside this slice.
+SSE replay, scene editing and direct stop/approval controls remain outside this slice.
 
 ## Requirements and installation
 
 This preview targets the repository's DSH `0.2.1-rc.4` baseline and the **DS Bot
 checkout containing `src/host/monitor.js`**. An older published DS Bot will show
-the bridge-unavailable message. It does not patch DSH.
+the bridge-unavailable message. Quick messages also require the companion
+`src/host/monitor-commands.js` implementation; update **both plugins** for this
+slice. It does not patch DSH.
 
 1. Build this directory with Node.js 22.19+:
 
@@ -68,8 +118,8 @@ the bridge-unavailable message. It does not patch DSH.
 3. Open **BotHub** using the cube button beside the account button in the DS Bot
    sidebar. The ordinary DSH sidebar also has a BotHub panel entry.
    Choose **2D** if your device cannot create a WebGL renderer.
-4. Click a member, then **Open conversation**. Group work opens the group chat,
-   where DS Bot owns approvals and member controls.
+4. Click a Bot and use **Quick message**, or choose **Open conversation**.
+   Group work opens the group chat, where DS Bot owns approvals and member controls.
 
 This is the signed-in user's view of the current DS Bot team in that host.
 It is not a multi-tenant monitoring API, an agent-callable tool or an external
@@ -121,12 +171,25 @@ BotHub before returning to the original conversation.
 
 ## Development contract
 
+For a synthetic 20/50-member renderer benchmark, run
+`node scripts/build-scene-benchmark.mjs` in this directory. Serve the generated
+`../.playwright-mcp/bothub-scene-benchmark/` directory on a local test port.
+At a 1920px viewport and device pixel ratio 1, run
+`await runBenchmark({ count: 20 })` and then `await runBenchmark({ count: 50 })`
+in the browser console. The workload uses the actual renderer, original models
+and label layout, without a host or model. It reports CPU callback time, frame
+intervals, WebGL draw calls and resource cycles; CPU time is not GPU completion
+time. This is separate from the real-host integration and recording bench.
+
 - `client.js` is generated from `src/client/`; never edit it directly.
 - The host consumes the version-2 `botMonitor` service owned by DS Bot.
 - DS Bot declares the additive `bot.sidebar.action` list slot in its own
   sidebar footer; companion plugins can register there through `slots.inject`.
-- GET `api/bothub` returns the minimum current snapshot. POST accepts only
-  `{ action: "resolve", entityId, sessionId? }` to recheck a navigation target.
+- GET `api/bothub` returns the minimum current snapshot. POST accepts
+  `{ action: "resolve", entityId, sessionId?, groupId? }` for navigation,
+  `{ action: "send", commandId, workspaceId, entityId, groupId, text }` for an
+  explicit message, and `{ action: "receipt", commandId }` to check admission.
+  Commands require JSON and the host-authenticated user; groupId is null for private chat.
 - Resolution returns `{ target }`: a root session ID or the native
   `{ parentSessionId, childSessionId, mode }` address, validated by the host.
 - Group-member sessions resolve to the group chat. A Bot's default target is
@@ -140,3 +203,12 @@ See the [MVP design](../docs/plans/2026-11-07-dsh-bothub-mvp.md) and
 See the [Agent slice design](../docs/plans/2026-11-07-dsh-bothub-agents.md) for alpha.2.
 
 See the [activity slice design](../docs/plans/2026-11-07-dsh-bothub-activity.md) for alpha.3.
+
+See the [camera and keyboard slice](../docs/plans/2026-11-08-dsh-bothub-camera.md)
+for the subsequent workspace implementation.
+
+See the [furnished office slice](../docs/plans/2026-11-08-dsh-bothub-office.md)
+for the office layout, shared geometry, resource checks and local demonstration.
+
+See the [messaging slice](../docs/plans/2026-11-08-dsh-bothub-messaging.md)
+for admission, idempotency, recovery and verification.

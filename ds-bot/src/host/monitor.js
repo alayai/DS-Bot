@@ -1,8 +1,9 @@
 import { agentActivity, appendChildren, discoverChildren } from './monitor-agents.js'
 import { installActivity } from './monitor-activity.js'
+import { createMonitorCommands } from './monitor-commands.js'
 
-// A user-facing read model. Keep content and configuration out of this service:
-// consumers must open the real conversation to read or act on them.
+// Snapshots exclude content and configuration. Explicit commands use a separate
+// admission path; reading the monitor must never start a model or write a ledger.
 export function monitorSnapshot(rt, now = Date.now()) {
   const { state } = rt
   const approvals = rt.approvalsView()
@@ -57,6 +58,7 @@ export function monitorSnapshot(rt, now = Date.now()) {
     version: 2, capturedAt: now, workspaceId: state.workspaceId ?? null,
     readOnly: rt.readOnly() !== undefined,
     coverage: 'bot-agent-live', groupNavigation: true,
+    messaging: typeof rt.ctx?.get('sessionController')?.prompt === 'function' ? 1 : 0,
     entities, sessions, runs,
     groups: Object.values(state.rooms).map(room => ({
       id: room.id, name: room.name, members: [...room.members],
@@ -67,6 +69,7 @@ export function monitorSnapshot(rt, now = Date.now()) {
 export function install(rt) {
   rt.monitorHasQuestion = installActivity(rt.ctx)
   const lifetime = new AbortController()
+  const commands = createMonitorCommands(rt, lifetime.signal)
   let inFlight
   const collect = async () => {
     if (lifetime.signal.aborted) throw new Error('disposed')
@@ -89,6 +92,7 @@ export function install(rt) {
   }
   const service = {
     version: 2,
+    ...commands,
     async snapshot() {
       inFlight ??= collect().finally(() => { inFlight = undefined })
       return inFlight
@@ -114,5 +118,5 @@ export function install(rt) {
   rt.ctx.effect(() => {
     const dispose = rt.ctx.provide('botMonitor', service)
     return () => { lifetime.abort(); dispose() }
-  }, 'ds-bot: read-only monitor')
+  }, 'ds-bot: monitor bridge')
 }

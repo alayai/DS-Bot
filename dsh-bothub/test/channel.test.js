@@ -71,3 +71,25 @@ test('child navigation returns the host-validated native address intact', async 
   })
   assert.deepEqual(await response.json(), { target })
 })
+
+test('command transport requires JSON, bounds input, and only exposes safe command errors', async () => {
+  const post = body => new Request('http://localhost/api/bothub', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+  let value
+  const service = { version: 2, send: body => { value = body; return { status: 'accepted' } }, receipt: () => ({ status: 'unknown' }) }
+  assert.equal((await monitorRoute(post({ action: 'send', text: 'x'.repeat(65536) }), service)).status, 400)
+  assert.equal((await monitorRoute(post({ action: 'send' }), { version: 2 })).status, 503)
+  assert.equal((await monitorRoute(request({ action: 'send' }), service)).status, 400)
+  const body = { action: 'send', commandId: 'id', entityId: 'b', groupId: 'g', workspaceId: 'scope', text: 'hello', actor: 'admin' }
+  assert.equal((await monitorRoute(post(body), service)).status, 200)
+  assert.deepEqual(value, { commandId: 'id', entityId: 'b', groupId: 'g', workspaceId: 'scope', text: 'hello' })
+  service.send = () => { throw Object.assign(Error('private path'), { code: 'bothub/read-only' }) }
+  const response = await monitorRoute(post(body), service)
+  assert.equal(response.status, 403)
+  assert.deepEqual(await response.json(), { error: 'read-only' })
+  service.send = () => { throw Error('secret') }
+  assert.deepEqual(await (await monitorRoute(post(body), service)).json(), { error: 'unavailable' })
+  const cross = new Request(post(body), { headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' } })
+  assert.equal((await monitorRoute(cross, service)).status, 403)
+})

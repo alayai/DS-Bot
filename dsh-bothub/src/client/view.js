@@ -2,6 +2,8 @@ import { createElement as h, useEffect, useMemo, useRef, useState, useSyncExtern
 import { entityState, runLabel } from './model.js'
 import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } from './rooms.js'
 import { Scene } from './world.js'
+import { allowsShortcut } from './camera.js'
+import { Composer } from './composer.js'
 import css from './style.css'
 
 export function HubIcon({ size = 20 }) {
@@ -26,7 +28,7 @@ function Member({ entity, snapshot, groupId, selected, onSelect, t }) {
   count > 0 && h('span', { className: 'bh-count' }, count))
 }
 
-function Detail({ entity, snapshot, groupId, open, connected, onSelect, t }) {
+function Detail({ entity, snapshot, groupId, open, connected, onSelect, messages, openReceipt, t }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const mounted = useRef(true)
@@ -88,12 +90,14 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, t }) {
     h('span', { 'aria-hidden': true }, '↗'))),
     spaceState(entity, snapshot, groupId) === 'unknown' && h('p', { className: 'bh-note' }, t('unknownNote')),
     h('div', { className: 'bh-detail-bottom' },
+      entity.kind === 'bot' && h(Composer, { entity, snapshot, groupId, connected, messages, openReceipt, t }),
       error && h('p', { role: 'alert', className: 'bh-error' }, t(error)),
       h('button', { className: 'bh-primary', type: 'button', disabled: !canOpen || busy || !connected, onClick: () => go() }, t(busy ? 'opening' : room && entity.kind === 'bot' ? 'openGroup' : 'open')),
       h('p', { className: 'bh-note' }, t('native'))))
 }
 
-export function Hub({ store, open, t }) {
+export function Hub({ store, open, messages, openReceipt, t }) {
+  const root = useRef(null)
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [view, setView] = useState('3d')
   const [selected, setSelected] = useState(null)
@@ -107,16 +111,35 @@ export function Hub({ store, open, t }) {
   const visible = useMemo(() => data ? selectSpaceEntities(data, { query, status, groupId }) : [], [data, query, status, groupId])
   const layout = useMemo(() => data ? roomLayout(data, { query, status, groupId }) : null, [data, query, status, groupId])
   const entity = data?.entities.find(item => item.id === selected?.entityId && inSpace(item, data, selected.groupId))
-  const onSelect = (entityId, space) => setSelected({ entityId, groupId: space })
+  const onSelect = (entityId, space) => {
+    if (space !== undefined) setGroup(space ?? 'public')
+    setSelected({ entityId, groupId: space })
+  }
   const focus = space => { setGroup(space ?? 'public'); setSelected(null) }
   const overview = () => { setGroup('all'); setSelected(null) }
+  const clear = () => setSelected(null)
+  const navigate = action => {
+    action()
+    // Returning from a removed label/detail button must leave a keyboard target.
+    const target = root.current?.querySelector('.bh-scene') ?? root.current
+    target?.focus({ preventScroll: true })
+  }
   useEffect(() => {
     if (!data) return
     if (groupId != null && !data.groups.some(item => item.id === groupId)) overview()
-    else if (selected && !entity) setSelected(null)
-  }, [data, groupId, selected, entity])
+    else if (selected && (!entity || !visible.some(item => item.id === selected.entityId))) setSelected(null)
+  }, [data, groupId, selected, entity, visible])
   const attention = data?.entities.filter(item => entityState(item, data) === 'attention').length ?? '—'
-  return h('section', { className: 'bh-root', 'aria-label': 'BotHub' },
+  const roomName = groupId === null ? t('publicSpace') : data?.groups.find(item => item.id === groupId)?.name
+  return h('section', {
+    className: 'bh-root', ref: root, tabIndex: -1, 'aria-label': 'BotHub',
+    onKeyDown: event => {
+      if (event.key !== 'Escape' || !allowsShortcut(event) || (!selected && group === 'all')) return
+      event.preventDefault()
+      event.stopPropagation()
+      navigate(selected ? clear : overview)
+    },
+  },
     h('style', null, css),
     h('header', { className: 'bh-header' }, h('div', null, h('div', { className: 'bh-title' }, h(HubIcon, { size: 24 }), h('h1', null, 'BotHub')), h('p', null, t('subtitle'))),
       h('div', { className: 'bh-connection', role: 'status' }, h('i', { className: state.phase === 'live' ? 'bh-live-dot' : '' }), t(state.phase)),
@@ -129,22 +152,31 @@ export function Hub({ store, open, t }) {
     data?.readOnly && h('div', { className: 'bh-banner' }, t('readOnly')),
     data?.partial && h('div', { className: 'bh-banner', role: 'status' }, t('partial')),
     h('div', { className: 'bh-toolbar' },
-      h('input', { type: 'search', placeholder: t('search'), 'aria-label': t('search'), value: query, onChange: event => setQuery(event.target.value) }),
-      h('select', { value: status, 'aria-label': t('all'), onChange: event => setStatus(event.target.value) },
+      h('input', { type: 'search', placeholder: t('search'), 'aria-label': t('search'), value: query, onChange: event => { setQuery(event.target.value); clear() } }),
+      h('select', { value: status, 'aria-label': t('all'), onChange: event => { setStatus(event.target.value); clear() } },
         ...['all', 'running', 'attention', 'waiting', 'idle', 'unknown'].map(key => h('option', { key, value: key }, key === 'all' ? t('all') : stateLabel(key, t)))),
       h('select', { value: group, 'aria-label': t('groups'), onChange: event => { setGroup(event.target.value); setSelected(null) } },
         h('option', { value: 'all' }, t('groups')), h('option', { value: 'public' }, t('publicSpace')),
         ...(data?.groups ?? []).map(item => h('option', { key: item.id, value: item.id }, item.name))),
       h('div', { className: 'bh-switch', role: 'group', 'aria-label': t('scene') }, ...['2d', '3d'].map(mode => h('button', {
-        key: mode, type: 'button', 'aria-pressed': view === mode, disabled: mode === '3d' && sceneError, onClick: () => setView(mode),
+        key: mode, type: 'button', 'aria-pressed': view === mode, disabled: mode === '3d' && sceneError,
+        onClick: () => { if (mode === '3d' && selected?.groupId === undefined) clear(); setView(mode) },
       }, mode.toUpperCase())))),
+    data && h('nav', { className: 'bh-navigation', 'aria-label': t('navigation') },
+      h('button', { type: 'button', className: 'bh-crumb', 'aria-current': group === 'all' && !entity ? 'location' : undefined,
+        onClick: () => navigate(overview) }, t('allRooms')),
+      group !== 'all' && h('span', { 'aria-hidden': true }, '›'),
+      group !== 'all' && h('button', { type: 'button', className: 'bh-crumb', 'aria-current': !entity ? 'location' : undefined,
+        onClick: () => navigate(clear) }, roomName),
+      entity && h('span', { 'aria-hidden': true }, '›'),
+      entity && h('span', { className: 'bh-current', 'aria-current': 'location' }, entity.name)),
     sceneError && h('p', { className: 'bh-banner' }, t('webgl')),
     h('div', { className: 'bh-content' },
       h('main', { className: 'bh-workspace' },
         data && (view === '3d' ? layout.rooms.length > 0 : visible.length > 0)
-          ? view === '3d' ? h(Scene, { layout, selected, onSelect, onFocus: focus, onOverview: overview, focused: group !== 'all', t, onError: () => { setSceneError(true); setView('2d') } })
+          ? view === '3d' ? h(Scene, { layout, selected, onSelect, onFocus: focus, onClear: clear, focused: group !== 'all', t, onError: () => { setSceneError(true); setView('2d') } })
             : h('div', { className: 'bh-members' }, ...visible.map(item => h(Member, { key: item.id, entity: item, snapshot: data, groupId, selected: item.id === selected?.entityId, onSelect, t })))
           : h('div', { className: 'bh-empty' }, h(HubIcon, { size: 48 }), h('p', null, t(!data ? state.error ? state.error : 'loading' : data.entities.length ? 'empty' : 'noTeam')))),
-      h(Detail, { key: JSON.stringify([entity?.id, selected?.groupId]), entity, snapshot: data, groupId: selected?.groupId, connected: state.phase === 'live', open, onSelect, t })),
+      h(Detail, { key: JSON.stringify([entity?.id, selected?.groupId]), entity, snapshot: data, groupId: selected?.groupId, connected: state.phase === 'live', open, onSelect, messages, openReceipt, t })),
     h('footer', { className: 'bh-footer' }, data && `${t('updated')} ${new Date(data.capturedAt).toLocaleTimeString()}`, state.phase === 'stale' && ` · ${t('stale')}`))
 }

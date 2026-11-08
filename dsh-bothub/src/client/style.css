@@ -42,6 +42,10 @@
 .bh-switch { display: flex; padding: 2px; border: 1px solid var(--bh-line); border-radius: 10px; }
 .bh-switch button { background: none; border: 0; border-radius: 8px; padding: 4px 12px; min-height: 30px; }
 .bh-switch button[aria-pressed=true] { color: var(--bh-accent); background: var(--bh-card); }
+.bh-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 24px 12px; min-height: 40px; color: var(--bh-muted); }
+.bh-crumb { border: 0; border-radius: 6px; background: none; padding: 5px 8px; min-width: 0; overflow-wrap: anywhere; }
+.bh-crumb:hover { background: var(--bh-card); }
+.bh-current,.bh-crumb[aria-current] { color: var(--bh-ink); font-weight: 600; overflow-wrap: anywhere; }
 .bh-content { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--bh-line); }
 .bh-workspace { min-width: 0; flex: 1; position: relative; overflow: auto; }
 .bh-detail { width: 300px; flex-shrink: 0; padding: 24px 20px; border-left: 1px solid var(--bh-line); overflow: auto; }
@@ -49,6 +53,13 @@
 .bh-detail-top > p { color: var(--bh-muted); overflow-wrap: anywhere; }
 .bh-detail-bottom { margin-top: 24px; }
 .bh-detail-bottom p { margin-top: 12px; }
+.bh-composer { margin-bottom: 20px; }
+.bh-composer textarea { width: 100%; resize: vertical; min-height: 90px; max-height: 300px; border: 1px solid var(--bh-line); border-radius: 8px; padding: 10px; background: var(--bh-card); color: var(--bh-ink); font: inherit; }
+.bh-composer textarea:disabled { opacity: .6; }
+.bh-message-target { overflow-wrap: anywhere; margin: 8px 0 !important; }
+.bh-composer .bh-note { margin: 8px 0 !important; }
+.bh-compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 11px; }
+.bh-receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .bh-avatar { width: 48px; height: 48px; border: 1px solid var(--bh-line); border-radius: 12px; color: var(--bh-accent); display: grid; place-items: center; background: var(--bh-card); flex-shrink: 0; }
 .bh-avatar-large { width: 64px; height: 64px; margin-bottom: 8px; }
 .bh-status { display: inline-flex; align-items: center; gap: 6px; color: var(--bh-muted); font-size: 12px; }
@@ -76,15 +87,21 @@
 .bh-count { font-size: 11px; color: var(--bh-muted); }
 .bh-footer { min-height: 32px; padding: 6px 24px; border-top: 1px solid var(--bh-line); font-size: 11px; color: var(--bh-muted); }
 .bh-scene { height: 100%; min-height: 360px; position: relative; overflow: hidden; background: radial-gradient(ellipse at center,var(--bh-card),var(--bh-bg)); }
+.bh-scene:focus-visible { outline-offset: -3px; }
 .bh-scene canvas { width: 100%; height: 100%; display: block; touch-action: none; }
 .bh-scene-labels { position: absolute; inset: 0; pointer-events: none; }
 .bh-scene-label { position: absolute; top: 0; left: 0; pointer-events: auto; max-width: 150px; display: grid; gap: 2px; text-align: center; border: 1px solid var(--bh-line); background: var(--bh-bg); color: var(--bh-ink); padding: 4px 10px; border-radius: 8px; }
 .bh-scene-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .bh-scene-label .bh-status { font-size: 10px; justify-content: center; }
 .bh-scene-label[aria-pressed=true] { border-color: var(--bh-accent); }
+.bh-label-muted { opacity: 0; pointer-events: none; }
+.bh-scene-label:focus { opacity: 1; pointer-events: auto; z-index: 2; }
+.bh-quality { display: flex; align-items: center; gap: 8px; background: var(--bh-bg); border-radius: 8px; padding: 4px 8px; }
+.bh-quality select { min-height: 30px; max-width: 110px; border: 1px solid var(--bh-line); border-radius: 6px; background: var(--bh-card); }
 .bh-room-label { max-width: 220px; border-radius: 6px; padding: 6px 12px; border-color: var(--bh-accent); box-shadow: 0 2px 8px var(--bh-line); }
 .bh-room-label strong { font-weight: 600; }
 .bh-room-label > span { font-size: 10px; color: var(--bh-muted); }
+.bh-facility-label { position: absolute; top: 0; left: 0; padding: 3px 10px; border: 1px solid var(--bh-line); border-radius: 6px; background: var(--bh-bg); color: var(--bh-muted); font-size: 11px; white-space: nowrap; }
 .bh-space-context { margin-top: 12px !important; padding: 8px 10px; background: var(--bh-card); border-radius: 8px; overflow-wrap: anywhere; }
 .bh-scene-controls { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; pointer-events: none; }
 .bh-scene-controls > * { pointer-events: auto; }

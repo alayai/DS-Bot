@@ -1,4 +1,5 @@
 import { entityState } from './model.js'
+import { officeSize, stationSpacing } from './office-layout.js'
 
 export const spaceKey = groupId => JSON.stringify(['space', groupId])
 export const presenceKey = (entityId, groupId) => JSON.stringify([entityId, groupId])
@@ -54,7 +55,7 @@ export function roomLayout(snapshot, { query = '', status = 'all', groupId } = {
     const rows = Math.max(1, Math.ceil(entities.length / columns))
     return {
       ...room, total: room.entities.length, entities,
-      width: columns * 2.4 + 1.6, depth: rows * 2.6 + 2.6,
+      ...officeSize(columns, rows, room.groupId === null),
       columns, rows,
     }
   })
@@ -62,22 +63,25 @@ export function roomLayout(snapshot, { query = '', status = 'all', groupId } = {
   rooms.sort((a, b) => a.key.localeCompare(b.key))
   const columns = Math.max(1, Math.ceil(Math.sqrt(rooms.length)))
   const rows = Math.ceil(rooms.length / columns)
-  const cellWidth = Math.max(6, ...rooms.map(room => room.width)) + 2
-  const cellDepth = Math.max(5, ...rooms.map(room => room.depth)) + 2
+  const widths = Array.from({ length: columns }, (_, col) => Math.max(0, ...rooms.filter((_, i) => i % columns === col).map(room => room.width)))
+  const depths = Array.from({ length: rows }, (_, row) => Math.max(0, ...rooms.slice(row * columns, (row + 1) * columns).map(room => room.depth)))
+  const width = widths.reduce((sum, value) => sum + value, 0) + Math.max(0, columns - 1) * 2
+  const depth = depths.reduce((sum, value) => sum + value, 0) + Math.max(0, rows - 1) * 2
   const presences = []
   rooms.forEach((room, index) => {
-    room.x = (index % columns - (columns - 1) / 2) * cellWidth
-    room.z = (Math.floor(index / columns) - (rows - 1) / 2) * cellDepth
+    const col = index % columns, row = Math.floor(index / columns)
+    room.x = widths.slice(0, col).reduce((sum, value) => sum + value + 2, 0) + widths[col] / 2 - width / 2
+    room.z = depths.slice(0, row).reduce((sum, value) => sum + value + 2, 0) + depths[row] / 2 - depth / 2
     room.entities.forEach((entity, seat) => presences.push({
       key: presenceKey(entity.id, room.groupId), entity, groupId: room.groupId,
       state: spaceState(entity, snapshot, room.groupId),
-      x: room.x + (seat % room.columns - (room.columns - 1) / 2) * 2.4,
-      z: room.z + (Math.floor(seat / room.columns) - (room.rows - 1) / 2) * 2.6 + .4,
+      x: room.x + (seat % room.columns - (room.columns - 1) / 2) * stationSpacing.x,
+      z: room.z - room.depth / 2 + room.seatStart + Math.floor(seat / room.columns) * stationSpacing.z,
     }))
   })
   return {
     rooms, presences,
     truncated: allRooms.length > rooms.length || rooms.some(room => room.total > room.entities.length),
-    width: columns * cellWidth, depth: Math.max(1, rows) * cellDepth,
+    width: Math.max(8, width + 1), depth: Math.max(8, depth + 1),
   }
 }
