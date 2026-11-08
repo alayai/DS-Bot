@@ -4,7 +4,7 @@ import vm from 'node:vm'
 import { test } from 'node:test'
 import { clock, flush } from './helpers/clock.js'
 
-test('an authenticated Host reset restarts the bundled client after auth loss, and unload releases the stream', async () => {
+for (const streaming of [true, false]) test(`an authenticated Host reset restarts the bundled ${streaming ? 'stream' : 'polling'} client after auth loss and unload releases resources`, async () => {
   const time = clock(), callbacks = new Map(), disposers = [], slots = []
   let plugin, requests = 0, cancelled = 0
   const snapshot = { version: 2, workspaceId: 'team', readOnly: false, capturedAt: 1, entities: [], sessions: [], runs: [], groups: [] }
@@ -17,9 +17,11 @@ test('an authenticated Host reset restarts the bundled client after auth loss, a
       })
     } } },
     ...time.environment, AbortController, AbortSignal, TextEncoder, TextDecoder, Response,
+    navigator: streaming ? { locks: { request: (_name, _options, callback) => callback({}) } } : {},
     fetch: async () => {
       requests++
       if (requests === 1) return new Response('', { status: 401 })
+      if (!streaming) return new Response(JSON.stringify(snapshot), { headers: { 'content-type': 'application/json' } })
       return new Response(new ReadableStream({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(
@@ -38,16 +40,17 @@ test('an authenticated Host reset restarts the bundled client after auth loss, a
     slots: { inject(_name, callback) { callback() }, register(value) { slots.push(value) } },
   })
   const store = slots.find(slot => slot.key === 'bothub').inject().store
-  store.start(); await flush()
+  store.start(); await flush(); await time.advance(0)
   assert.equal(store.getSnapshot().error, 'unauthorized')
   assert.equal(time.timers.size, 0)
-  callbacks.get('connection/reset')(); await flush()
+  callbacks.get('connection/reset')(); await flush(); await time.advance(0)
   assert.equal(requests, 2)
   assert.equal(store.getSnapshot().phase, 'live')
+  assert.equal(store.getSnapshot().transport, streaming ? 'stream' : 'poll')
   assert.equal(store.getSnapshot().data.workspaceId, 'team')
   for (const dispose of disposers.reverse()) dispose()
   await flush()
-  assert.equal(cancelled, 1)
+  assert.equal(cancelled, streaming ? 1 : 0)
   assert.equal(callbacks.size, 0)
   assert.equal(time.timers.size, 0)
 })

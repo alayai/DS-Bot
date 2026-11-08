@@ -14,6 +14,12 @@ Up to four visible Bots refresh about once per second, with two captures at a
 time; the same Bot shares its picture across group rooms. No desktop is started
 or controlled by opening BotHub. Ordinary Agents keep the standby screen.
 
+In browsers with Web Locks, windows in the same storage partition take turns
+capturing the same Bot, normally sharing one capture per second. Each window
+receives its own authenticated picture; images are not broadcast or persisted.
+More windows mean slower refreshes per window. Closing or hiding a preview
+cancels its wait. Without lock support, the existing per-view limits still apply.
+
 Stopped or unconfigured desktops show an original standby animation. Normal
 plays it briefly when entering 3D; Lively loops it, and Quiet/system reduced
 motion keeps it still. A busy desktop briefly retains a marked last image, then
@@ -80,15 +86,18 @@ send a quick message, or open the original chat for full replies and controls.
 
 ## Live updates and recovery
 
-BotHub shares one authenticated event stream per open view. It receives a full
+BotHub allows one authenticated event stream per monitoring path in a browser
+storage partition. Other windows use authenticated snapshot polling, leaving
+connections available for desktop previews and actions. The stream receives a full
 baseline followed by changes to members, conversations, runs and groups.
 After a disconnect it resumes from the last applied version, or loads a new
 baseline if the host restarted or the replay window expired.
 
 While disconnected, the last known scene stays visible and actions are disabled.
 Hidden pages close their stream and reconnect when visible. If streaming is
-unavailable, a notice identifies periodic snapshot polling; BotHub automatically
-checks whether streaming has recovered. Authentication failures clear the view;
+unavailable or used by another window, a notice identifies periodic snapshot
+polling; BotHub automatically checks whether a stream can be opened. Browsers
+without Web Locks also use polling. Authentication failures clear the view;
 sign in again and use **Refresh**, or let DSH's newly authenticated connection
 trigger a fresh baseline.
 
@@ -163,7 +172,7 @@ approval text stays in the native conversation.
 Details degrade explicitly when projections are unavailable. A legacy question
 already waiting before the monitor loads cannot be reconstructed as a live wait;
 its active tool remains visible. Nonresident sessions and historical outcomes,
-SSE replay, scene editing and direct stop/approval controls remain outside this slice.
+scene editing and direct stop/approval controls remain outside this slice.
 
 ## Requirements and installation
 
@@ -268,6 +277,8 @@ time. This is separate from the real-host integration and recording bench.
   coalesced for 150 ms, with a 5-second reconciliation and 15-second heartbeat.
   Polling fallback checks every 2.5 seconds after success and probes the stream
   after 12 successful polls. Failures use jittered backoff up to 30 seconds.
+  Client Web Locks limit each storage partition/path to one reader; other views
+  poll immediately without reporting an artificial connection failure.
 - Resolution returns `{ target }`: a root session ID or the native
   `{ parentSessionId, childSessionId, mode }` address, validated by the host.
 - Group-member sessions resolve to the group chat. A Bot's default target is

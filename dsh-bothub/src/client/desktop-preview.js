@@ -1,3 +1,5 @@
+import { coordinateDesktopRequest } from './desktop-capture.js'
+
 const MAX_TARGETS = 4
 const FRAME_TTL = 5000
 
@@ -132,4 +134,3 @@ export function createDesktopPreview({
     dispose() { stop(); disposed = true; targets = [] },
   }
 }
-import { coordinateDesktopRequest } from './desktop-capture.js'

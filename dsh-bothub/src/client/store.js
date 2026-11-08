@@ -1,5 +1,6 @@
 import { acceptSnapshot } from './model.js'
 import { applyFrame, readMonitorStream } from './stream.js'
+import { coordinateMonitorStream } from './monitor-connection.js'
 
 export async function request(payload, signal) {
   const response = await fetch('api/bothub', {
@@ -20,9 +21,10 @@ export async function request(payload, signal) {
 }
 
 const fetchCurrent = signal => request(undefined, signal)
+const monitorStream = coordinateMonitorStream(readMonitorStream)
 
 export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = globalThis,
-  stream = fetchSnapshot === fetchCurrent ? readMonitorStream : null) {
+  stream = fetchSnapshot === fetchCurrent ? monitorStream : null) {
   let state = { data: null, phase: 'loading', error: null, transport: stream ? 'stream' : 'poll' }
   let active = false, generation = 0, timer, controller, watchdog, projection
   let failures = 0, retries = 0, fallbackPolls = 0, authBlocked = false
@@ -47,7 +49,7 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
     const ownController = new AbortController()
     controller = ownController
     const mode = stream && failures < 3 ? 'stream' : 'poll'
-    let halted = false
+    let halted = false, pollNow = false
     const current = () => active && generation === own && !ownController.signal.aborted
     const arm = delay => {
       environment.clearTimeout(watchdog)
@@ -94,7 +96,11 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
           .finally(() => ownController.signal.removeEventListener('abort', abort))
       })
     } catch (error) {
-      if (active && generation === own) {
+      if (active && generation === own && error.message === 'stream-occupied') {
+        failures = 3
+        retries = 0
+        pollNow = true
+      } else if (active && generation === own) {
         const code = ['unauthorized', 'incompatible', 'host-missing', 'bridge-missing'].includes(error.message) ? error.message : 'unavailable'
         const reset = code !== 'unavailable'
         if (reset || error.message === 'resync-required') projection = undefined
@@ -111,7 +117,7 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
         environment.clearTimeout(watchdog)
         watchdog = undefined
         if (active && visible() && !halted) {
-          const delay = retries ? Math.min(30000, 1000 * 2 ** Math.min(retries - 1, 5))
+          const delay = pollNow ? 0 : retries ? Math.min(30000, 1000 * 2 ** Math.min(retries - 1, 5))
             * (0.5 + (environment.random?.() ?? Math.random()) * 0.5) : 2500
           timer = environment.setTimeout(attempt, delay)
         }

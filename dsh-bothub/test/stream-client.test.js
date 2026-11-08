@@ -82,6 +82,26 @@ function ready(connection, baseline = initial()) {
   connection.receive('ready', { ...baseline, capturedAt: baseline.snapshot.capturedAt })
 }
 
+test('an occupied stream slot polls immediately without a connection error and later retries the slot', async () => {
+  const f = storeFixture(), seen = [], stop = f.store.start()
+  f.store.subscribe(() => seen.push(f.store.getSnapshot()))
+  try {
+    f.connections[0].reject(new Error('stream-occupied'))
+    await flush(); await f.time.advance(0)
+    assert.equal(f.reads, 1)
+    assert.equal(f.store.getSnapshot().phase, 'live')
+    assert.equal(f.store.getSnapshot().transport, 'poll')
+    assert.ok(seen.every(state => state.error === null && state.phase !== 'stale'))
+    await f.time.advance(30000)
+    assert.equal(f.connections.length, 2)
+    f.connections[1].reject(new Error('stream-occupied'))
+    await flush(); await f.time.advance(0)
+    assert.equal(f.store.getSnapshot().phase, 'live')
+    assert.ok(seen.every(state => state.phase !== 'stale'))
+  } finally { stop() }
+  assert.equal(f.time.timers.size, 0)
+})
+
 test('store disables stale actions, resumes only after a ready watermark and excludes late generations', async () => {
   const f = storeFixture(), stop = f.store.start()
   try {
