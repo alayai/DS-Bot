@@ -1,6 +1,7 @@
 import { agentActivity, appendChildren, discoverChildren } from './monitor-agents.js'
 import { installActivity } from './monitor-activity.js'
 import { createMonitorCommands } from './monitor-commands.js'
+import { installRecent, readRecent } from './monitor-recent.js'
 
 // Snapshots exclude content and configuration. Explicit commands use a separate
 // admission path; reading the monitor must never start a model or write a ledger.
@@ -22,6 +23,7 @@ export function monitorSnapshot(rt, now = Date.now()) {
       openSessionId: groupId ?? sessionId,
       status: running ? 'running' : live ? 'idle' : 'unknown',
       blockers,
+      ...readRecent(rt.ctx, sessionId),
     })
     if (running) runs.push({
       id: `${sessionId}:${live.turn}`, entityId, sessionId, groupId: groupId ?? null,
@@ -68,6 +70,7 @@ export function monitorSnapshot(rt, now = Date.now()) {
 
 export function install(rt) {
   rt.monitorHasQuestion = installActivity(rt.ctx)
+  installRecent(rt.ctx)
   const lifetime = new AbortController()
   const commands = createMonitorCommands(rt, lifetime.signal)
   let inFlight

@@ -55,6 +55,17 @@ stop_one() {
 
 ensure_profile() {
   profile="$HOME_DIR/profiles/web"
+  if [ -n "${BENCH_BOT_PACKAGE:-}" ]; then
+    node --input-type=module - "$profile/package.json" "$BENCH_BOT_PACKAGE" <<'JS'
+import { readFileSync, existsSync } from 'node:fs'
+const [profile, archive] = process.argv.slice(2)
+if (!archive.startsWith('/') || !archive.endsWith('.tgz') || !existsSync(archive)
+  || JSON.parse(readFileSync(profile, 'utf8')).dependencies?.['ds-bot'] !== `file:${archive}`) {
+  throw new Error('Packaged bench requires an existing profile with the exact DS Bot archive')
+}
+JS
+    return
+  fi
   if [ -f "$profile/package.json" ] && grep -q "\"link:$PLUGIN\"" "$profile/package.json"; then return 0; fi
   mkdir -p "$profile"
   cat > "$profile/package.json" <<EOF

@@ -1,4 +1,5 @@
 import { readActivity } from './monitor-activity.js'
+import { readRecent } from './monitor-recent.js'
 
 const MAX_CHILDREN = 64
 const MAX_DEPTH = 4
@@ -12,6 +13,7 @@ export function agentActivity(ctx, entityId, sessionId, groupId = null, hasQuest
     session: {
       id: sessionId, entityId, groupId, openSessionId: sessionId, status,
       blockers: details.blockers, pendingInput: details.pendingInput, detailState: details.detailState,
+      ...readRecent(ctx, sessionId),
     },
     run: status === 'running' ? {
       id: `${sessionId}:${details.turn ?? 'active'}`, entityId, sessionId, groupId,
