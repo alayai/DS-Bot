@@ -10,7 +10,9 @@ export const en = {
   open: 'Open conversation', opening: 'Opening…', main: 'Main Bot', private: 'Private',
   tool: 'Using a tool', thinking: 'Thinking', approval: 'Waiting for approval', input: 'Waiting for your answer',
   own: 'Own chat', group: 'Group', bot: 'Bot', agent: 'DSH Agent', readOnly: 'Read-only host',
-  unavailable: 'Could not reach the team. Check that DS Bot and its monitor bridge are enabled.',
+  unavailable: 'Could not load the team. Check the DSH connection, then refresh.',
+  'bridge-missing': 'This DS Bot installation has no monitor bridge. Install the companion DS Bot package from the BotHub release, enable both plugins, then restart DSH.',
+  'host-missing': 'The BotHub host plugin is not available. Enable BotHub in this DSH profile, then restart DSH.',
   incompatible: 'The monitor versions do not match. Update DS Bot and BotHub together.',
   unauthorized: 'Sign in to DSH to view this team.',
   'not-found': 'This conversation is no longer available. Refresh the team.',
@@ -27,6 +29,11 @@ export const en = {
   scene: 'Interactive team workspace', sceneHelp: 'Drag to orbit · Scroll to zoom · Select a teammate',
   limit: 'Showing the first 50 members in 3D. Use search or 2D to see everyone.',
   seconds: 's', minutes: 'm', active: 'Active', noRuns: 'No observed active run',
+  publicSpace: 'Common area · Direct chats & Agents', allRooms: 'All rooms',
+  enterRoom: 'Enter room', openGroup: 'Open group chat',
+  groupUnavailable: 'Update the companion DS Bot to open a group before its first observed run.',
+  roomHelp: 'One group, one room · Select a room to enter · Drag to orbit · Scroll to zoom',
+  roomLimit: 'Showing up to 24 rooms and 50 seats. Select a group to see its room, or use 2D.',
 }
 
 export const zh = {
@@ -41,7 +48,9 @@ export const zh = {
   open: '打开会话', opening: '打开中…', main: '主 Bot', private: '隐私',
   tool: '使用工具', thinking: '思考中', approval: '等待批准', input: '等待回答',
   own: '私聊', group: '群聊', bot: 'Bot', agent: 'DSH Agent', readOnly: '只读主机',
-  unavailable: '无法连接团队，请检查 DS Bot 及其监控桥接是否已启用。',
+  unavailable: '无法加载团队，请检查 DSH 连接后刷新。',
+  'bridge-missing': '当前 DS Bot 未提供监控桥接。请安装 BotHub 配套的 DS Bot 安装包，启用两个插件后重启 DSH。',
+  'host-missing': 'BotHub 服务端尚未加载。请在当前 DSH 配置中启用 BotHub 后重启 DSH。',
   incompatible: '监控协议版本不匹配，请一同更新 DS Bot 和 BotHub。',
   unauthorized: '请先登录 DSH 再查看团队。',
   'not-found': '此会话已不可用，请刷新团队。',
@@ -58,4 +67,9 @@ export const zh = {
   scene: '交互式团队工作区', sceneHelp: '拖动旋转 · 滚轮缩放 · 点击选择成员',
   limit: '3D 只显示前 50 位成员，可搜索或切换 2D 查看全部。',
   seconds: '秒', minutes: '分', active: '执行中', noRuns: '暂无观测到的执行',
+  publicSpace: '公共区 · 私聊与 Agent', allRooms: '全部房间',
+  enterRoom: '进入房间', openGroup: '打开群聊',
+  groupUnavailable: '请更新配套 DS Bot，以打开尚无执行记录的群聊。',
+  roomHelp: '一个群，一个房间 · 点击房间进入 · 拖动旋转 · 滚轮缩放',
+  roomLimit: '最多显示 24 个房间和 50 个席位，可选择群查看对应房间，或切换 2D。',
 }

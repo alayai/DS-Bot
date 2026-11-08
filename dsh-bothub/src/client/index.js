@@ -9,8 +9,8 @@ export function apply(ctx) {
   const store = createMonitorStore()
   ctx.effect(() => ctx.locale.register('bothub', { en, zh }), 'bothub: language')
   ctx.effect(() => () => store.stop(), 'bothub: monitor disposal')
-  const open = async (entityId, sessionId) => {
-    const value = await request({ action: 'resolve', entityId, ...(sessionId ? { sessionId } : {}) }, AbortSignal.timeout(10000))
+  const open = async (entityId, sessionId, groupId) => {
+    const value = await request({ action: 'resolve', entityId, ...(sessionId ? { sessionId } : {}), ...(groupId ? { groupId } : {}) }, AbortSignal.timeout(10000))
     ctx.uiWorkspace.openSession(value.target)
   }
   ctx.slots.inject('main', () => ctx.slots.register({

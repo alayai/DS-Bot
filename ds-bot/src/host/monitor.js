@@ -56,7 +56,7 @@ export function monitorSnapshot(rt, now = Date.now()) {
   return {
     version: 2, capturedAt: now, workspaceId: state.workspaceId ?? null,
     readOnly: rt.readOnly() !== undefined,
-    coverage: 'bot-agent-live',
+    coverage: 'bot-agent-live', groupNavigation: true,
     entities, sessions, runs,
     groups: Object.values(state.rooms).map(room => ({
       id: room.id, name: room.name, members: [...room.members],
@@ -93,12 +93,20 @@ export function install(rt) {
       inFlight ??= collect().finally(() => { inFlight = undefined })
       return inFlight
     },
-    async resolve(entityId, sessionId) {
+    async resolve(entityId, sessionId, groupId) {
       // Navigation always performs a fresh catalog read, never a cached poll.
       if (inFlight) await inFlight
       const snapshot = await service.snapshot()
       const entity = snapshot.entities.find(item => item.id === entityId)
       if (!entity) return null
+      if (groupId !== undefined) {
+        const group = snapshot.groups.find(item => item.id === groupId)
+        if (!group?.members.includes(entity.rootEntityId ?? entity.id)) return null
+        if (entity.kind === 'bot' && sessionId === undefined) return group.id
+        const session = snapshot.sessions.find(item => item.entityId === entityId
+          && item.id === (sessionId ?? entity.sessionId) && item.groupId === groupId)
+        return session?.target ?? session?.openSessionId ?? null
+      }
       const session = snapshot.sessions.find(item => item.entityId === entityId && item.id === (sessionId ?? entity.sessionId))
       return session?.target ?? session?.openSessionId ?? null
     },

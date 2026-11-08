@@ -8,8 +8,11 @@ export async function request(payload, signal) {
     cache: 'no-store',
   })
   if (!response.ok) {
+    const detail = response.status === 503 ? await response.json().catch(() => null) : null
     const code = response.status === 401 || response.status === 403 ? 'unauthorized'
-      : response.status === 409 ? 'incompatible' : response.status === 404 ? 'not-found' : 'unavailable'
+      : response.status === 409 ? 'incompatible'
+        : response.status === 404 ? payload ? 'not-found' : 'host-missing'
+          : detail?.error === 'bridge-missing' ? 'bridge-missing' : 'unavailable'
     throw new Error(code)
   }
   return response.json()
@@ -40,8 +43,9 @@ export function createMonitorStore(fetchSnapshot = signal => request(undefined, 
       if (active && generation === own) publish({ data, phase: 'live', error: null })
     } catch (error) {
       if (active && generation === own) {
-        const code = ['unauthorized', 'incompatible', 'not-found'].includes(error.message) ? error.message : 'unavailable'
-        publish({ data: code === 'unauthorized' || code === 'incompatible' ? null : state.data, phase: 'stale', error: code })
+        const code = ['unauthorized', 'incompatible', 'not-found', 'host-missing', 'bridge-missing'].includes(error.message) ? error.message : 'unavailable'
+        const reset = ['unauthorized', 'incompatible', 'bridge-missing', 'host-missing'].includes(code)
+        publish({ data: reset ? null : state.data, phase: 'stale', error: code })
       }
     } finally {
       environment.clearTimeout(timeout)

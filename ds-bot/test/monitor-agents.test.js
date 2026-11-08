@@ -85,6 +85,26 @@ test('navigation rechecks parent membership and does not accept arbitrary sessio
   assert.equal(await service.resolve('subagent:a'), null)
 })
 
+test('group navigation works before a member runs and rechecks group and context membership', async t => {
+  const ctx = context(async () => [])
+  const rt = runtime(ctx)
+  rt.state.rooms = { g: { id: 'g', name: 'Group', members: ['bot'] }, other: { id: 'other', name: 'Other', members: ['bot'] } }
+  install(rt)
+  t.after(() => ctx.dispose())
+  const service = ctx.get('botMonitor')
+  assert.equal((await service.snapshot()).groupNavigation, true)
+  assert.equal(await service.resolve('bot', undefined, 'g'), 'g')
+  assert.equal(await service.resolve('bot', 'root', 'g'), null)
+  rt.groupOwners.set('gs', { botId: 'bot', roomId: 'g' })
+  assert.equal(await service.resolve('bot', 'gs', 'g'), 'g')
+  assert.equal(await service.resolve('bot', 'gs', 'other'), null)
+  rt.state.rooms.g.members = []
+  assert.equal(await service.resolve('bot', undefined, 'g'), null)
+  delete rt.state.rooms.other
+  assert.equal(await service.resolve('bot', undefined, 'other'), null)
+  assert.equal(await service.resolve('bot'), 'root')
+})
+
 test('concurrent polls share discovery, disposal cancels work and removes the service', async () => {
   let release
   let reads = 0

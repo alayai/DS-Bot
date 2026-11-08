@@ -1,5 +1,16 @@
 # BotHub
 
+The 3D view now gives each group its own room. A Bot that belongs to several groups
+has a seat in each room; team totals still count that Bot once. Each seat shows
+only that group's activity. Direct chats and ordinary Agents live in the common
+area, and subagents follow their actual root conversation. Select a room label
+to enter it, then select a member to open the corresponding group chat.
+
+The overview renders up to 24 rooms and 50 seats. Select a group to see a room
+omitted from the overview, or use 2D to see all matching members. Empty groups
+remain visible. Group navigation before the first observed run requires the
+companion DS Bot workspace build with `groupNavigation` support.
+
 English | [中文](README.zh.md)
 
 An independent DSH plugin that shows your DS Bot team in 2D and an original
@@ -67,7 +78,7 @@ requests. No new server or port is required.
 
 Disabling BotHub removes its channel, UI and renderer. It does not stop the team.
 Monitoring polls every 1.5 seconds while the panel is visible. Hidden pages do
-not draw or start additional polls. 3D displays up to 50 filtered members; 2D
+not draw or start additional polls. 3D displays up to 50 contextual seats; 2D
 lists all of them. No external assets or CDN requests are used.
 
 ## Isolated development bench

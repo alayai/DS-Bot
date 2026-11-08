@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createMonitorStore } from '../src/client/store.js'
+import { createMonitorStore, request } from '../src/client/store.js'
 
 const snapshot = { version: 2, capturedAt: 1, entities: [], sessions: [], runs: [], groups: [] }
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -62,4 +62,39 @@ test('unmount clears request timers even when a transport ignores cancellation',
   stop()
   assert.equal(signal.aborted, true)
   assert.equal(timers.size, 0)
+})
+
+test('known installation errors stay distinct without displaying untrusted server messages', async t => {
+  let status = 503
+  let body = { error: 'bridge-missing' }
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(body), { status }))
+  await assert.rejects(request(), /^Error: bridge-missing$/)
+  body = { error: 'private server details' }
+  await assert.rejects(request(), /^Error: unavailable$/)
+  status = 401
+  await assert.rejects(request(), /^Error: unauthorized$/)
+  status = 409
+  await assert.rejects(request(), /^Error: incompatible$/)
+  status = 404
+  await assert.rejects(request(), /^Error: host-missing$/)
+  await assert.rejects(request({ action: 'resolve', entityId: 'b' }), /^Error: not-found$/)
+})
+
+test('bridge removal clears stale room membership and reinstatement loads a fresh snapshot', async () => {
+  let missing = false
+  const store = createMonitorStore(async () => {
+    if (missing) throw new Error('bridge-missing')
+    return snapshot
+  })
+  const stop = store.start()
+  try {
+    await flush()
+    missing = true
+    await store.refresh()
+    assert.equal(store.getSnapshot().data, null)
+    assert.equal(store.getSnapshot().error, 'bridge-missing')
+    missing = false
+    await store.refresh()
+    assert.equal(store.getSnapshot().phase, 'live')
+  } finally { stop() }
 })

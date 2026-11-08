@@ -82,6 +82,10 @@
 .bh-scene-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .bh-scene-label .bh-status { font-size: 10px; justify-content: center; }
 .bh-scene-label[aria-pressed=true] { border-color: var(--bh-accent); }
+.bh-room-label { max-width: 220px; border-radius: 6px; padding: 6px 12px; border-color: var(--bh-accent); box-shadow: 0 2px 8px var(--bh-line); }
+.bh-room-label strong { font-weight: 600; }
+.bh-room-label > span { font-size: 10px; color: var(--bh-muted); }
+.bh-space-context { margin-top: 12px !important; padding: 8px 10px; background: var(--bh-card); border-radius: 8px; overflow-wrap: anywhere; }
 .bh-scene-controls { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; pointer-events: none; }
 .bh-scene-controls > * { pointer-events: auto; }
 .bh-scene-help { position: absolute; bottom: 16px; left: 16px; right: 16px; font-size: 11px; color: var(--bh-muted); pointer-events: none; text-align: center; }

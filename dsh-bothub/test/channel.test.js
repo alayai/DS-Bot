@@ -8,7 +8,9 @@ const request = body => new Request('http://localhost/api/bothub', body ? {
 } : {})
 
 test('route reports a missing or incompatible bridge without exposing server errors', async () => {
-  assert.equal((await monitorRoute(request())).status, 503)
+  const missing = await monitorRoute(request())
+  assert.equal(missing.status, 503)
+  assert.deepEqual(await missing.json(), { error: 'bridge-missing' })
   assert.equal((await monitorRoute(request(), { version: 99 })).status, 409)
   const result = await monitorRoute(request(), { version: 2, snapshot: () => { throw new Error('secret path') } })
   assert.equal(result.status, 503)
@@ -24,7 +26,7 @@ test('route only accepts reads and explicitly scoped conversation resolution', a
   assert.deepEqual(await (await monitorRoute(request(), service)).json(), { version: 2 })
   const resolved = await monitorRoute(request({ action: 'resolve', entityId: 'b', sessionId: 'old' }), service)
   assert.deepEqual(await resolved.json(), { target: 'current' })
-  assert.deepEqual(calls, [['b', 'old']])
+  assert.deepEqual(calls, [['b', 'old', undefined]])
   assert.equal((await monitorRoute(request({ action: 'send', entityId: 'b' }), service)).status, 400)
   assert.equal((await monitorRoute(request({ action: 'resolve', entityId: 'missing' }), service)).status, 404)
   assert.equal((await monitorRoute(request({ action: 'resolve', entityId: [] }), service)).status, 400)
@@ -35,6 +37,17 @@ test('route only accepts reads and explicitly scoped conversation resolution', a
     body: JSON.stringify({ action: 'resolve', entityId: 'b' }),
   })
   assert.equal((await monitorRoute(normalized, service)).status, 200)
+})
+
+test('room navigation carries a bounded group identity to the bridge', async () => {
+  let args
+  const service = { version: 2, resolve: (...value) => { args = value; return 'group' } }
+  const response = await monitorRoute(request({ action: 'resolve', entityId: 'b', groupId: 'group' }), service)
+  assert.deepEqual(await response.json(), { target: 'group' })
+  assert.deepEqual(args, ['b', undefined, 'group'])
+  for (const groupId of ['', null, [], 'a'.repeat(257)]) {
+    assert.equal((await monitorRoute(request({ action: 'resolve', entityId: 'b', groupId }), service)).status, 400)
+  }
 })
 
 test('plugin registers on the authenticated connection service and disposes its route', () => {
