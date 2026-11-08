@@ -1811,3 +1811,58 @@ test('public storage requests cannot supply portable host paths or pause the des
   await assert.rejects(h.service.storageStart({ method: 'portable-export', botId: 'a', expectedGeneration: record.generation }), fails('invalid'))
   assert.equal((await h.service.state()).computers[0].control, 'none')
 })
+
+
+test('passive monitor previews preserve model observations and do not postpone idle shutdown', async t => {
+  let clock = 0
+  const h = await setup(t, { options: { now: () => clock } })
+  const record = await h.start()
+  const state = await h.service.state()
+  assert.equal(state.passivePreview, true)
+  await h.service.setResourceLimits({ expectedRevision: state.revision, limits: { ...state.limits, idleStopMs: 60_000 } })
+  const observation = await h.observe()
+  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
+  await h.service.preview(args)
+  assert.equal((await h.service.act(h.click(observation), h.exec())).outcome, 'completed')
+  await h.service.endTurn('a', 1)
+  clock = 30_000
+  await h.service.preview(args)
+  clock = 59_000
+  await h.service.preview(args)
+  clock = 61_000
+  await h.service.reapIdle()
+  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
+  await assert.rejects(h.service.preview(args), fails('not-ready'))
+  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
+})
+
+test('passive preview cannot carry human authority and still checks binding generation', async t => {
+  const h = await setup(t)
+  const record = await h.start()
+  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
+  await assert.rejects(h.service.preview({ ...args, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
+  const result = await h.manage('takeover')
+  await assert.rejects(h.service.preview({ ...args, controlToken: result.controlToken }), fails('invalid'))
+})
+
+
+test('cancelling a passive preview aborts capture and releases its lane', async t => {
+  const h = await setup(t)
+  const record = await h.start()
+  const original = h.provider.preview.bind(h.provider)
+  let entered
+  const started = new Promise(resolve => { entered = resolve })
+  h.provider.preview = (_record, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    entered()
+  })
+  const controller = new AbortController()
+  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
+  const request = h.service.preview(args, controller.signal)
+  const rejected = assert.rejects(request, error => error.name === 'AbortError')
+  await started
+  controller.abort()
+  await rejected
+  h.provider.preview = original
+  assert.equal((await h.service.preview(args)).width, 64)
+})

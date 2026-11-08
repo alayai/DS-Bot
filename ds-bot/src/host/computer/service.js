@@ -274,7 +274,7 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
           warnings: resourceWarnings(measurements.get(record.id).storage, limits()) } : null,
       })
     }
-    return { revision: stored.revision, computers, images: provider.images ?? [], limits: limits(), quotaBackend: provider.quotaBackend ?? null, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list(),
+    return { passivePreview: typeof provider.preview === 'function', revision: stored.revision, computers, images: provider.images ?? [], limits: limits(), quotaBackend: provider.quotaBackend ?? null, storageAvailable: typeof provider.checkpoint === 'function', checkpoints: Object.values(stored.checkpoints ?? {}), handoffs: await handoffs.list(),
       recovery: { ...recovery, supported: recoverySupported, disconnected: provider.connectionState?.() === 'disconnected' } }
   }
   async function drainOperations(operations, signal) {
@@ -739,7 +739,8 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
     if (record.grant === 'off') throw refused('off', 'Enable this desktop first.')
     return record
   }
-  async function preview(args) {
+  async function preview(args, signal) {
+    if (args.passive === true && args.controlToken !== undefined) throw refused('invalid', 'Passive previews cannot carry control authority.')
     const record = await userRecord(args)
     const ticket = args.controlToken ? human(record, args.controlToken) : null
     if (!ticket && typeof provider.preview !== 'function') throw refused('unavailable', 'Desktop viewing is unavailable.')
@@ -760,10 +761,12 @@ export function createComputerService(rt, injectedProvider, { now, ttl } = {}) {
       }
       return { frameId, width: frame.width, height: frame.height, data: frame.data.toString('base64'), validForMs: frameTtl }
     }
-    if (!shared) return exclusive(record, undefined, capture)
+    // Background monitor screens must not postpone automatic idle shutdown.
+    if (!shared) return exclusive(record, signal, capture, args.passive !== true)
     pending.preview = Promise.resolve().then(() => {
-      pending.signal.throwIfAborted()
-      return capture(pending.signal)
+      const combined = signal ? AbortSignal.any([pending.signal, signal]) : pending.signal
+      combined.throwIfAborted()
+      return capture(combined)
     }).finally(() => { pending.preview = null })
     return pending.preview
   }

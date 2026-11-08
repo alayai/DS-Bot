@@ -592,7 +592,7 @@ export function install(rt) {
           return ok(await rt.computer.reconnect(body))
         case 'computer-preview':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
-          return ok(await rt.computer.preview(body))
+          return ok(await rt.computer.preview(body, signal))
         case 'computer-input':
           if (!rt.computer) return fail('Computers are not enabled.', 'bot/computer-off')
           return ok(await rt.computer.humanAct(body))
