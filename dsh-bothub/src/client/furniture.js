@@ -153,7 +153,6 @@ export function createOfficeEnvironment(layout, assets) {
     rod('metal', [-.12, .91, -.94], [-.12, 1.15, -.94], .035)
     box('dark', -.12, 1.35, -.94, 1, .59, .07)
     box('screen', -.12, 1.36, -.899, .91, .49, .01)
-    for (let row = 0; row < 5; row++) box('screenLine', -.27 + row % 2 * .08, 1.51 - row * .075, -.891, .45 - row % 3 * .07, .018, .005)
     box('dark', -.2, .893, -.3, .68, .035, .25)
     for (let row = 0; row < 3; row++) box('metal', -.2, .915, -.38 + row * .065, .59, .008, .015)
     box('carpet', .4, .879, -.3, .28, .015, .28)
@@ -176,6 +175,17 @@ export function createOfficeEnvironment(layout, assets) {
       rod('metal', [x, .5, .45], [x, .76, .45], .022)
       box('dark', x, .77, .35, .085, .055, .4)
     }
+  }
+  const water = () => {
+    box('white', 0, .52, 0, .58, 1.04, .6)
+    box('dark', 0, .8, .305, .4, .3, .025)
+    cylinder('blue', 0, 1.32, 0, .22, .5)
+    cylinder('white', 0, 1.08, 0, .14, .07)
+    for (const x of [-.1, .1]) {
+      sphere(x < 0 ? 'blue' : 'red', x, .92, .34, .035)
+      rod('metal', [x, .89, .33], [x, .84, .4], .02)
+    }
+    box('metal', 0, .62, .36, .42, .035, .24)
   }
   const coffee = () => {
     box('oak', 0, .5, 0, 5.2, 1, 1.15)
@@ -296,7 +306,7 @@ export function createOfficeEnvironment(layout, assets) {
     rod('dark', [clockX, 1.87, back + .19], [clockX + .12, 1.81, back + .19], .012)
     for (const fixture of roomFixtures(room)) at(fixture.x, fixture.z, () => {
       if (fixture.kind === 'shelf') shelf(fixture.width)
-      else ({ cabinet, whiteboard, plant, coffee, snooker, lounge, fitness })[fixture.kind]()
+      else ({ cabinet, whiteboard, plant, water, coffee, snooker, lounge, fitness })[fixture.kind]()
     })
   }
   for (const seat of layout.presences) {

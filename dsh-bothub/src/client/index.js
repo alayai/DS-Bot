@@ -12,6 +12,9 @@ export function apply(ctx) {
   ctx.effect(() => ctx.locale.register('bothub', { en, zh }), 'bothub: language')
   ctx.effect(() => () => store.stop(), 'bothub: monitor disposal')
   ctx.effect(() => () => messages.dispose(), 'bothub: message disposal')
+  // A newly authenticated DSH generation must recheck capabilities even if the
+  // previous HTTP attempt stopped retrying during Host startup.
+  ctx.effect(() => ctx.on('connection/reset', () => { void store.refresh() }), 'bothub: host reconnection')
   const open = async (entityId, sessionId, groupId) => {
     const value = await request({ action: 'resolve', entityId, ...(sessionId ? { sessionId } : {}), ...(groupId ? { groupId } : {}) }, AbortSignal.timeout(10000))
     ctx.uiWorkspace.openSession(value.target)

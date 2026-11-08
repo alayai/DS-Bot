@@ -52,6 +52,29 @@
 .bh-detail-top { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .bh-detail-top > p { color: var(--bh-muted); overflow-wrap: anywhere; }
 .bh-detail-bottom { margin-top: 24px; }
+.bh-view-desktop { margin-bottom: 12px; width: 100%; }
+.bh-desktop-viewer {
+  width: min(1100px, calc(100vw - 32px)); height: min(800px, calc(100dvh - 32px));
+  max-width: none; max-height: none; margin: auto; padding: 0;
+  color: var(--bh-ink); background: var(--bh-bg); border: .5px solid var(--bh-line);
+  border-radius: 16px; box-shadow: 0 24px 80px rgba(0,0,0,.24);
+  overflow: hidden; opacity: 1; animation: bh-desktop-in .16s linear;
+}
+.bh-desktop-viewer[open] { display: flex; flex-direction: column; }
+.bh-desktop-viewer::backdrop { background: rgba(0,0,0,.32); animation: bh-desktop-in .16s linear; }
+.bh-desktop-viewer.bh-closing,.bh-desktop-viewer.bh-closing::backdrop { opacity: 0; transition: opacity .16s linear; }
+.bh-desktop-header,.bh-desktop-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; }
+.bh-desktop-header h2 { min-width: 0; }
+.bh-desktop-header button { flex-shrink: 0; }
+.bh-desktop-toolbar { flex-wrap: wrap; border-top: 1px solid var(--bh-line); color: var(--bh-muted); }
+.bh-desktop-viewport { position: relative; flex: 1; min-height: 0; overflow: auto; background: #050b10; }
+.bh-desktop-viewport canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.bh-desktop-viewport canvas[hidden] { display: none; }
+.bh-desktop-actual canvas { width: auto; height: auto; max-width: none; max-height: none; }
+.bh-desktop-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; width: 100%; height: 100%; color: #c5e2e7; }
+.bh-desktop-placeholder > span { font-size: 48px; color: #75b8a1; }
+.bh-desktop-hint { padding: 12px 20px; color: var(--bh-muted); font-size: 12px; }
+@keyframes bh-desktop-in { from { opacity: 0; } to { opacity: 1; } }
 .bh-detail-bottom p { margin-top: 12px; }
 .bh-composer { margin-bottom: 20px; }
 .bh-composer textarea { width: 100%; resize: vertical; min-height: 90px; max-height: 300px; border: 1px solid var(--bh-line); border-radius: 8px; padding: 10px; background: var(--bh-card); color: var(--bh-ink); font: inherit; }
@@ -93,6 +116,10 @@
 .bh-scene-label { position: absolute; top: 0; left: 0; pointer-events: auto; max-width: 150px; display: grid; gap: 2px; text-align: center; border: 1px solid var(--bh-line); background: var(--bh-bg); color: var(--bh-ink); padding: 4px 10px; border-radius: 8px; }
 .bh-scene-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .bh-scene-label .bh-status { font-size: 10px; justify-content: center; }
+.bh-activity { font-size: 12px; color: var(--bh-muted); }
+.bh-activity:empty { display: none; }
+.bh-desktop { font-size: 11px; color: var(--bh-muted); }
+.bh-desktop:empty { display: none; }
 .bh-scene-label[aria-pressed=true] { border-color: var(--bh-accent); }
 .bh-label-muted { opacity: 0; pointer-events: none; }
 .bh-scene-label:focus { opacity: 1; pointer-events: auto; z-index: 2; }
@@ -103,7 +130,7 @@
 .bh-room-label > span { font-size: 10px; color: var(--bh-muted); }
 .bh-facility-label { position: absolute; top: 0; left: 0; padding: 3px 10px; border: 1px solid var(--bh-line); border-radius: 6px; background: var(--bh-bg); color: var(--bh-muted); font-size: 11px; white-space: nowrap; }
 .bh-space-context { margin-top: 12px !important; padding: 8px 10px; background: var(--bh-card); border-radius: 8px; overflow-wrap: anywhere; }
-.bh-scene-controls { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; pointer-events: none; }
+.bh-scene-controls { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; pointer-events: none; }
 .bh-scene-controls > * { pointer-events: auto; }
 .bh-scene-help { position: absolute; bottom: 16px; left: 16px; right: 16px; font-size: 11px; color: var(--bh-muted); pointer-events: none; text-align: center; }
 @media(max-width:1000px) {

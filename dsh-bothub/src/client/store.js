@@ -1,4 +1,5 @@
 import { acceptSnapshot } from './model.js'
+import { applyFrame, readMonitorStream } from './stream.js'
 
 export async function request(payload, signal) {
   const response = await fetch('api/bothub', {
@@ -18,56 +19,128 @@ export async function request(payload, signal) {
   return response.json()
 }
 
-export function createMonitorStore(fetchSnapshot = signal => request(undefined, signal), environment = globalThis) {
-  let state = { data: null, phase: 'loading', error: null }
-  let active = false
-  let generation = 0
-  let timer
-  let controller
-  let requestTimeout
+const fetchCurrent = signal => request(undefined, signal)
+
+export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = globalThis,
+  stream = fetchSnapshot === fetchCurrent ? readMonitorStream : null) {
+  let state = { data: null, phase: 'loading', error: null, transport: stream ? 'stream' : 'poll' }
+  let active = false, generation = 0, timer, controller, watchdog, projection
+  let failures = 0, retries = 0, fallbackPolls = 0, authBlocked = false
   const listeners = new Set()
-  const publish = next => {
-    state = next
-    for (const listener of listeners) listener()
+  const publish = next => { state = next; for (const listener of listeners) listener() }
+  const visible = () => !environment.document?.hidden
+  const clearTimers = () => {
+    environment.clearTimeout(timer)
+    environment.clearTimeout(watchdog)
+    timer = watchdog = undefined
   }
-  const poll = async () => {
-    if (!active || controller || environment.document?.hidden) return
+  const cancel = () => {
+    generation++
+    controller?.abort()
+    controller = undefined
+    clearTimers()
+  }
+  const attempt = async () => {
+    if (!active || controller || !visible() || authBlocked || environment.navigator?.onLine === false) return
     environment.clearTimeout(timer)
     const own = ++generation
     const ownController = new AbortController()
     controller = ownController
-    const timeout = environment.setTimeout(() => ownController.abort(), 10000)
-    requestTimeout = timeout
+    const mode = stream && failures < 3 ? 'stream' : 'poll'
+    let halted = false
+    const current = () => active && generation === own && !ownController.signal.aborted
+    const arm = delay => {
+      environment.clearTimeout(watchdog)
+      watchdog = environment.setTimeout(() => ownController.abort(), delay)
+    }
+    arm(10000)
     try {
-      const data = acceptSnapshot(await fetchSnapshot(ownController.signal))
-      if (active && generation === own) publish({ data, phase: 'live', error: null })
+      // Race the transport against cancellation even if a test/carrier ignores abort.
+      await new Promise((resolve, reject) => {
+        const abort = () => reject(new Error('unavailable'))
+        ownController.signal.addEventListener('abort', abort, { once: true })
+        const run = async () => {
+          if (mode === 'poll') {
+            const data = acceptSnapshot(await fetchSnapshot(ownController.signal))
+            if (!current()) return
+            projection = undefined
+            retries = 0
+            publish({ data, phase: 'live', error: null, transport: 'poll' })
+            if (stream && ++fallbackPolls >= 12) { failures = 0; fallbackPolls = 0 }
+          } else {
+            let pending = projection, ready = false
+            await stream(ownController.signal, projection?.cursor, (type, frame) => {
+              if (!current()) return
+              pending = applyFrame(pending, type, frame)
+              if (type === 'snapshot') {
+                ready = false
+                if (projection && pending.scopeKey !== projection.scopeKey) {
+                  projection = undefined
+                  publish({ data: null, phase: 'loading', error: null, transport: 'stream' })
+                }
+              }
+              if (type === 'ready') ready = true
+              arm(35000)
+              if (ready) {
+                projection = pending
+                failures = retries = fallbackPolls = 0
+                publish({ data: pending.data, phase: 'live', error: null, transport: 'stream' })
+              }
+            })
+            throw new Error('unavailable')
+          }
+        }
+        run().then(resolve, reject)
+          .finally(() => ownController.signal.removeEventListener('abort', abort))
+      })
     } catch (error) {
       if (active && generation === own) {
-        const code = ['unauthorized', 'incompatible', 'not-found', 'host-missing', 'bridge-missing'].includes(error.message) ? error.message : 'unavailable'
-        const reset = ['unauthorized', 'incompatible', 'bridge-missing', 'host-missing'].includes(code)
-        publish({ data: reset ? null : state.data, phase: 'stale', error: code })
+        const code = ['unauthorized', 'incompatible', 'host-missing', 'bridge-missing'].includes(error.message) ? error.message : 'unavailable'
+        const reset = code !== 'unavailable'
+        if (reset || error.message === 'resync-required') projection = undefined
+        halted = code === 'unauthorized'
+        authBlocked = halted
+        if (mode === 'stream') failures = error.message === 'stream-unavailable' ? 3 : failures + 1
+        retries++
+        publish({ ...state, data: reset ? null : state.data, phase: 'stale', error: code })
       }
     } finally {
-      environment.clearTimeout(timeout)
       if (generation === own) {
+        ownController.abort()
         controller = undefined
-        requestTimeout = undefined
-        if (active) timer = environment.setTimeout(poll, 1500)
+        environment.clearTimeout(watchdog)
+        watchdog = undefined
+        if (active && visible() && !halted) {
+          const delay = retries ? Math.min(30000, 1000 * 2 ** Math.min(retries - 1, 5))
+            * (0.5 + (environment.random?.() ?? Math.random()) * 0.5) : 2500
+          timer = environment.setTimeout(attempt, delay)
+        }
       }
     }
   }
   const visibility = () => {
-    if (!environment.document.hidden) void poll()
+    cancel()
+    if (authBlocked) return
+    publish({ ...state, phase: 'loading' })
+    if (visible()) void attempt()
+  }
+  const offline = () => {
+    cancel()
+    if (!authBlocked) publish({ ...state, phase: 'stale', error: 'unavailable' })
+  }
+  const online = () => {
+    if (authBlocked) return
+    cancel()
+    failures = retries = fallbackPolls = 0
+    publish({ ...state, phase: 'loading', error: null })
+    void attempt()
   }
   const stop = () => {
     active = false
-    generation++
-    controller?.abort()
-    controller = undefined
-    environment.clearTimeout(requestTimeout)
-    requestTimeout = undefined
-    environment.clearTimeout(timer)
+    cancel()
     environment.document?.removeEventListener('visibilitychange', visibility)
+    environment.removeEventListener?.('offline', offline)
+    environment.removeEventListener?.('online', online)
   }
   return {
     getSnapshot: () => state,
@@ -77,10 +150,22 @@ export function createMonitorStore(fetchSnapshot = signal => request(undefined, 
       active = true
       if (state.data) publish({ ...state, phase: 'loading' })
       environment.document?.addEventListener('visibilitychange', visibility)
-      void poll()
+      environment.addEventListener?.('offline', offline)
+      environment.addEventListener?.('online', online)
+      void attempt()
       return stop
     },
-    refresh: poll,
+    refresh() {
+      // Legacy polling callers keep single-flight refresh; stream refresh restarts
+      // the subscription so a stuck reader cannot prevent recovery.
+      authBlocked = false
+      if (!stream) return attempt()
+      cancel()
+      failures = retries = fallbackPolls = 0
+      projection = undefined
+      publish({ ...state, phase: 'loading', error: null })
+      return attempt()
+    },
     stop,
   }
 }

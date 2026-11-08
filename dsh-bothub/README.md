@@ -4,8 +4,33 @@ Group rooms are furnished offices with wooden desks, computers, keyboards,
 office chairs, bookshelves, whiteboards and plants. The common area has a coffee
 bar with a microwave, a snooker table, a lounge and a fitness corner with a
 treadmill, dumbbells and a mat. Shared workstations occupy a separate front area.
-Select a desk or a teammate to inspect their work; the amenities are scenery.
+Select a desk or a teammate to inspect their work; idle characters can use the amenities.
 All models and surface textures are generated locally, with no asset downloads.
+
+Workstation monitors show a Bot's running private desktop through read-only
+snapshots. Update **both DS Bot and BotHub** for this feature: DS Bot must expose
+`passivePreview` so background screens do not postpone automatic idle shutdown.
+Up to four visible Bots refresh about once per second, with two captures at a
+time; the same Bot shares its picture across group rooms. No desktop is started
+or controlled by opening BotHub. Ordinary Agents keep the standby screen.
+
+Stopped or unconfigured desktops show an original standby animation. Normal
+plays it briefly when entering 3D; Lively loops it, and Quiet/system reduced
+motion keeps it still. A busy desktop briefly retains a marked last image, then
+clears it after five seconds without a fresh frame. Hidden pages, disconnection,
+room changes and leaving 3D cancel previews and release unused pictures.
+Screens keep the original aspect ratio. The preview uses full PNG captures
+downsized locally to a 512 × 276 texture; it is not a video stream or a remote
+input surface.
+
+Click a Bot's monitor, or select **View desktop** in its details in either 2D or
+3D, to open a larger read-only preview. **Fit** preserves the aspect ratio;
+**Actual size** shows the original pixels with scrolling. While this window is
+open, only its Bot is captured. Escape closes it and restores focus without
+changing the scene view. Disconnection, hidden pages and permission changes
+clear the picture; switching workspaces or deleting the Bot closes the viewer.
+This window still uses periodic snapshots. Smoother streaming and real-container
+end-to-end validation remain pending.
 
 The scene follows the host's light/dark theme. Choose **Eco**, **Balanced**
 (default), or **Detailed** in the scene's Quality selector. Eco disables shadows;
@@ -13,7 +38,21 @@ the other levels use bounded shadow resolution and pixel ratio. This browser
 remembers your choice; changing quality preserves your view and selection.
 Crowded labels yield to rooms, selected members and active work. Tab reveals
 hidden labels for keyboard navigation; 2D always offers the full list.
-There are no continuous ambient animations, including with reduced motion.
+Use **Motion → Lively** for typing, sweat and wiping the forehead while working;
+idle characters can stand, get water, drink coffee, stretch, lift dumbbells,
+nap with floating Zzz, or practise snooker. Group offices have a water dispenser;
+coffee and snooker stay in the common area. Characters follow aisles and take
+turns at shared facilities. New work interrupts an outing and sends the character
+back to its desk; selection, labels and close-up cameras follow the same member.
+
+**Normal** (default) shows up to five seconds of typing after a work-state change.
+**Quiet**, system reduced motion and a lost live connection stop character actions.
+Hidden pages pause animation. Motion preferences are local to this browser.
+Idle actions are decorative: status labels remain authoritative, napping does
+not pause the Bot, and these actions do not call a model. Zzz is visual only;
+snooker is an animation, not a playable game. Unknown activity is never treated
+as idle. Character motion alone only requires a BotHub update on an already
+compatible bridge; private desktop previews require the companion DS Bot update.
 
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
@@ -38,6 +77,37 @@ English | [中文](README.zh.md)
 An independent DSH plugin that shows your DS Bot team in 2D and an original
 interactive 3D workspace. Select a teammate, inspect each active conversation,
 send a quick message, or open the original chat for full replies and controls.
+
+## Live updates and recovery
+
+BotHub shares one authenticated event stream per open view. It receives a full
+baseline followed by changes to members, conversations, runs and groups.
+After a disconnect it resumes from the last applied version, or loads a new
+baseline if the host restarted or the replay window expired.
+
+While disconnected, the last known scene stays visible and actions are disabled.
+Hidden pages close their stream and reconnect when visible. If streaming is
+unavailable, a notice identifies periodic snapshot polling; BotHub automatically
+checks whether streaming has recovered. Authentication failures clear the view;
+sign in again and use **Refresh**, or let DSH's newly authenticated connection
+trigger a fresh baseline.
+
+The stream describes observed current state, not a complete run history. Very
+short activity between samples may be missed. No message bodies or tool output
+are included. Existing compatible DS Bot installations only need a BotHub update.
+
+## Run conversations
+
+Each active run has a **View run conversation** button. It opens that run's own
+conversation, including when a Bot works in private and in several groups at once.
+For group Bots, open the group details and find the member to stop its group work.
+For other local runs, check the current work in the native conversation before
+using its stop control. Navigation itself does not stop work.
+
+The pinned DSH API cannot atomically restrict cancellation to a selected run.
+BotHub therefore keeps stopping in the native view. Disconnected run links are
+disabled; read-only hosts allow viewing, with controls left to the owning host.
+This addition only requires updating BotHub on an existing compatible installation.
 
 ## Quick messages
 
@@ -190,11 +260,20 @@ time. This is separate from the real-host integration and recording bench.
   `{ action: "send", commandId, workspaceId, entityId, groupId, text }` for an
   explicit message, and `{ action: "receipt", commandId }` to check admission.
   Commands require JSON and the host-authenticated user; groupId is null for private chat.
+- GET `api/bothub/events` streams versioned snapshots/patches. `Last-Event-ID`
+  resumes a bounded suffix; it cannot choose a workspace. The shared replay
+  buffer keeps at most 128 patches / 1 MiB. Each reader has a 1 MiB queue and
+  a 60-second connection lease, after which the carrier rechecks authentication.
+  The stream accepts at most 16 simultaneous readers. Host notifications are
+  coalesced for 150 ms, with a 5-second reconciliation and 15-second heartbeat.
+  Polling fallback checks every 2.5 seconds after success and probes the stream
+  after 12 successful polls. Failures use jittered backoff up to 30 seconds.
 - Resolution returns `{ target }`: a root session ID or the native
   `{ parentSessionId, childSessionId, mode }` address, validated by the host.
 - Group-member sessions resolve to the group chat. A Bot's default target is
   resolved to its current segment at click time.
-- The renderer only draws on state, size or camera changes. All geometry,
+- The renderer draws on state, size or camera changes and while enabled character
+  actions need frames, capped at 12/24/30 fps by quality level. All geometry,
   materials, listeners and the WebGL context are released on unmount.
 
 See the [MVP design](../docs/plans/2026-11-07-dsh-bothub-mvp.md) and
@@ -212,3 +291,6 @@ for the office layout, shared geometry, resource checks and local demonstration.
 
 See the [messaging slice](../docs/plans/2026-11-08-dsh-bothub-messaging.md)
 for admission, idempotency, recovery and verification.
+
+See the [projection stream slice](../docs/plans/2026-11-08-dsh-bothub-stream.md)
+for replay limits, reconnect behavior, verification and current coverage.

@@ -3,7 +3,7 @@ export const stationSpacing = { x: 3.3, z: 3.5 }
 
 export function officeSize(columns, rows, common) {
   return {
-    width: Math.max(common ? 16 : 10.4, columns * stationSpacing.x + 3),
+    width: Math.max(common ? 16 : 11.6, columns * stationSpacing.x + 3),
     depth: rows * stationSpacing.z + (common ? 10.5 : 3.8),
     seatStart: common ? 10 : 3.4,
   }
@@ -23,6 +23,7 @@ export function roomFixtures(room) {
     { kind: 'shelf', x: -room.width / 2 + 1.6, z: back + .45, width: 2.4, depth: .7 },
     { kind: 'cabinet', x: -.2, z: back + .45, width: 1.6, depth: .7 },
     { kind: 'whiteboard', x: 2.1, z: back + .18, width: 2.5, depth: .2 },
+    { kind: 'water', x: room.width / 2 - 1.7, z: back + .8, width: .65, depth: .7 },
   ]
   items.push(
     { kind: 'plant', x: room.width / 2 - .65, z: back + .75, width: .8, depth: .8 },

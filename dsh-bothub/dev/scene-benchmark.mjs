@@ -55,11 +55,13 @@ const resources = () => ({ contexts: stats.contexts, buffers: stats.buffers.size
 const percentile = (values, fraction) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * fraction))]
 const container = document.querySelector('.bh-scene'), labels = document.querySelector('.bh-scene-labels')
 let renderer
-function mount(count) {
+function mount(count, state = 'unknown') {
   const snapshot = {
     entities: Array.from({ length: count }, (_, id) => ({ id: `bench-${id}`, name: `Member ${id + 1}`, kind: 'bot', role: '' })),
     groups: [], sessions: [], runs: [],
   }
+  snapshot.sessions = snapshot.entities.map(entity => ({ id: entity.id, entityId: entity.id, status: state === 'running' ? 'running' : state, blockers: [], groupId: null }))
+  if (state === 'running') snapshot.runs = snapshot.entities.map(entity => ({ id: entity.id, entityId: entity.id, sessionId: entity.id, groupId: null }))
   const layout = roomLayout(snapshot, { groupId: null })
   labels.replaceChildren(...layout.presences.map((seat, index) => {
     const button = document.createElement('button')
@@ -69,7 +71,43 @@ function mount(count) {
   }))
   renderer = mountWorld(container, labels, () => {}, () => {}, () => {}, () => { throw Error('WebGL unavailable') })
   renderer.update(layout, null, true)
+  return layout
 }
+window.runMotionBenchmark = async ({ count = 20 } = {}) => {
+  renderer?.dispose()
+  const layout = mount(count, 'running'), results = []
+  renderer.motion('lively')
+  for (const quality of ['low', 'balanced', 'high']) {
+    renderer.quality(quality)
+    await new Promise(resolve => setTimeout(resolve, 800))
+    stats.frames = []
+    await new Promise(resolve => setTimeout(resolve, 2500))
+    results.push({ quality, frames: stats.frames.length,
+      cpuP95: percentile(stats.frames.map(f => f.ms), .95),
+      maxDrawCalls: Math.max(...stats.frames.map(f => f.draws)), resources: resources() })
+  }
+  renderer.motion('quiet'); await tick(); await tick()
+  let before = stats.frames.length
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const quietFrames = stats.frames.length - before
+  renderer.motion('lively'); renderer.update(layout, null, true, false); await tick(); await tick()
+  before = stats.frames.length
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const staleFrames = stats.frames.length - before
+  renderer.dispose(); renderer = null
+  const afterDispose = resources()
+  const report = { count, gpu: stats.gpu, results, quietFrames, staleFrames, afterDispose }
+  document.querySelector('pre').textContent = JSON.stringify(report, null, 2)
+  return report
+}
+window.motionProbe = ({ count = 3, motion = 'lively', state = 'idle', live = true } = {}) => {
+  renderer?.dispose()
+  const layout = mount(count, state)
+  renderer.motion(motion); renderer.update(layout, null, true, live)
+  return resources()
+}
+window.motionStats = () => ({ frames: stats.frames.length, ...resources() })
+window.disposeMotion = () => { renderer?.dispose(); renderer = null; return resources() }
 window.runBenchmark = async ({ count = 50, frames = 120 } = {}) => {
   renderer?.dispose()
   mount(count)

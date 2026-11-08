@@ -2,16 +2,17 @@ import { createElement as h, useEffect, useRef, useState } from 'react'
 import { presenceKey } from './rooms.js'
 import { allowsShortcut, cameraFrame } from './camera.js'
 import { roomFixtures } from './office-layout.js'
-import { normalizeQuality, qualityKey, readQuality, saveQuality } from './scene-settings.js'
+import { motionKey, normalizeMotion, readMotion, saveMotion, normalizeQuality, qualityKey, readQuality, saveQuality } from './scene-settings.js'
 import { mountWorld } from './world-renderer.js'
 
-export function Scene({ layout, selected, onSelect, onFocus, onClear, focused, onError, t }) {
+export function Scene({ layout, selected, onSelect, onFocus, onClear, onDesktop, focused, connected, previewEnabled = true, onError, t }) {
   const container = useRef(null)
   const labels = useRef(null)
   const renderer = useRef(null)
   const [quality, setQuality] = useState(readQuality)
-  const actions = useRef({ onSelect, onFocus, onClear, onError })
-  actions.current = { onSelect, onFocus, onClear, onError }
+  const [motion, setMotion] = useState(readMotion)
+  const actions = useRef({ onSelect, onFocus, onClear, onDesktop, onError, t })
+  actions.current = { onSelect, onFocus, onClear, onDesktop, onError, t }
   const act = callback => {
     callback()
     container.current?.focus({ preventScroll: true })
@@ -20,15 +21,18 @@ export function Scene({ layout, selected, onSelect, onFocus, onClear, focused, o
     const value = mountWorld(container.current, labels.current,
       (id, groupId) => actions.current.onSelect(id, groupId), groupId => actions.current.onFocus(groupId),
       () => actions.current.onClear(),
-      () => actions.current.onError())
+      () => actions.current.onError(), key => actions.current.t(key),
+      (id, groupId) => actions.current.onDesktop?.(id, groupId))
     renderer.current = value
     return () => { value.dispose(); renderer.current = null }
   }, [])
-  useEffect(() => { renderer.current?.update(layout, selected, focused) }, [layout, selected, focused])
+  useEffect(() => { renderer.current?.update(layout, selected, focused, connected, previewEnabled) }, [layout, selected, focused, connected, previewEnabled])
   useEffect(() => { renderer.current?.quality(quality) }, [quality])
+  useEffect(() => { renderer.current?.motion(motion) }, [motion])
   useEffect(() => {
     const changed = event => {
       if (event.key === qualityKey || event.key === null) setQuality(readQuality())
+      if (event.key === motionKey || event.key === null) setMotion(readMotion())
     }
     window.addEventListener('storage', changed)
     return () => window.removeEventListener('storage', changed)
@@ -63,10 +67,17 @@ export function Scene({ layout, selected, onSelect, onFocus, onClear, focused, o
           'aria-pressed': selected?.entityId === entity.id && selected?.groupId === groupId,
           onClick: () => act(() => onSelect(entity.id, groupId)),
         }, h('strong', null, entity.name),
-        h('span', { className: `bh-status bh-${state}` }, h('i'), t(state === 'attention' ? 'attentionState' : state)))
+        h('span', { className: `bh-status bh-${state}` }, h('i'), t(state === 'attention' ? 'attentionState' : state)),
+        h('span', { className: 'bh-activity', 'data-activity': '', 'aria-hidden': 'true' }),
+        entity.kind === 'bot' && h('span', { className: 'bh-desktop', 'data-desktop': 'standby' }))
       })),
     h('div', { className: 'bh-scene-controls' },
       h('button', { type: 'button', className: 'bh-button', onClick: () => act(() => renderer.current?.reset()) }, t('overview')),
+      h('label', { className: 'bh-quality', title: t('motionHelp') }, t('motion'),
+        h('select', {
+          value: motion, 'aria-label': t('motion'),
+          onChange: event => { const value = normalizeMotion(event.target.value); setMotion(value); saveMotion(value) },
+        }, ...['quiet', 'normal', 'lively'].map(value => h('option', { key: value, value }, t(`motion_${value}`))))),
       h('label', { className: 'bh-quality' }, t('quality'),
         h('select', {
           value: quality, 'aria-label': t('quality'),
@@ -74,5 +85,6 @@ export function Scene({ layout, selected, onSelect, onFocus, onClear, focused, o
         }, ...['low', 'balanced', 'high'].map(value => h('option', { key: value, value }, t(`quality_${value}`)))))),
     h('div', { className: 'bh-scene-help' },
       h('div', null, t(layout.truncated ? 'roomLimit' : 'roomHelp')),
-      h('div', null, t('cameraHelp'))))
+      h('div', null, t('cameraHelp')),
+      motion === 'lively' && h('div', null, t('motionHelp'))))
 }

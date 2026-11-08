@@ -12,7 +12,7 @@
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "files": ["index.js", "src/host/", "client.js", "cordis.patch.yml", "locale/", "icon.svg", "README.md", "README.zh.md", "LICENSE", "NOTICE", "licenses/"],
+  "files": ["index.js", "src/host/", "src/shared/", "client.js", "cordis.patch.yml", "locale/", "icon.svg", "README.md", "README.zh.md", "LICENSE", "NOTICE", "licenses/"],
   "dsh": {
     "client": { "platform": "web" },
     "bundle": { "patch": "./cordis.patch.yml" }

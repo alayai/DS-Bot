@@ -55,6 +55,7 @@ test('plugin registers on the authenticated connection service and disposes its 
   let disposed = false
   const disposers = []
   apply({
+    on: () => () => {},
     connection: { fetch: { register(value) { route = value; return () => { disposed = true } } } },
     get: () => undefined, effect: callback => disposers.push(callback()),
   })

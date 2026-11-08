@@ -8,13 +8,15 @@ import { cameraFrame, createCameraState } from './camera.js'
 import { createOfficeAssets, createOfficeEnvironment } from './furniture.js'
 import { roomFixtures } from './office-layout.js'
 import { arrangeLabels } from './labels.js'
-import { normalizeQuality, qualitySettings } from './scene-settings.js'
+import { createActivity, characterSeed } from './activities.js'
+import { createCharacter } from './character.js'
+import { normalizeMotion, normalizeQuality, qualitySettings } from './scene-settings.js'
+import { createDesktopScreens } from './desktop-screens.js'
 
-const hash = id => [...id].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) | 0, 0) >>> 0
 
 // Renderer state never enters React. A frame is requested only for data, size,
-// selection or camera changes; hidden pages have no drawing loop.
-export function mountWorld(container, labels, onSelect, onFocus, onClear, onError) {
+// selection or camera changes, and bounded motion frames; hidden pages do not draw.
+export function mountWorld(container, labels, onSelect, onFocus, onClear, onError, translate, onDesktop) {
   const canvas = document.createElement('canvas')
   canvas.setAttribute('aria-hidden', 'true')
   container.prepend(canvas)
@@ -24,7 +26,7 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
   } catch {
     canvas.remove()
     onError()
-    return { update() {}, quality() {}, reset() {}, key() {}, dispose() {} }
+    return { update() {}, quality() {}, motion() {}, reset() {}, key() {}, dispose() {} }
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
   renderer.toneMapping = ACESFilmicToneMapping
@@ -68,7 +70,10 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
   let selected = null
   const view = createCameraState()
   let layoutKey = ''
-  let frame = 0
+  let frame = 0, wake = 0, sceneTime = 0, lastDraw = performance.now()
+  let motionLevel = 'normal', connected = true, previewEnabled = true
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
+  const reservations = new Map()
   let disposed = false
   let down = null
   let currentQuality = null
@@ -82,13 +87,31 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     if (disposed || document.hidden) return
     const width = container.clientWidth
     const height = container.clientHeight
-    if (!width || !height) return
+    if (!width || !height) { screens.pause(); return }
+    const now = performance.now(), elapsed = Math.max(0, (now - lastDraw) / 1000), dt = Math.min(.1, elapsed)
+    lastDraw = now; sceneTime += elapsed
+    let animated = false, wakeAfter = Infinity
+    for (const item of members.values()) {
+      item.pose = item.activity.step(sceneTime, reduced.matches || !connected ? 'quiet' : motionLevel)
+      animated ||= item.pose.animate
+      if (item.pose.wakeAfter != null) wakeAfter = Math.min(wakeAfter, item.pose.wakeAfter)
+      item.rig.group.position.set(item.pose.x - item.seat.x, 0, item.pose.z - item.seat.z)
+      const delta = Math.atan2(Math.sin(item.pose.angle - item.rig.group.rotation.y), Math.cos(item.pose.angle - item.rig.group.rotation.y))
+      item.rig.group.rotation.y += delta * (1 - Math.exp(-dt * 18))
+      if (reduced.matches || motionLevel === 'quiet' || !connected) item.rig.group.rotation.y = 0
+      item.rig.update(item.pose, !item.pose.animate ? 1 : dt)
+    }
     camera.aspect = width / height
     camera.updateProjectionMatrix()
     const pose = view.position(camera.aspect)
-    target.fromArray(pose.center)
-    camera.position.fromArray(pose.eye)
+    const actor = members.get(selected)
+    const offsetX = actor ? actor.pose.x - actor.seat.x : 0, offsetZ = actor ? actor.pose.z - actor.seat.z : 0
+    target.fromArray(pose.center); target.x += offsetX; target.z += offsetZ
+    camera.position.fromArray(pose.eye); camera.position.x += offsetX; camera.position.z += offsetZ
     camera.lookAt(target)
+    camera.updateMatrixWorld()
+    const screenMotion = screens.draw(camera, height, selected, connected && previewEnabled, reduced.matches ? 'quiet' : motionLevel)
+    if (screenMotion) wakeAfter = Math.min(wakeAfter, .4)
     renderer.setSize(width, height, false)
     renderer.render(world, camera)
     const candidates = []
@@ -103,9 +126,22 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
         focused, priority: focused ? 1000 : priority,
       })
     }
-    layout.presences.forEach((presence, index) =>
-      positionLabel(labels.querySelector(`[data-seat="${index}"]`), presence.x, 2.15, presence.z + .3,
-        presence.key === selected ? 100 : presence.state === 'attention' ? 30 : presence.state === 'running' ? 20 : 10))
+    layout.presences.forEach((presence, index) => {
+      const item = members.get(presence.key), label = labels.querySelector(`[data-seat="${index}"]`)
+      const cue = label?.querySelector('[data-activity]')
+      if (cue && cue.dataset.activity !== item.pose.action) {
+        cue.dataset.activity = item.pose.action
+        cue.textContent = ({ type: '⌨ · 💧', water: '💧', coffee: '☕', stretch: '↔', dumbbell: '🏋', sleep: 'Zzz', snooker: '🎱', walk: '…' })[item.pose.action] ?? ''
+      }
+      const desktop = label?.querySelector('[data-desktop]')
+      if (desktop) {
+        const status = screens.status(presence.entity.id)
+        desktop.dataset.desktop = status
+        desktop.textContent = status === 'standby' ? '' : translate?.(`screen_${status}`) ?? status
+      }
+      positionLabel(label, item.pose.x, 2.15, item.pose.z + .3,
+        presence.key === selected ? 100 : presence.state === 'attention' ? 30 : presence.state === 'running' ? 20 : 10)
+    })
     layout.rooms.forEach((room, index) =>
       positionLabel(labels.querySelector(`[data-room="${index}"]`), room.x, 3.1, room.z - room.depth / 2 + .3, 40))
     if (layout.rooms.length === 1 && layout.rooms[0].groupId === null) {
@@ -120,10 +156,17 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
       item.label.classList.toggle('bh-label-muted', item.hidden)
       item.label.style.transform = `translate(${item.left}px,${item.top}px)`
     }
+    if (animated || Number.isFinite(wakeAfter)) {
+      wake = setTimeout(() => { wake = 0; invalidate() },
+        animated ? 1000 / qualitySettings(currentQuality).fps : Math.max(16, wakeAfter * 1000))
+    }
   }
   const invalidate = () => {
+    clearTimeout(wake); wake = 0
     if (!frame && !disposed && !document.hidden) frame = requestAnimationFrame(draw)
   }
+  const screens = createDesktopScreens(invalidate, translate)
+  world.add(screens.group)
   const resize = new ResizeObserver(invalidate)
   resize.observe(container)
   const theme = () => {
@@ -166,60 +209,41 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
   const makeMember = presence => {
     const { entity, groupId, key } = presence
     const group = new Group()
-    const color = new Color().setHSL((hash(entity.id) % 360) / 360, .48, .62)
+    const color = new Color().setHSL((characterSeed(entity.id) % 360) / 360, .48, .62)
     const bodyMaterial = material(color)
     const ring = new Mesh(geometry.ring, selectedMaterial)
     ring.rotation.x = -Math.PI / 2
     ring.position.set(0, .025, .4)
-    const body = new Mesh(geometry.body, bodyMaterial)
-    body.position.set(0, .85, .3)
-    const head = new Mesh(geometry.head, bodyMaterial)
-    head.position.set(0, 1.26, .3)
+    const rig = createCharacter(geometry, bodyMaterial, ink, office)
     const marker = new Mesh(geometry.marker, neutral)
     marker.position.set(1.02, .99, -.24)
-    group.add(ring, body, head, marker)
-    const limb = (from, to, radius) => {
-      const mesh = new Mesh(geometry.limb, bodyMaterial)
-      const direction = new Vector3(...to).sub(new Vector3(...from))
-      mesh.position.copy(new Vector3(...from).add(new Vector3(...to)).multiplyScalar(.5))
-      mesh.scale.set(radius, direction.length(), radius)
-      mesh.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), direction.normalize())
-      group.add(mesh)
-    }
-    for (const side of [-1, 1]) {
-      limb([side * .24, .94, .28], [side * .32, .78, -.06], .06)
-      limb([side * .32, .78, -.06], [side * .27, .91, -.27], .05)
-      limb([side * .12, .65, .3], [side * .13, .53, .03], .075)
-      limb([side * .13, .53, .03], [side * .13, .22, .03], .06)
-      const shoe = new Mesh(geometry.head, ink)
-      shoe.scale.set(.4, .22, .6)
-      shoe.position.set(side * .13, .17, -.04)
-      group.add(shoe)
-    }
-    for (const x of [-.1, .1]) {
-      const eye = new Mesh(geometry.eye, ink)
-      eye.position.set(x, 1.28, .06)
-      group.add(eye)
-    }
+    rig.group.add(ring)
+    group.add(rig.group, marker)
     group.traverse(child => {
       child.userData = { entityId: entity.id, groupId, key }
-      if (child.isMesh && child !== ring && child !== marker) child.castShadow = true
+      // Moving rigs do not enter the cached static shadow map.
     })
     world.add(group)
-    return { group, ring, marker, bodyMaterial }
+    return { group, ring, marker, bodyMaterial, rig }
   }
-  const update = (next, selection, focused) => {
+  const update = (next, selection, focused, live = true, preview = true) => {
+    connected = live
+    previewEnabled = preview
+    if (!connected || !previewEnabled) screens.pause()
     layout = next
+    const updateTime = sceneTime + (document.hidden ? 0 : Math.max(0, (performance.now() - lastDraw) / 1000))
     selected = selection?.groupId !== undefined ? presenceKey(selection.entityId, selection.groupId) : null
     view.update(cameraFrame(layout, selection, focused))
     const nextKey = JSON.stringify([
       layout.rooms.map(room => [room.key, room.width, room.depth, room.x, room.z]),
       layout.presences.map(seat => [seat.key, seat.x, seat.z]),
     ])
-    if (layoutKey !== nextKey) {
+    const rearranged = layoutKey !== nextKey
+    if (rearranged) {
       if (environment) { world.remove(environment.group); environment.dispose() }
       environment = createOfficeEnvironment(layout, office)
       world.add(environment.group)
+      screens.update(layout)
       const extent = Math.max(layout.width, layout.depth)
       light.position.set(-extent * .35, extent * .9, extent * .45)
       Object.assign(light.shadow.camera, { left: -extent * .7, right: extent * .7, top: extent * .7, bottom: -extent * .7, near: .5, far: extent * 3 })
@@ -230,6 +254,7 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     const keep = new Set(layout.presences.map(presence => presence.key))
     for (const [id, item] of members) if (!keep.has(id)) {
       world.remove(item.group)
+      item.activity.dispose()
       item.bodyMaterial.dispose()
       materials.delete(item.bodyMaterial)
       members.delete(id)
@@ -237,6 +262,12 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     layout.presences.forEach(presence => {
       const item = members.get(presence.key) ?? makeMember(presence)
       members.set(presence.key, item)
+      if (!item.activity || rearranged) {
+        item.activity?.dispose()
+        item.activity = createActivity(presence, layout.rooms.find(room => room.groupId === presence.groupId), reservations, updateTime)
+      }
+      item.seat = presence
+      item.activity.setState(connected ? presence.state : 'unknown', updateTime)
       item.group.position.set(presence.x, 0, presence.z)
       item.ring.visible = presence.key === selected
       item.marker.material = presence.state === 'running' ? green : presence.state === 'attention' ? selectedMaterial : neutral
@@ -265,9 +296,12 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
       const rect = canvas.getBoundingClientRect()
       pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1)
       ray.setFromCamera(pointer, camera)
-      const hit = ray.intersectObjects([...members.values()].map(item => item.group).concat(environment?.group ?? []), true)[0]
+      const hit = ray.intersectObjects([...members.values()].map(item => item.group).concat(environment?.group ?? [], screens.group), true)[0]
       const subject = hit && (hit.object.userData.targets?.[hit.instanceId] ?? hit.object.userData)
-      if (subject?.entityId) onSelect(subject.entityId, subject.groupId)
+      if (subject?.desktop && onDesktop) {
+        container.focus({ preventScroll: true })
+        onDesktop(subject.entityId, subject.groupId)
+      } else if (subject?.entityId) onSelect(subject.entityId, subject.groupId)
       else if (subject?.room) onFocus(subject.groupId)
       else onClear()
     }
@@ -280,7 +314,9 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     invalidate()
   }
   const visibility = () => {
-    if (document.hidden) { cancelAnimationFrame(frame); frame = 0 }
+    clearTimeout(wake); wake = 0
+    lastDraw = performance.now()
+    if (document.hidden) { cancelAnimationFrame(frame); frame = 0; screens.pause() }
     else invalidate()
   }
   const lost = event => { event.preventDefault(); onError() }
@@ -291,12 +327,14 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
   canvas.addEventListener('wheel', wheel, { passive: false })
   canvas.addEventListener('webglcontextlost', lost)
   document.addEventListener('visibilitychange', visibility)
+  reduced.addEventListener('change', invalidate)
   labels.addEventListener('focusin', invalidate)
   labels.addEventListener('focusout', invalidate)
   quality('balanced')
   return {
     update,
     quality,
+    motion(value) { motionLevel = normalizeMotion(value); invalidate() },
     reset() { view.reset(); invalidate() },
     key(key) {
       if (key === 'ArrowLeft') view.orbit(-.12, 0)
@@ -312,7 +350,12 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     },
     dispose() {
       disposed = true
+      screens.dispose()
       cancelAnimationFrame(frame)
+      clearTimeout(wake)
+      reduced.removeEventListener('change', invalidate)
+      for (const item of members.values()) item.activity.dispose()
+      reservations.clear()
       resize.disconnect()
       themeObserver.disconnect()
       labels.removeEventListener('focusin', invalidate)
@@ -336,4 +379,3 @@ export function mountWorld(container, labels, onSelect, onFocus, onClear, onErro
     },
   }
 }
-

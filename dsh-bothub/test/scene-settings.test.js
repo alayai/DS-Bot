@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeQuality, qualitySettings, readQuality, saveQuality } from '../src/client/scene-settings.js'
+import { normalizeMotion, readMotion, saveMotion } from '../src/client/scene-settings.js'
 
 test('invalid or unavailable preferences use balanced quality without blocking the view', () => {
   for (const value of [null, '', 'ultra', '__proto__', 'toString']) {
@@ -23,4 +24,15 @@ test('eco disables shadows; balanced and detailed bound pixel and shadow costs',
   const balanced = qualitySettings('balanced'), high = qualitySettings('high')
   assert.ok(balanced.ratio < high.ratio && high.ratio <= 1.5)
   assert.ok(balanced.shadow < high.shadow && high.shadow <= 2048)
+})
+
+test('motion defaults to normal, persists independently and tolerates blocked storage', () => {
+  let saved
+  const storage = { getItem: () => saved, setItem: (_, value) => { saved = value } }
+  assert.equal(readMotion(storage), 'normal')
+  for (const mode of ['quiet', 'normal', 'lively']) { saveMotion(mode, storage); assert.equal(readMotion(storage), mode) }
+  assert.equal(normalizeMotion('__proto__'), 'normal')
+  assert.equal(readMotion({ getItem() { throw Error('blocked') } }), 'normal')
+  assert.doesNotThrow(() => saveMotion('quiet', { setItem() { throw Error('blocked') } }))
+  assert.deepEqual(['low', 'balanced', 'high'].map(q => qualitySettings(q).fps), [12, 24, 30])
 })

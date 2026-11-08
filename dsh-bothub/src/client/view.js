@@ -4,6 +4,8 @@ import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } f
 import { Scene } from './world.js'
 import { allowsShortcut } from './camera.js'
 import { Composer } from './composer.js'
+import { DesktopViewer } from './desktop-viewer.js'
+import { runTarget } from './run-navigation.js'
 import css from './style.css'
 
 export function HubIcon({ size = 20 }) {
@@ -28,7 +30,7 @@ function Member({ entity, snapshot, groupId, selected, onSelect, t }) {
   count > 0 && h('span', { className: 'bh-count' }, count))
 }
 
-function Detail({ entity, snapshot, groupId, open, connected, onSelect, messages, openReceipt, t }) {
+function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDesktop, messages, openReceipt, t }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const mounted = useRef(true)
@@ -45,12 +47,12 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, messages
   const room = groupId != null ? snapshot.groups.find(item => item.id === groupId) : null
   const canOpen = room && entity.kind === 'bot'
     ? sessions.length > 0 || snapshot.groupNavigation === true : Boolean(entity.sessionId)
-  const go = async sessionId => {
+  const go = async (sessionId, targetGroupId = groupId) => {
     if (busy || !connected) return
     setBusy(true)
     setError(null)
-    const target = sessionId ?? (groupId === undefined ? undefined : sessions[0]?.id)
-    try { await open(entity.id, target, room?.id) } catch (failure) {
+    const target = sessionId ?? (targetGroupId === undefined ? undefined : sessions[0]?.id)
+    try { await open(entity.id, target, targetGroupId ?? undefined) } catch (failure) {
       if (mounted.current) setError(['not-found', 'unauthorized', 'incompatible', 'bridge-missing', 'host-missing'].includes(failure.message) ? failure.message : 'unavailable')
     } finally { if (mounted.current) setBusy(false) }
   }
@@ -73,11 +75,18 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, messages
     runs.length === 0 && h('p', { className: 'bh-muted' }, t('noRuns')),
     ...runs.map(run => {
       const duration = run.startedAt ? Math.max(0, Math.floor((snapshot.capturedAt - run.startedAt) / 1000)) : null
-      return h('div', { className: 'bh-run', key: run.id },
+      const target = runTarget(snapshot, entity.id, run.id)
+      return h('div', { className: 'bh-run', key: run.id, 'data-run-id': run.id },
         h('strong', null, t(runLabel(run))),
         (run.tools?.length > 0 || run.tool) && h('span', { className: 'bh-tools' }, (run.tools ?? [run.tool]).join(' · ')),
         h('span', null, run.groupId ? snapshot.groups.find(group => group.id === run.groupId)?.name || t('group') : t('own')),
-        duration !== null && h('small', null, duration < 60 ? `${duration}${t('seconds')}` : `${Math.floor(duration / 60)}${t('minutes')}`))
+        duration !== null && h('small', null, duration < 60 ? `${duration}${t('seconds')}` : `${Math.floor(duration / 60)}${t('minutes')}`),
+        h('button', {
+          type: 'button', className: 'bh-button', disabled: busy || !connected || !target,
+          onClick: () => { if (target) void go(target.sessionId, target.groupId) },
+        }, t(busy ? 'opening' : 'viewRun')),
+        h('p', { className: 'bh-note' }, t(!target ? 'runUnavailable'
+          : snapshot.readOnly ? 'runReadOnly' : run.groupId != null && entity.kind === 'bot' ? 'runGroupControl' : 'runNativeControl')))
     }),
     h('h3', null, t('contexts')),
     ...sessions.map(session => h('button', {
@@ -90,8 +99,10 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, messages
     h('span', { 'aria-hidden': true }, '↗'))),
     spaceState(entity, snapshot, groupId) === 'unknown' && h('p', { className: 'bh-note' }, t('unknownNote')),
     h('div', { className: 'bh-detail-bottom' },
+      entity.kind === 'bot' && h('button', { className: 'bh-button bh-view-desktop', type: 'button',
+        disabled: !connected || snapshot.readOnly, onClick: () => onDesktop(entity.id) }, t('viewDesktop')),
       entity.kind === 'bot' && h(Composer, { entity, snapshot, groupId, connected, messages, openReceipt, t }),
-      error && h('p', { role: 'alert', className: 'bh-error' }, t(error)),
+      error && h('p', { role: 'alert', className: 'bh-error' }, t(error === 'unavailable' ? 'openFailed' : error)),
       h('button', { className: 'bh-primary', type: 'button', disabled: !canOpen || busy || !connected, onClick: () => go() }, t(busy ? 'opening' : room && entity.kind === 'bot' ? 'openGroup' : 'open')),
       h('p', { className: 'bh-note' }, t('native'))))
 }
@@ -105,8 +116,19 @@ export function Hub({ store, open, messages, openReceipt, t }) {
   const [status, setStatus] = useState('all')
   const [group, setGroup] = useState('all')
   const [sceneError, setSceneError] = useState(false)
+  const [desktop, setDesktop] = useState(null)
   useEffect(() => store.start(), [store])
   const data = state.data
+  const desktopEntity = desktop?.workspaceId === data?.workspaceId
+    ? data?.entities.find(item => item.id === desktop?.entityId && item.kind === 'bot') : null
+  useEffect(() => { if (!desktopEntity) setDesktop(null) }, [desktopEntity])
+  const onDesktop = entityId => {
+    if (state.phase === 'live' && !data?.readOnly) setDesktop({ entityId, workspaceId: data.workspaceId })
+  }
+  useEffect(() => {
+    setSelected(null)
+    setGroup('all')
+  }, [data?.workspaceId])
   const groupId = group === 'all' ? undefined : group === 'public' ? null : group
   const visible = useMemo(() => data ? selectSpaceEntities(data, { query, status, groupId }) : [], [data, query, status, groupId])
   const layout = useMemo(() => data ? roomLayout(data, { query, status, groupId }) : null, [data, query, status, groupId])
@@ -134,7 +156,7 @@ export function Hub({ store, open, messages, openReceipt, t }) {
   return h('section', {
     className: 'bh-root', ref: root, tabIndex: -1, 'aria-label': 'BotHub',
     onKeyDown: event => {
-      if (event.key !== 'Escape' || !allowsShortcut(event) || (!selected && group === 'all')) return
+      if (desktopEntity || event.key !== 'Escape' || !allowsShortcut(event) || (!selected && group === 'all')) return
       event.preventDefault()
       event.stopPropagation()
       navigate(selected ? clear : overview)
@@ -149,6 +171,7 @@ export function Hub({ store, open, messages, openReceipt, t }) {
         h('div', { key: label }, h('strong', null, value), h('span', null, t(label)))),
       h('span', { className: 'bh-coverage' }, t('coverage'))),
     state.error && h('div', { className: 'bh-banner', role: 'alert' }, t(state.error)),
+    state.phase === 'live' && state.transport === 'poll' && h('div', { className: 'bh-banner', role: 'status' }, t('polling')),
     data?.readOnly && h('div', { className: 'bh-banner' }, t('readOnly')),
     data?.partial && h('div', { className: 'bh-banner', role: 'status' }, t('partial')),
     h('div', { className: 'bh-toolbar' },
@@ -174,9 +197,11 @@ export function Hub({ store, open, messages, openReceipt, t }) {
     h('div', { className: 'bh-content' },
       h('main', { className: 'bh-workspace' },
         data && (view === '3d' ? layout.rooms.length > 0 : visible.length > 0)
-          ? view === '3d' ? h(Scene, { layout, selected, onSelect, onFocus: focus, onClear: clear, focused: group !== 'all', t, onError: () => { setSceneError(true); setView('2d') } })
+          ? view === '3d' ? h(Scene, { key: data.workspaceId, layout, selected, onSelect, onDesktop, onFocus: focus, onClear: clear, focused: group !== 'all', connected: state.phase === 'live' && !data.readOnly, previewEnabled: !desktopEntity, t, onError: () => { setSceneError(true); setView('2d') } })
             : h('div', { className: 'bh-members' }, ...visible.map(item => h(Member, { key: item.id, entity: item, snapshot: data, groupId, selected: item.id === selected?.entityId, onSelect, t })))
           : h('div', { className: 'bh-empty' }, h(HubIcon, { size: 48 }), h('p', null, t(!data ? state.error ? state.error : 'loading' : data.entities.length ? 'empty' : 'noTeam')))),
-      h(Detail, { key: JSON.stringify([entity?.id, selected?.groupId]), entity, snapshot: data, groupId: selected?.groupId, connected: state.phase === 'live', open, onSelect, messages, openReceipt, t })),
+      h(Detail, { key: JSON.stringify([entity?.id, selected?.groupId]), entity, snapshot: data, groupId: selected?.groupId, connected: state.phase === 'live', open, onSelect, onDesktop, messages, openReceipt, t })),
+    desktopEntity && h(DesktopViewer, { key: JSON.stringify([data.workspaceId, desktopEntity.id]), entity: desktopEntity,
+      connected: state.phase === 'live' && !data.readOnly, onClose: () => setDesktop(null), t }),
     h('footer', { className: 'bh-footer' }, data && `${t('updated')} ${new Date(data.capturedAt).toLocaleTimeString()}`, state.phase === 'stale' && ` · ${t('stale')}`))
 }
