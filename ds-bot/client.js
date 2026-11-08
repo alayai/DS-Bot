@@ -27620,10 +27620,12 @@ function TeamSidebar(props) {
     main ? (0, import_react18.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react18.createElement)("div", { className: "bt-hint" }, t("Setting up your Main Bot…")),
     (0, import_react18.createElement)("span", { className: "bt-rail-sep", "aria-hidden": true })
   );
-  const foot = wideContent ? (0, import_react18.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react18.createElement)(AccountLauncher, { seat: false, actions })) : (0, import_react18.createElement)(
+  const extensionActions = props.renderSlot?.("bot.sidebar.action", { wide: wideContent });
+  const foot = wideContent ? (0, import_react18.createElement)("div", { className: "bt-leftcol-foot" }, (0, import_react18.createElement)(AccountLauncher, { seat: false, actions }), extensionActions) : (0, import_react18.createElement)(
     "div",
     { className: "bt-leftcol-foot bt-leftcol-foot-rail" },
     (0, import_react18.createElement)("button", { type: "button", className: "bt-round", "aria-label": t("New…"), title: t("New…"), onClick: () => actions.openNewChat("new") }, (0, import_react18.createElement)(PlusIcon)),
+    extensionActions,
     (0, import_react18.createElement)(AccountLauncher, { seat: false, actions })
   );
   const content = (0, import_react18.createElement)(
@@ -42149,7 +42151,11 @@ function apply(ctx) {
     () => installFrameWatch(frame),
     () => installFrameSync(),
     () => installTheme(),
-    () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
+    () => shadow("sidebar.workspaces", {
+      priority: BOT_PRIORITY,
+      inject: face,
+      children: { "bot.sidebar.action": { kind: "list", scope: "root" } }
+    }, TeamSidebar),
     () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
     () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
     () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),

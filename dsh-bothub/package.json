@@ -1,0 +1,29 @@
+{
+  "name": "dsh-bothub",
+  "version": "0.1.0-alpha.3",
+  "description": "A live 2D and 3D workspace for your DS Bot team",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "src/host/", "client.js", "cordis.patch.yml", "locale/", "icon.svg", "README.md", "README.zh.md", "LICENSE", "NOTICE", "licenses/"],
+  "dsh": {
+    "client": { "platform": "web" },
+    "bundle": { "patch": "./cordis.patch.yml" }
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/build-client.mjs --check",
+    "lint": "oxlint src index.js scripts test"
+  },
+  "dependencies": { "three": "0.182.0" },
+  "peerDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-web": "*" },
+  "devDependencies": { "esbuild": "0.28.2", "oxlint": "1.76.0" }
+}

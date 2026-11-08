@@ -880,7 +880,10 @@ export function apply(ctx) {
     () => installFrameWatch(frame),
     () => installFrameSync(),
     () => installTheme(),
-    () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
+    () => shadow('sidebar.workspaces', {
+      priority: BOT_PRIORITY, inject: face,
+      children: { 'bot.sidebar.action': { kind: 'list', scope: 'root' } },
+    }, TeamSidebar),
     () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
     () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),

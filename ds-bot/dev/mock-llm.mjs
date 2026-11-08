@@ -15,6 +15,10 @@
 // and backend compaction only), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
 // answer like an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
 //
+// BotHub Agent smoke: "BotHub delegate N" starts a real local subagent;
+// "BotHub work N" delays its mock answer by N seconds (bounded to 30).
+// "BotHub tool N" runs a harmless timed shell tool; "BotHub approve" asks
+// for an elevated echo so the isolated bench can exercise native approval UI.
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
 //   看群 名 (read_group_chat) · 转告 名: 消息, also over several lines (message_bot) · 搜索：查询1 | 查询2 (web_search)
@@ -286,6 +290,22 @@ function decide(body) {
   }
 
   const userText = textOf(last?.content).trim()
+  const hubWork = /^BotHub work (\d+)$/m.exec(userText)
+  if (hubWork) return Object.assign([text('BotHub work complete.')], { delay: Math.min(30, Number(hubWork[1])) * 1000 })
+  const hubDelegate = /^BotHub delegate (\d+)$/m.exec(userText)
+  if (hubDelegate && tools.has('subagent')) {
+    return [tool('subagent', { description: 'BotHub review task', prompt: `BotHub work ${Math.min(30, Number(hubDelegate[1]))}` })]
+  }
+  const hubTool = /^BotHub tool (\d+)$/m.exec(userText)
+  if (hubTool && tools.has('bash')) {
+    return [tool('bash', { command: `sleep ${Math.min(10, Number(hubTool[1]))}; printf 'BotHub tool complete\\n'`, description: 'Wait for the monitor demo' })]
+  }
+  if (/^BotHub approve$/m.test(userText) && tools.has('bash')) {
+    return [tool('bash', {
+      command: "printf 'BotHub approval complete\\n'", description: 'BotHub approval demo',
+      justification: 'Check the isolated monitor approval flow.', sandbox_permissions: 'danger-full-access',
+    })]
+  }
   // "撑爆": the provider rejects the request as past its window.
   if (userText.startsWith('撑爆')) return 'overflow'
   // A file in the message (a long Bot message, a file the user sent): DSH gives its saved

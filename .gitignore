@@ -15,7 +15,7 @@ node_modules/
 /deepseek-harness/
 
 # Test bench, local DSH data and the screenshots of dev/check.sh.
-.dsh-test*/
+.dsh-test*
 .dsh-home/
 /shots/
 .playwright-mcp/

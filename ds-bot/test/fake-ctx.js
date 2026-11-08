@@ -38,6 +38,7 @@ export function fakeContext({ services = {} } = {}) {
   // Listeners by event name, in registration order.
   const listeners = new Map()
   const sections = new Map()
+  const provided = new Map()
   const ctx = {
     calls,
     registeredTools,
@@ -45,7 +46,12 @@ export function fakeContext({ services = {} } = {}) {
     listeners,
     sections,
     logger: { warn() {}, info() {} },
-    get: name => services[name],
+    get: name => provided.has(name) ? provided.get(name) : services[name],
+    provide(name, value) {
+      if (provided.has(name) || services[name] !== undefined) throw new Error(`Service already provided: ${name}`)
+      provided.set(name, value)
+      return () => { provided.delete(name) }
+    },
     on(name, listener, options) {
       calls.push(`on ${name}${options?.prepend ? ' (prepend)' : ''}`)
       listeners.set(name, [...(listeners.get(name) ?? []), listener])
