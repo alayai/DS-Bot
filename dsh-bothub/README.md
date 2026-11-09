@@ -336,7 +336,7 @@ for replay limits, reconnect behavior, verification and current coverage.
 
 ## Release candidate installation and rollback
 
-`0.1.0-rc.5` accepts DSH `0.2.1-rc.3` and `0.2.1-rc.4`, with Cordis `4.0.5`. Install the
+`0.1.0-rc.6` accepts DSH `0.2.1-rc.3` and `0.2.1-rc.4`, with Cordis `4.0.5`. Install the
 companion DS Bot archive from the **same candidate directory** first, then the
 BotHub archive, through the host plugin manager's local bundle installation.
 The DS Bot archive still identifies as `0.2.16`; its version alone cannot prove
