@@ -7,6 +7,10 @@ treadmill, dumbbells and a mat. Shared workstations occupy a separate front area
 Select a desk or a teammate to inspect their work; idle characters can use the amenities.
 All models and surface textures are generated locally, with no asset downloads.
 
+Member details expand when you select a teammate. Without a selection, only a narrow
+control rail remains on the right. Use its arrow button to collapse or restore details;
+collapsing preserves your selection and message draft. Selecting a teammate opens it again.
+
 A Bot's status, active runs and character motion reflect all of its conversations,
 including private chats and other groups. Working in one conversation prevents
 idle activities in every room. Run cards identify and open the actual working
@@ -72,7 +76,10 @@ compatible bridge; private desktop previews require the companion DS Bot update.
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
 the Bot's work across all conversations. The common area seats members who belong to no group;
-the 3D scene seats only Bots. Ordinary Agents and subagents remain available in
+the 3D scene seats only Bots. Its header counts distinct Bots, their active runs
+and Bots needing attention across the whole team, independently of room/search
+filters and rendering limits. The 2D header counts all monitored members.
+Ordinary Agents and subagents remain available in
 the 2D overview and details; subagents follow their actual root conversation.
 Select a room label to enter it, then
 select a member to open the corresponding group chat.
@@ -329,7 +336,7 @@ for replay limits, reconnect behavior, verification and current coverage.
 
 ## Release candidate installation and rollback
 
-`0.1.0-rc.4` accepts DSH `0.2.1-rc.3` and `0.2.1-rc.4`, with Cordis `4.0.5`. Install the
+`0.1.0-rc.5` accepts DSH `0.2.1-rc.3` and `0.2.1-rc.4`, with Cordis `4.0.5`. Install the
 companion DS Bot archive from the **same candidate directory** first, then the
 BotHub archive, through the host plugin manager's local bundle installation.
 The DS Bot archive still identifies as `0.2.16`; its version alone cannot prove

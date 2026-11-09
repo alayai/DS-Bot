@@ -85,7 +85,7 @@ export function createMessageStore(call = messageRequest, environment = globalTh
     draft(target, draft) {
       const current = get(target)
       if (['submitting', 'unknown'].includes(current.phase) || current.checking) return
-      publish(target, { ...empty, draft: draft.slice(0, 4000) })
+      publish(target, draft === '' ? empty : { ...empty, draft: draft.slice(0, 4000) })
     },
     send: target => perform(target, 'send'),
     check: target => perform(target, 'receipt'),

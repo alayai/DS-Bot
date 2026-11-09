@@ -48,6 +48,12 @@
 .bh-current,.bh-crumb[aria-current] { color: var(--bh-ink); font-weight: 600; overflow-wrap: anywhere; }
 .bh-content { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--bh-line); }
 .bh-workspace { min-width: 0; flex: 1; position: relative; overflow: auto; }
+.bh-detail-shell { display: flex; flex-shrink: 0; min-width: 0; width: 336px; }
+.bh-detail-shell.bh-detail-collapsed { width: 36px; }
+.bh-detail[hidden] { display: none; }
+.bh-detail-rail { width: 36px; flex-shrink: 0; border-left: 1px solid var(--bh-line); padding: 4px; }
+.bh-detail-toggle { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--bh-muted); }
+.bh-detail-toggle:hover:enabled { background: var(--bh-card); color: var(--bh-ink); }
 .bh-detail { width: 300px; flex-shrink: 0; padding: 24px 20px; border-left: 1px solid var(--bh-line); overflow: auto; }
 .bh-detail-top { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .bh-detail-top > p { color: var(--bh-muted); overflow-wrap: anywhere; }
@@ -135,6 +141,7 @@
 .bh-scene-help { position: absolute; bottom: 16px; left: 16px; right: 16px; font-size: 11px; color: var(--bh-muted); pointer-events: none; text-align: center; }
 @container(max-width:1000px) {
   .bh-coverage { display: none; }
+  .bh-detail-shell { width: 286px; }
   .bh-detail { width: 250px; padding: 16px; }
   .bh-toolbar { flex-wrap: wrap; }
   .bh-toolbar input { flex-basis: 100%; }
@@ -142,8 +149,11 @@
 @container(max-width:900px) {
   .bh-content { flex-direction: column; overflow: auto; }
   .bh-workspace { min-height: 360px; overflow: visible; flex: 1 0 360px; }
-  .bh-detail { width: 100%; border-left: 0; border-top: 1px solid var(--bh-line); overflow: visible; }
-  .bh-detail.bh-empty { display: none; }
+  .bh-detail-shell { width: 100%; border-top: 1px solid var(--bh-line); }
+  .bh-detail { width: auto; min-width: 0; flex: 1; border-left: 0; overflow: visible; }
+  .bh-content:has(.bh-detail-collapsed) { flex-direction: row; overflow: hidden; }
+  .bh-content:has(.bh-detail-collapsed) .bh-workspace { flex: 1; overflow: auto; }
+  .bh-detail-shell.bh-detail-collapsed { border-top: 0; }
   .bh-header,.bh-toolbar { padding: 16px; }
   .bh-header { flex-wrap: wrap; gap: 10px; }
   .bh-header > div:first-child { flex-basis: 100%; }

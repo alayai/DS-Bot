@@ -111,6 +111,40 @@ test('blocked storage works; disposal aborts requests; draft capacity can be rec
   assert.equal(store.getSnapshot().size, 0)
 })
 
+test('empty idle drafts release capacity without reloading or clearing another target', () => {
+  const store = createMessageStore(undefined, environment())
+  for (let i = 0; i < 64; i++) store.draft({ ...target, entityId: `b${i}` }, 'draft')
+  assert.equal(store.capacity(target), false)
+  store.draft({ ...target, entityId: 'b0' }, '')
+  assert.equal(store.capacity(target), true)
+  assert.equal(store.getSnapshot().size, 63)
+  store.draft(target, 'new draft')
+  assert.equal(store.get(target).draft, 'new draft')
+  assert.equal(store.get({ ...target, entityId: 'b1' }).draft, 'draft')
+  store.draft(target, '')
+  for (let i = 1; i < 64; i++) store.draft({ ...target, entityId: `b${i}` }, '')
+  assert.equal(store.getSnapshot().size, 0)
+  store.dispose()
+})
+
+test('emptying a draft cannot discard a pending or uncertain command', async () => {
+  let fail
+  const store = createMessageStore(() => new Promise((_resolve, reject) => { fail = reject }), environment())
+  store.draft(target, 'keep until receipt')
+  const sending = store.send(target)
+  const command = store.get(target).command
+  store.draft(target, '')
+  assert.equal(store.get(target).phase, 'submitting')
+  assert.equal(store.get(target).draft, 'keep until receipt')
+  fail(Error('network'))
+  await sending
+  store.draft(target, '')
+  assert.equal(store.get(target).phase, 'unknown')
+  assert.equal(store.get(target).command, command)
+  assert.equal(store.get(target).draft, 'keep until receipt')
+  store.dispose()
+})
+
 test('command transport preserves read-only errors and treats malformed success as uncertain', async t => {
   const original = globalThis.fetch
   t.after(() => { globalThis.fetch = original })

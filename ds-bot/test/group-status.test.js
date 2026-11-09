@@ -123,7 +123,7 @@ test('a group Session\'s approval waits in the team view, frees the round, and t
   assert.equal((await host.call('approval-answer', { id: approval.id, choice: 'allow' })).error.code, 'bot/stale')
   assert.deepEqual((await host.call('state', {})).value.work.approvals, [])
 
-  host.emit('gb', 'tool/result', { callId: 'k1' })
+  host.emit('gb', 'tool/result', { message: { toolCallId: 'k1', content: [] } })
   host.emit('gb', 'assistant/message', { message: { content: [{ type: 'text', text: 'Writer: Copied the doc to E:/docs.' }] } })
   host.emit('gb', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   await settle(() => host.agentOf('r1').calls.length === 1)
@@ -277,7 +277,7 @@ test('a Bot running a PTC program shows the tool the program is in', async (t) =
   assert.deepEqual(await now(), ['working', 'run_code'])
   dispatch(host.emit, 'b', 'k1', 3, 'ask_user', { question: 'Ship it?', options: [{ label: 'Yes' }] })()
   assert.deepEqual(await now(), ['working', 'run_code'])
-  host.emit('b', 'tool/result', { callId: 'k1' })
+  host.emit('b', 'tool/result', { message: { toolCallId: 'k1', content: [] } })
   assert.deepEqual(await now(), ['thinking', undefined])
 })
 

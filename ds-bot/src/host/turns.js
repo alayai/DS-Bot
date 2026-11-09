@@ -391,7 +391,7 @@ export function install(rt) {
         endCall(id, entry, event.data?.subCallId)
         break
       case 'tool/result':
-        endCall(id, entry, event.data?.callId)
+        endCall(id, entry, event.data?.message?.toolCallId)
         break
       case 'turn/start':
         setActivity(id, 'thinking')

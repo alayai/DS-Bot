@@ -1,5 +1,6 @@
-import { createElement as h, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { entityState, runLabel } from './model.js'
+import { createElement as h, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { runLabel } from './model.js'
+import { teamMetrics } from './metrics.js'
 import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState, workSnapshot } from './rooms.js'
 import { Scene } from './world.js'
 import { allowsShortcut } from './camera.js'
@@ -31,7 +32,7 @@ function Member({ entity, snapshot, groupId, selected, onSelect, t }) {
   count > 0 && h('span', { className: 'bh-count' }, count))
 }
 
-function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDesktop, messages, openReceipt, t }) {
+function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDesktop, messages, openReceipt, hidden, id, t }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const mounted = useRef(true)
@@ -39,7 +40,6 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
-  if (!entity) return h('aside', { className: 'bh-detail bh-empty' }, h(HubIcon, { size: 40 }), h('p', null, t('select')))
   const scoped = spaceSnapshot(snapshot, groupId)
   const sessions = scoped.sessions.filter(item => item.entityId === entity.id)
   const runs = workSnapshot(entity, snapshot, groupId).runs.filter(item => item.entityId === entity.id)
@@ -58,7 +58,7 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
       if (mounted.current) setError(['not-found', 'unauthorized', 'incompatible', 'bridge-missing', 'host-missing'].includes(failure.message) ? failure.message : 'unavailable')
     } finally { if (mounted.current) setBusy(false) }
   }
-  return h('aside', { className: 'bh-detail', 'aria-label': entity.name },
+  return h('aside', { className: 'bh-detail', 'aria-label': entity.name, hidden, id },
     h('div', { className: 'bh-detail-top' }, h('div', { className: 'bh-avatar bh-avatar-large' }, h(HubIcon, { size: 36 })),
       h('h2', null, entity.name), h('p', null, entity.role),
       h(Status, { state: spaceState(entity, snapshot, groupId), t })),
@@ -121,6 +121,8 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
 
 export function Hub({ store, open, messages, openReceipt, t }) {
   const root = useRef(null)
+  const detailId = useId()
+  const [detailCollapsed, setDetailCollapsed] = useState(false)
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [view, setView] = useState('3d')
   const [selected, setSelected] = useState(null)
@@ -148,6 +150,7 @@ export function Hub({ store, open, messages, openReceipt, t }) {
   const onSelect = (entityId, space) => {
     if (space !== undefined) setGroup(space ?? 'public')
     setSelected({ entityId, groupId: space })
+    setDetailCollapsed(false)
   }
   const focus = space => { setGroup(space ?? 'public'); setSelected(null) }
   const overview = () => { setGroup('all'); setSelected(null) }
@@ -163,7 +166,8 @@ export function Hub({ store, open, messages, openReceipt, t }) {
     if (groupId != null && !data.groups.some(item => item.id === groupId)) overview()
     else if (selected && (!entity || !visible.some(item => item.id === selected.entityId))) setSelected(null)
   }, [data, groupId, selected, entity, visible])
-  const attention = data?.entities.filter(item => entityState(item, data) === 'attention').length ?? '—'
+  const detailOpen = Boolean(entity) && !detailCollapsed
+  const metrics = useMemo(() => teamMetrics(data, view), [data, view])
   const roomName = groupId === null ? t('publicSpace') : data?.groups.find(item => item.id === groupId)?.name
   return h('section', {
     className: 'bh-root', ref: root, tabIndex: -1, 'aria-label': 'BotHub',
@@ -179,9 +183,9 @@ export function Hub({ store, open, messages, openReceipt, t }) {
       h('div', { className: 'bh-connection', role: 'status' }, h('i', { className: state.phase === 'live' ? 'bh-live-dot' : '' }), t(state.phase)),
       h('button', { type: 'button', className: 'bh-button', onClick: () => void store.refresh() }, t('refresh'))),
     h('div', { className: 'bh-metrics' },
-      ...[[data?.entities.length ?? '—', 'members'], [data?.runs.length ?? '—', 'runs'], [attention, 'attention']].map(([value, label]) =>
+      ...[[metrics.members, view === '3d' ? 'botMembers' : 'members'], [metrics.runs, 'runs'], [metrics.attention, 'attention']].map(([value, label]) =>
         h('div', { key: label }, h('strong', null, value), h('span', null, t(label)))),
-      h('span', { className: 'bh-coverage' }, t('coverage'))),
+      h('span', { className: 'bh-coverage' }, t(view === '3d' ? 'botCoverage' : 'coverage'))),
     state.error && h('div', { className: 'bh-banner', role: 'alert' }, t(state.error)),
     state.phase === 'live' && state.transport === 'poll' && h('div', { className: 'bh-banner', role: 'status' }, t('polling')),
     data?.readOnly && h('div', { className: 'bh-banner' }, t('readOnly')),
@@ -212,7 +216,16 @@ export function Hub({ store, open, messages, openReceipt, t }) {
           ? view === '3d' ? h(Scene, { key: data.workspaceId, layout, selected, onSelect, onDesktop, onFocus: focus, onClear: clear, focused: group !== 'all', connected: state.phase === 'live' && !data.readOnly, previewEnabled: !desktopEntity, t, onError: () => { setSceneError(true); setView('2d') } })
             : h('div', { className: 'bh-members' }, ...visible.map(item => h(Member, { key: item.id, entity: item, snapshot: data, groupId, selected: item.id === selected?.entityId, onSelect, t })))
           : h('div', { className: 'bh-empty' }, h(HubIcon, { size: 48 }), h('p', null, t(!data ? state.error ? state.error : 'loading' : data.entities.length ? 'empty' : 'noTeam')))),
-      h(Detail, { key: JSON.stringify([entity?.id, selected?.groupId]), entity, snapshot: data, groupId: selected?.groupId, connected: state.phase === 'live', open, onSelect, onDesktop, messages, openReceipt, t })),
+      h('div', { className: `bh-detail-shell${detailOpen ? '' : ' bh-detail-collapsed'}` },
+        entity && h(Detail, { key: JSON.stringify([data.workspaceId, entity.id, selected.groupId]), entity, snapshot: data, groupId: selected.groupId, connected: state.phase === 'live', open, onSelect, onDesktop, messages, openReceipt, hidden: !detailOpen, id: detailId, t }),
+        h('div', { className: 'bh-detail-rail' }, h('button', {
+          type: 'button', className: 'bh-detail-toggle', disabled: !entity,
+          'aria-label': t(detailOpen ? 'collapseDetails' : 'expandDetails'),
+          title: t(!entity ? 'select' : detailOpen ? 'collapseDetails' : 'expandDetails'),
+          'aria-expanded': detailOpen, 'aria-controls': entity ? detailId : undefined,
+          onClick: () => setDetailCollapsed(value => !value),
+        }, h('svg', { width: 18, height: 18, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          h('path', { d: detailOpen ? 'M7 5l5 5-5 5M16 4v12' : 'M12 5l-5 5 5 5M4 4v12' })))))),
     desktopEntity && h(DesktopViewer, { key: JSON.stringify([data.workspaceId, desktopEntity.id]), entity: desktopEntity,
       connected: state.phase === 'live' && !data.readOnly, onClose: () => setDesktop(null), t }),
     h('footer', { className: 'bh-footer' }, data && `${t('updated')} ${new Date(data.capturedAt).toLocaleTimeString()}`, state.phase === 'stale' && ` · ${t('stale')}`))

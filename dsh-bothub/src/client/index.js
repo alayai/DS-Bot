@@ -3,8 +3,9 @@ import { Hub, HubIcon } from './view.js'
 import { createMonitorStore, request } from './store.js'
 import { en, zh } from './locale.js'
 import { createMessageStore } from './messages.js'
+import { createSessionNavigation } from './session-navigation.js'
 
-export const inject = ['slots', 'sidebarRightTabs', 'sidebarRight', 'uiWorkspace', 'locale']
+export const inject = ['slots', 'sidebarRightTabs', 'sidebarRight', 'sessions', 'uiWorkspace', 'locale']
 
 const TAB_ID = 'dsh-bothub'
 const TAB_KIND = 'bothub'
@@ -27,23 +28,25 @@ function Launcher({ sidebar, show, t }) {
 export function apply(ctx) {
   const store = createMonitorStore()
   const messages = createMessageStore()
+  const navigation = createSessionNavigation(ctx.sessions, target => ctx.uiWorkspace.openSession(target))
+  ctx.effect(() => () => navigation.dispose(), 'bothub: navigation disposal')
   ctx.effect(() => ctx.locale.register('bothub', { en, zh }), 'bothub: language')
   ctx.effect(() => () => store.stop(), 'bothub: monitor disposal')
   ctx.effect(() => () => messages.dispose(), 'bothub: message disposal')
   // A newly authenticated DSH generation must recheck capabilities even if the
   // previous HTTP attempt stopped retrying during Host startup.
   ctx.effect(() => ctx.on('connection/reset', () => { void store.refresh() }), 'bothub: host reconnection')
-  const open = async (entityId, sessionId, groupId) => {
+  const open = (entityId, sessionId, groupId) => navigation.open(async () => {
     const value = await request({ action: 'resolve', entityId, ...(sessionId ? { sessionId } : {}), ...(groupId ? { groupId } : {}) }, AbortSignal.timeout(10000))
-    ctx.uiWorkspace.openSession(value.target)
-  }
+    return value.target
+  })
   ctx.effect(() => ctx.sidebarRightTabs.register({
     id: TAB_ID, kind: TAB_KIND, title: () => 'BotHub',
     guide: [{ id: 'bothub', order: 60, title: () => 'BotHub', icon: HubIcon }],
   }), 'bothub: right sidebar type')
   ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
     name: 'sidebar.right.pane.tab', key: TAB_ID, locale: 'bothub',
-    inject: () => ({ store, open, messages, openReceipt: receipt => ctx.uiWorkspace.openSession(receipt.sessionId) }),
+    inject: () => ({ store, open, messages, openReceipt: receipt => navigation.open(() => receipt.sessionId) }),
   }, HubTab))
   for (const name of ['bot.sidebar.action', 'sidebar.footer.action']) {
     ctx.slots.inject(name, () => ctx.slots.register({
