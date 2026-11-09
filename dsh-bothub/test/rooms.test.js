@@ -26,10 +26,26 @@ test('one room per group, including empty and identically named groups; identity
   const layout = roomLayout(data)
   assert.equal(layout.rooms.length, 4)
   assert.equal(new Set(layout.rooms.map(room => room.key)).size, 4)
-  assert.equal(layout.presences.filter(item => item.entity.id === 'b').length, 3)
+  assert.deepEqual(layout.presences.filter(item => item.entity.id === 'b').map(item => item.groupId), ['g1', 'g2'])
   assert.equal(new Set(layout.presences.map(item => item.key)).size, layout.presences.length)
   assert.equal(layout.rooms.find(room => room.groupId === 'empty').total, 0)
   assert.equal(data.entities.length, 3)
+})
+
+test('public room excludes group members even when only their private session matches the filter', () => {
+  const data = fixture()
+  const publicRoom = layout => layout.rooms.find(room => room.groupId === null)
+  assert.equal(publicRoom(roomLayout(data)).total, 1)
+  assert.deepEqual(publicRoom(roomLayout(data, { groupId: null })).entities, [agent])
+  assert.deepEqual(roomLayout(data, { status: 'running' }).presences.map(item => item.entity.id), ['child'])
+  assert.deepEqual(selectSpaceEntities(data, { groupId: null }), [agent])
+  assert.deepEqual(selectSpaceEntities(data), [bot, agent, child])
+
+  data.groups[0].members = []
+  assert.deepEqual(selectSpaceEntities(data, { groupId: null }), [agent])
+  data.groups[1].members = []
+  assert.deepEqual(selectSpaceEntities(data, { groupId: null, status: 'running' }), [bot])
+  assert.equal(publicRoom(roomLayout(data)).total, 2)
 })
 
 test('room states and filters use only that group context, not private or other group work', () => {
@@ -49,6 +65,7 @@ test('children follow the explicit root session, including external children wit
   assert.equal(inSpace(child, data, 'g1'), true)
   assert.equal(inSpace(child, data, 'g2'), false)
   assert.equal(inSpace(child, data, null), false)
+  assert.equal(inSpace({ ...child, rootSessionId: 'own' }, data, null), true)
   assert.equal(inSpace({ ...child, mode: 'external' }, data, 'g1'), true)
   data.groups[0].members = []
   assert.equal(inSpace(child, data, 'g1'), false)

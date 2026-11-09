@@ -6,7 +6,7 @@ import { roomFixtures, stationSize } from '../src/client/office-layout.js'
 
 function layout(count = 3, groupId = null) {
   const entities = Array.from({ length: count }, (_, i) => ({ id: `b${i}`, kind: 'bot', name: `Bot ${i}` }))
-  return roomLayout({ entities, groups: [{ id: 'g', name: 'Group', members: entities.map(e => e.id) }],
+  return roomLayout({ entities, groups: groupId === null ? [] : [{ id: groupId, name: 'Group', members: entities.map(e => e.id) }],
     sessions: entities.map(e => ({ id: e.id, entityId: e.id, status: 'idle', blockers: [], groupId })), runs: [] }, { groupId })
 }
 test('paths keep room identity and use clear aisles, including 50-seat layouts', () => {

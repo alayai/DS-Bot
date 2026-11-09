@@ -65,9 +65,10 @@ compatible bridge; private desktop previews require the companion DS Bot update.
 
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
-only that group's activity. Direct chats and ordinary Agents live in the common
-area, and subagents follow their actual root conversation. Select a room label
-to enter it, then select a member to open the corresponding group chat.
+only that group's activity. The common area seats members who belong to no group;
+the 2D overview still offers every member and their direct chats. Subagents
+follow their actual root conversation. Select a room label to enter it, then
+select a member to open the corresponding group chat.
 
 Selecting a 3D seat enters its room and brings the member into close view.
 Use the location trail or Escape to return from member to room to overview.

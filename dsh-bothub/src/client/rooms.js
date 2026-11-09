@@ -11,7 +11,8 @@ export function inSpace(entity, snapshot, groupId) {
     return Boolean(root) && (root.groupId ?? null) === groupId
       && (groupId === null || snapshot.groups.some(group => group.id === groupId && group.members.includes(entity.rootEntityId)))
   }
-  return groupId === null || snapshot.groups.some(group => group.id === groupId && group.members.includes(entity.id))
+  if (groupId === null) return !snapshot.groups.some(group => group.members.includes(entity.id))
+  return snapshot.groups.some(group => group.id === groupId && group.members.includes(entity.id))
 }
 
 export function spaceSnapshot(snapshot, groupId) {

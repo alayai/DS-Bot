@@ -17,8 +17,8 @@ const overlaps = (a, b) => Math.abs(a.x - b.x) < (a.width + b.width) / 2 - .001
 
 test('storage, amenities and workstations fit inside every room without overlapping', () => {
   for (const count of [0, 1, 3, 12, 50]) {
-    const data = fixture(count)
     for (const groupId of [null, 'g0']) {
+      const data = fixture(count, groupId === null ? 0 : 1)
       const layout = roomLayout(data, { groupId })
       const room = layout.rooms[0], furniture = roomFixtures(room)
       const stations = layout.presences.map(seat => ({ x: seat.x - room.x, z: seat.z - room.z, ...stationSize }))
@@ -72,7 +72,7 @@ test('room rebuild frees instance buffers while shared surfaces survive until re
   assert.equal(instances, environment.batchCount)
   assert.equal(environment.group.children.length, 0)
   assert.deepEqual([geometries, materials, textures], [0, 0, 0])
-  const replacement = createOfficeEnvironment(roomLayout(fixture(1), { groupId: null }), assets)
+  const replacement = createOfficeEnvironment(roomLayout(fixture(1, 0), { groupId: null }), assets)
   replacement.dispose(); assets.dispose()
   assert.equal(geometries, Object.keys(assets.geometry).length)
   assert.equal(materials, Object.keys(assets.materials).length)
