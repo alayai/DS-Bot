@@ -383,20 +383,29 @@ async function start(value, signal) {
   await validateImage(image, signal)
   if (record.homeQuotaBytes) await probeHomeQuota(docker, image, engine, signal)
   await prepareNetwork(value, { docker, engine, image: baseImage, signal })
-  let info = await inspect(value, signal)
-  if (!info) {
+  const info = await inspect(value, signal)
+  if (!info?.State.Running) {
     let volume
     try { volume = JSON.parse((await docker(['volume', 'inspect', value.volume], signal)).stdout)[0] }
-    catch (error) { if (!missingVolume(error)) throw error }
+    catch (error) { if (info || !missingVolume(error)) throw error }
     if (volume) {
       try { assertVolume(volume, value); assertHomeImage(volume, record, image) } catch (error) { fail(error.message) }
     }
+    if (info) {
+      // Stopped containers retain /tmp, including stale X locks after a crash.
+      // Discard that layer only after checking the home independently of it.
+      if (!volume || !/^[a-f0-9]{64}$/.test(info.Id ?? '')) fail('The stopped desktop could not be verified for restart.')
+      await value.client?.close()
+      await value.previewClient?.close()
+      value.client = null
+      value.previewClient = null
+      await docker(['rm', info.Id], signal)
+    }
     if (!volume) await docker(['volume', 'create', ...quotaArguments(record.homeQuotaBytes, engine), '--label', `org.ds-bot.computer.id=${record.id}`, '--label', `org.ds-bot.computer.image=${image}`, value.volume], signal)
     await docker(createArgs(value), signal)
-    info = await inspect(value, signal)
-  }
-  if (!info.State.Running) {
-    await docker(['start', value.name], signal)
+    const created = await inspect(value, signal)
+    if (!created || !/^[a-f0-9]{64}$/.test(created.Id ?? '')) fail('The new desktop container could not be verified.')
+    await docker(['start', created.Id], signal)
     value.reconciled = true
   }
   await waitReady(value, signal)
