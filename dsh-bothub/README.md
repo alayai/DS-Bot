@@ -7,6 +7,11 @@ treadmill, dumbbells and a mat. Shared workstations occupy a separate front area
 Select a desk or a teammate to inspect their work; idle characters can use the amenities.
 All models and surface textures are generated locally, with no asset downloads.
 
+A Bot's status, active runs and character motion reflect all of its conversations,
+including private chats and other groups. Working in one conversation prevents
+idle activities in every room. Run cards identify and open the actual working
+conversation; message targets and room conversation links stay in the selected room.
+
 Workstation monitors show a Bot's running private desktop through read-only
 snapshots. Update **both DS Bot and BotHub** for this feature: DS Bot must expose
 `passivePreview` so background screens do not postpone automatic idle shutdown.
@@ -66,7 +71,7 @@ compatible bridge; private desktop previews require the companion DS Bot update.
 
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
-only that group's activity. The common area seats members who belong to no group;
+the Bot's work across all conversations. The common area seats members who belong to no group;
 the 3D scene seats only Bots. Ordinary Agents and subagents remain available in
 the 2D overview and details; subagents follow their actual root conversation.
 Select a room label to enter it, then

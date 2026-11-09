@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { entityState, runLabel } from './model.js'
-import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } from './rooms.js'
+import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState, workSnapshot } from './rooms.js'
 import { Scene } from './world.js'
 import { allowsShortcut } from './camera.js'
 import { Composer } from './composer.js'
@@ -19,7 +19,7 @@ const Status = ({ state, t }) => h('span', { className: `bh-status bh-${state}` 
 
 function Member({ entity, snapshot, groupId, selected, onSelect, t }) {
   const state = spaceState(entity, snapshot, groupId)
-  const count = spaceSnapshot(snapshot, groupId).runs.filter(run => run.entityId === entity.id).length
+  const count = workSnapshot(entity, snapshot, groupId).runs.filter(run => run.entityId === entity.id).length
   return h('button', {
     type: 'button', className: `bh-member${selected ? ' bh-selected' : ''}`,
     onClick: () => onSelect(entity.id, groupId), 'aria-pressed': selected,
@@ -42,7 +42,7 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
   if (!entity) return h('aside', { className: 'bh-detail bh-empty' }, h(HubIcon, { size: 40 }), h('p', null, t('select')))
   const scoped = spaceSnapshot(snapshot, groupId)
   const sessions = scoped.sessions.filter(item => item.entityId === entity.id)
-  const runs = scoped.runs.filter(item => item.entityId === entity.id)
+  const runs = workSnapshot(entity, snapshot, groupId).runs.filter(item => item.entityId === entity.id)
   const recent = recentRuns(sessions)
   const parent = scoped.entities.find(item => item.id === entity.parentEntityId)
   const children = scoped.entities.filter(item => item.parentEntityId === entity.id)
@@ -74,6 +74,7 @@ function Detail({ entity, snapshot, groupId, open, connected, onSelect, onDeskto
     entity.kind !== 'bot' && entity.mode !== 'external' && h('p', { className: 'bh-note' }, t('agentCoverage')),
     entity.kind !== 'bot' && sessions.some(session => session.detailState !== 'observed') && h('p', { className: 'bh-note' }, t('detailCoverage')),
     h('h3', null, t('runs')),
+    entity.kind === 'bot' && groupId !== undefined && h('p', { className: 'bh-note' }, t('botWorkScope')),
     runs.length === 0 && h('p', { className: 'bh-muted' }, t('noRuns')),
     ...runs.map(run => {
       const duration = run.startedAt ? Math.max(0, Math.floor((snapshot.capturedAt - run.startedAt) / 1000)) : null

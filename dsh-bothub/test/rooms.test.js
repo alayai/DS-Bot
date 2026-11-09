@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { inSpace, isSceneEntity, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } from '../src/client/rooms.js'
+import { inSpace, isSceneEntity, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState, workSnapshot } from '../src/client/rooms.js'
 
 const bot = { id: 'b', kind: 'bot', name: 'Builder', role: '', waiting: true }
 const agent = { id: 'a', kind: 'agent', name: 'Agent', role: '' }
@@ -36,10 +36,11 @@ test('one room per group, including empty and identically named groups; identity
 
 test('public room excludes group members even when only their private session matches the filter', () => {
   const data = fixture()
+  data.sessions.find(session => session.id === 'bs1').blockers = []
   const publicRoom = layout => layout.rooms.find(room => room.groupId === null)
   assert.equal(publicRoom(roomLayout(data)).total, 0)
   assert.deepEqual(publicRoom(roomLayout(data, { groupId: null })).entities, [])
-  assert.deepEqual(roomLayout(data, { status: 'running' }).presences, [])
+  assert.deepEqual(roomLayout(data, { status: 'running' }).presences.map(item => item.groupId), ['g1', 'g2'])
   assert.deepEqual(selectSpaceEntities(data, { groupId: null }), [agent])
   assert.deepEqual(selectSpaceEntities(data), [bot, agent, child])
 
@@ -59,16 +60,49 @@ test('3D scene only lays out Bots while 2D keeps Agents and subagents', () => {
   assert.deepEqual(selectSpaceEntities(data), [bot, agent, child])
 })
 
-test('room states and filters use only that group context, not private or other group work', () => {
+test('Bot seats share real work while room conversations retain their own context', () => {
   const data = fixture()
   assert.equal(spaceState(bot, data, 'g1'), 'attention')
-  assert.equal(spaceState(bot, data, 'g2'), 'idle')
-  assert.equal(spaceState(bot, data, null), 'running')
+  assert.equal(spaceState(bot, data, 'g2'), 'attention')
+  assert.equal(spaceState(bot, data, null), 'attention')
   assert.deepEqual(selectSpaceEntities(data, { groupId: 'g2', status: 'running' }), [])
-  assert.deepEqual(selectSpaceEntities(data, { groupId: 'g2', status: 'idle' }), [bot])
+  assert.deepEqual(selectSpaceEntities(data, { groupId: 'g2', status: 'idle' }), [])
+  assert.deepEqual(selectSpaceEntities(data, { groupId: 'g2', status: 'attention' }), [bot])
+  assert.equal(workSnapshot(bot, data, 'g2'), data)
   assert.deepEqual(spaceSnapshot(data, 'g1').runs.map(run => run.sessionId), ['bs1', 'cs'])
   data.sessions = data.sessions.filter(session => session.id !== 'bs2')
-  assert.equal(spaceState(bot, data, 'g2'), 'unknown')
+  assert.equal(spaceState(bot, data, 'g2'), 'attention')
+  assert.equal(spaceState(child, data, 'g2'), 'unknown')
+  assert.deepEqual(workSnapshot(child, data, 'g2').runs, [])
+})
+
+test('private tool work and other-group work remain busy in an idle or unobserved room', () => {
+  const data = fixture()
+  data.entities[0] = { ...bot, waiting: false }
+  data.sessions.forEach(session => { session.status = 'idle'; session.blockers = [] })
+  const worker = data.entities[0]
+  for (const context of [null, 'g1']) {
+    const session = data.sessions.find(item => item.entityId === worker.id && item.groupId === context)
+    session.status = 'running'
+    data.runs = [{ id: 'current', entityId: worker.id, sessionId: session.id, groupId: context, phase: 'tool', tool: 'read_page' }]
+    for (const groupId of ['g1', 'g2']) {
+      assert.equal(spaceState(worker, data, groupId), 'running')
+      assert.deepEqual(selectSpaceEntities(data, { groupId, status: 'running' }), [worker])
+      assert.equal(selectSpaceEntities(data, { groupId, status: 'idle' }).some(item => item.id === worker.id), false)
+      assert.equal(roomLayout(data, { groupId }).presences[0].state, 'running')
+      assert.equal(workSnapshot(worker, data, groupId).runs[0].sessionId, session.id)
+    }
+    session.status = 'idle'
+  }
+  data.sessions = data.sessions.filter(session => session.groupId !== 'g2')
+  assert.equal(spaceState(worker, data, 'g2'), 'running')
+  data.runs = []
+  worker.waiting = true
+  assert.equal(spaceState(worker, data, 'g2'), 'waiting')
+  worker.waiting = false
+  assert.equal(spaceState(worker, data, 'g2'), 'idle')
+  data.sessions[0].status = 'unknown'
+  assert.equal(spaceState(worker, data, 'g2'), 'unknown')
 })
 
 test('children follow the explicit root session, including external children with no local session', () => {

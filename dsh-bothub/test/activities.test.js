@@ -69,6 +69,41 @@ test('new work interrupts an outing and retraces the path without jumping or los
   assert.ok(returned)
   actor.dispose()
 })
+
+test('private tool execution interrupts a group seat exercise and keeps it working until all work ends', () => {
+  const entity = { id: 'secretary', kind: 'bot', name: 'Secretary', waiting: false }
+  const data = { entities: [entity], groups: [{ id: 'team', name: 'Team', members: [entity.id] }],
+    sessions: [{ id: 'private', entityId: entity.id, groupId: null, status: 'idle', blockers: [] },
+      { id: 'group', entityId: entity.id, groupId: 'team', status: 'idle', blockers: [] }], runs: [] }
+  const current = () => roomLayout(data, { groupId: 'team' })
+  const { rooms: [room], presences: [seat] } = current()
+  const actor = createActivity(seat, room, new Map())
+  let time = 0, pose
+  for (; time < 600; time += .1) {
+    pose = actor.step(time, 'lively')
+    if (['stretch', 'dumbbell'].includes(pose.action)) break
+  }
+  assert.ok(time < 600, 'expected a group exercise before work')
+  data.sessions[0].status = 'running'
+  data.runs = [{ id: 'search', entityId: entity.id, sessionId: 'private', groupId: null, phase: 'tool', tool: 'read_page' }]
+  const active = current().presences[0]
+  assert.equal(active.state, 'running')
+  actor.setState(active.state, time)
+  assert.equal(actor.step(time, 'lively').action, 'walk')
+  let returned = false
+  for (; time < 620; time += .1) {
+    actor.setState(current().presences[0].state, time)
+    const action = actor.step(time, 'lively').action
+    assert.ok(['walk', 'type'].includes(action), action)
+    if (action === 'type') returned = true
+  }
+  assert.ok(returned)
+  data.runs = []
+  data.sessions[0].status = 'idle'
+  actor.setState(current().presences[0].state, time)
+  assert.equal(actor.step(time, 'lively').action, 'sit')
+  actor.dispose()
+})
 test('unobserved members sit for 60 seconds, then follow the idle routine', () => {
   const { rooms: [room], presences: [seat] } = layout(1)
   const actor = createActivity({ ...seat, state: 'unknown' }, room, new Map())

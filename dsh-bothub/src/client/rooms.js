@@ -27,7 +27,12 @@ export function spaceSnapshot(snapshot, groupId) {
 }
 
 export function spaceState(entity, snapshot, groupId) {
-  return entityState(groupId == null ? entity : { ...entity, waiting: false }, spaceSnapshot(snapshot, groupId))
+  return entityState(entity.kind === 'bot' || groupId == null ? entity : { ...entity, waiting: false }, workSnapshot(entity, snapshot, groupId))
+}
+
+export function workSnapshot(entity, snapshot, groupId) {
+  // A Bot is one worker across rooms; private work must stop every seat's idle routine.
+  return entity.kind === 'bot' ? snapshot : spaceSnapshot(snapshot, groupId)
 }
 
 export function selectSpaceEntities(snapshot, { query = '', status = 'all', groupId } = {}) {
@@ -35,7 +40,7 @@ export function selectSpaceEntities(snapshot, { query = '', status = 'all', grou
   const term = query.trim().toLocaleLowerCase()
   return scoped.entities.filter(entity =>
     (!term || `${entity.name} ${entity.role}`.toLocaleLowerCase().includes(term))
-    && (status === 'all' || entityState(groupId == null ? entity : { ...entity, waiting: false }, scoped) === status))
+    && (status === 'all' || spaceState(entity, snapshot, groupId) === status))
 }
 
 export function roomLayout(snapshot, { query = '', status = 'all', groupId } = {}) {
