@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { inSpace, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } from '../src/client/rooms.js'
+import { inSpace, isSceneEntity, roomLayout, selectSpaceEntities, spaceSnapshot, spaceState } from '../src/client/rooms.js'
 
 const bot = { id: 'b', kind: 'bot', name: 'Builder', role: '', waiting: true }
 const agent = { id: 'a', kind: 'agent', name: 'Agent', role: '' }
@@ -29,15 +29,17 @@ test('one room per group, including empty and identically named groups; identity
   assert.deepEqual(layout.presences.filter(item => item.entity.id === 'b').map(item => item.groupId), ['g1', 'g2'])
   assert.equal(new Set(layout.presences.map(item => item.key)).size, layout.presences.length)
   assert.equal(layout.rooms.find(room => room.groupId === 'empty').total, 0)
+  assert.deepEqual(layout.presences.map(item => item.entity.id).sort(), ['b', 'b'])
+  assert.equal(layout.presences.some(item => item.entity.kind === 'subagent'), false)
   assert.equal(data.entities.length, 3)
 })
 
 test('public room excludes group members even when only their private session matches the filter', () => {
   const data = fixture()
   const publicRoom = layout => layout.rooms.find(room => room.groupId === null)
-  assert.equal(publicRoom(roomLayout(data)).total, 1)
-  assert.deepEqual(publicRoom(roomLayout(data, { groupId: null })).entities, [agent])
-  assert.deepEqual(roomLayout(data, { status: 'running' }).presences.map(item => item.entity.id), ['child'])
+  assert.equal(publicRoom(roomLayout(data)).total, 0)
+  assert.deepEqual(publicRoom(roomLayout(data, { groupId: null })).entities, [])
+  assert.deepEqual(roomLayout(data, { status: 'running' }).presences, [])
   assert.deepEqual(selectSpaceEntities(data, { groupId: null }), [agent])
   assert.deepEqual(selectSpaceEntities(data), [bot, agent, child])
 
@@ -45,7 +47,16 @@ test('public room excludes group members even when only their private session ma
   assert.deepEqual(selectSpaceEntities(data, { groupId: null }), [agent])
   data.groups[1].members = []
   assert.deepEqual(selectSpaceEntities(data, { groupId: null, status: 'running' }), [bot])
-  assert.equal(publicRoom(roomLayout(data)).total, 2)
+  assert.equal(publicRoom(roomLayout(data)).total, 1)
+})
+
+test('3D scene only lays out Bots while 2D keeps Agents and subagents', () => {
+  const data = fixture()
+  assert.equal(isSceneEntity(bot), true)
+  assert.equal(isSceneEntity(agent), false)
+  assert.equal(isSceneEntity(child), false)
+  assert.deepEqual(roomLayout(data).presences.map(item => item.entity.id).sort(), ['b', 'b'])
+  assert.deepEqual(selectSpaceEntities(data), [bot, agent, child])
 })
 
 test('room states and filters use only that group context, not private or other group work', () => {
@@ -97,7 +108,7 @@ test('rendering limits count repeated seats; focusing a group recovers seats omi
   assert.equal(overview.truncated, true)
   const focused = roomLayout(data, { groupId: 'g29' })
   assert.equal(focused.rooms.length, 1)
-  assert.equal(focused.presences.length, 2)
+  assert.equal(focused.presences.length, 1)
   assert.equal(focused.truncated, false)
   assert.deepEqual(roomLayout(data, { query: 'absent' }).rooms, [])
 })

@@ -30,12 +30,24 @@ export function activityRoute(seat, room, action) {
   return [...route, [room.x - 6.35, back + 1.8], [room.x - 4.05, back + 1.8]]
 }
 
+const UNNOTICED_IDLE = 60
+
+// Low bits of sequential ids stay sequential after the string hash. Mix them
+// so neighbours do not share a start time or the same rest between outings.
+const mixDelay = (seed, salt) => {
+  let value = Math.imul(seed ^ Math.imul(salt + 1, 0x85EBCA6B), 0x9E3779B1) >>> 0
+  value = (value ^ (value >>> 16)) >>> 0
+  return 4 + (value % 46)
+}
+
 export function createActivity(seat, room, reservations, time = 0) {
   const seed = characterSeed(seat.key)
-  let state = seat.state, changed = time, due = time + 4 + seed % 7, serial = 0
+  let state = seat.state, changed = time, serial = 0
   let trip = null, lease = null, last = { x: seat.x, z: seat.z, angle: 0, action: 'sit' }
   const release = () => { if (lease && reservations.get(lease) === seat.key) reservations.delete(lease); lease = null }
   const reset = () => { release(); trip = null; last = { x: seat.x, z: seat.z, angle: 0, action: 'sit' } }
+  const wait = next => (next === 'unknown' ? UNNOTICED_IDLE : 0) + mixDelay(seed, serial)
+  let due = time + wait(state)
   const startReturn = now => {
     if (!trip || trip.phase === 'return') return
     const path = trip.phase === 'out'
@@ -47,23 +59,28 @@ export function createActivity(seat, room, reservations, time = 0) {
   return {
     setState(next, now) {
       if (next === state) return
-      state = next; changed = now; due = now + 4 + seed % 7
+      state = next; changed = now; due = now + wait(next)
       if (next !== 'idle') startReturn(now)
     },
     step(now, motion) {
-      if (motion === 'quiet' || state === 'unknown') { reset(); return { ...last, animate: false } }
+      if (motion === 'quiet') { reset(); return { ...last, animate: false } }
       const elapsed = now - changed
-      if (motion === 'normal') {
+      // Unobserved members keep their real status. After a minute the lively scene treats them as idle.
+      const settled = state === 'unknown' && elapsed >= UNNOTICED_IDLE
+      const idleLike = state === 'idle' || settled
+      const idleFor = settled ? elapsed - UNNOTICED_IDLE : elapsed
+      if (motion === 'normal' || (state === 'unknown' && !settled)) {
         reset()
-        return { ...last, action: state === 'running' && elapsed < 5 ? 'type' : 'sit',
-          time: elapsed, animate: state === 'running' && elapsed < 5 }
+        const typing = motion === 'normal' && state === 'running' && elapsed < 5
+        return { ...last, action: typing ? 'type' : 'sit', time: elapsed, animate: typing,
+          wakeAfter: motion === 'normal' ? null : Math.max(0, UNNOTICED_IDLE - elapsed) }
       }
-      if (!trip && state === 'idle' && now >= due) {
+      if (!trip && idleLike && now >= due) {
         const choices = room.groupId === null
           ? ['water', 'coffee', 'stretch', 'dumbbell', 'sleep', 'snooker']
           : ['water', 'stretch', 'dumbbell', 'sleep']
         let action = choices[(seed + serial++) % choices.length]
-        if (action === 'sleep' && elapsed < 60) action = 'stretch'
+        if (action === 'sleep' && idleFor < 60) action = 'stretch'
         if (['water', 'coffee', 'snooker'].includes(action)) {
           const key = JSON.stringify([room.key, action === 'snooker' ? 'snooker' : 'drink'])
           if (reservations.has(key)) action = 'stretch'
@@ -78,7 +95,7 @@ export function createActivity(seat, room, reservations, time = 0) {
           if (['water', 'coffee'].includes(trip.action) && age >= 2) trip.filled = true
           if (age >= (trip.action === 'sleep' ? 18 : 10)) startReturn(now)
         } else if (age * 1.5 >= trip.length) {
-          if (trip.phase === 'return') { reset(); due = now + 5 + seed % 5 }
+          if (trip.phase === 'return') { reset(); due = now + mixDelay(seed, serial) }
           else { trip.phase = 'hold'; trip.started = now }
         }
       }
@@ -93,7 +110,7 @@ export function createActivity(seat, room, reservations, time = 0) {
       } else last = { x: seat.x, z: seat.z, angle: 0, action: state === 'running' ? 'type' : 'sit', time: now + seed % 9 }
       return { ...last, drink: trip && ['water', 'coffee'].includes(trip.action) ? trip.action : null,
         filled: trip?.filled ?? false, counter: room.groupId === null, animate: Boolean(trip) || state === 'running',
-        wakeAfter: !trip && state === 'idle' ? Math.max(0, due - now) : null }
+        wakeAfter: !trip && idleLike ? Math.max(0, due - now) : null }
     },
     dispose: reset,
   }

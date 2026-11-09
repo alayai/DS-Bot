@@ -37,9 +37,10 @@ for (const streaming of [true, false]) test(`an authenticated Host reset restart
     effect(callback) { disposers.push(callback()) },
     on(event, callback) { callbacks.set(event, callback); return () => callbacks.delete(event) },
     locale: { register: () => () => {} },
+    sidebarRightTabs: { register: () => () => {} },
     slots: { inject(_name, callback) { callback() }, register(value) { slots.push(value) } },
   })
-  const store = slots.find(slot => slot.key === 'bothub').inject().store
+  const store = slots.find(slot => slot.name === 'sidebar.right.pane.tab').inject().store
   store.start(); await flush(); await time.advance(0)
   assert.equal(store.getSnapshot().error, 'unauthorized')
   assert.equal(time.timers.size, 0)

@@ -69,6 +69,73 @@ test('new work interrupts an outing and retraces the path without jumping or los
   assert.ok(returned)
   actor.dispose()
 })
+test('unobserved members sit for 60 seconds, then follow the idle routine', () => {
+  const { rooms: [room], presences: [seat] } = layout(1)
+  const actor = createActivity({ ...seat, state: 'unknown' }, room, new Map())
+  const waiting = actor.step(59, 'lively')
+  assert.equal(waiting.action, 'sit')
+  assert.equal(waiting.animate, false)
+  assert.ok(waiting.wakeAfter > 0 && waiting.wakeAfter <= 1)
+  let moved = false, slept = false
+  for (let time = 60; time < 600; time += .2) {
+    const pose = actor.step(time, 'lively')
+    if (pose.action !== 'sit') moved = true
+    if (time < 120) assert.notEqual(pose.action, 'sleep')
+    if (pose.action === 'sleep') { slept = true; break }
+  }
+  assert.equal(moved, true)
+  assert.equal(slept, true)
+  assert.equal(actor.step(600, 'quiet').action, 'sit')
+  actor.setState('running', 600)
+  assert.equal(actor.step(601, 'lively').action, 'type')
+  actor.setState('unknown', 601)
+  assert.equal(actor.step(660, 'lively').action, 'sit')
+  let restarted = false
+  for (let time = 661; time < 720; time += .2) {
+    if (actor.step(time, 'lively').animate) { restarted = true; break }
+  }
+  assert.equal(restarted, true)
+  actor.dispose()
+})
+test('seatmates start and resume outings at different times', () => {
+  const { rooms: [room], presences } = layout(12)
+  const span = values => Math.max(...values) - Math.min(...values)
+  const fullest = values => {
+    const counts = new Map()
+    for (const value of values) {
+      const bucket = Math.floor(value / 3)
+      counts.set(bucket, (counts.get(bucket) ?? 0) + 1)
+    }
+    return Math.max(...counts.values())
+  }
+  const departures = (state, until) => {
+    const actors = presences.map(seat => createActivity({ ...seat, state }, room, new Map()))
+    const first = Array(actors.length).fill(null)
+    const again = Array(actors.length).fill(null)
+    const away = Array(actors.length).fill(false)
+    for (let time = 0; time < until; time += .25) {
+      actors.forEach((actor, index) => {
+        const moving = actor.step(time, 'lively').action !== 'sit'
+        if (moving && !away[index]) {
+          if (first[index] === null) first[index] = time
+          else if (again[index] === null) again[index] = time
+        }
+        away[index] = moving
+      })
+    }
+    actors.forEach(actor => actor.dispose())
+    return { first, again: again.filter(time => time !== null) }
+  }
+  const unnoticed = departures('unknown', 260)
+  assert.ok(unnoticed.first.every(time => time >= 64))
+  assert.ok(span(unnoticed.first) >= 25, span(unnoticed.first))
+  assert.ok(fullest(unnoticed.first) <= 2, fullest(unnoticed.first))
+  const idle = departures('idle', 160)
+  assert.ok(span(idle.first) >= 25, span(idle.first))
+  assert.ok(fullest(idle.first) <= 2, fullest(idle.first))
+  assert.ok(idle.again.length >= 8)
+  assert.ok(span(idle.again) >= 20, span(idle.again))
+})
 test('unknown, quiet, waiting, and normal time limits never simulate continuous work', () => {
   const { rooms: [room], presences: [seat] } = layout(1), reservations = new Map()
   for (const state of ['unknown', 'attention', 'waiting']) {

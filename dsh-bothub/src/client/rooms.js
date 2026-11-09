@@ -3,6 +3,7 @@ import { officeSize, stationSpacing } from './office-layout.js'
 
 export const spaceKey = groupId => JSON.stringify(['space', groupId])
 export const presenceKey = (entityId, groupId) => JSON.stringify([entityId, groupId])
+export const isSceneEntity = entity => entity?.kind === 'bot'
 
 export function inSpace(entity, snapshot, groupId) {
   if (groupId === undefined) return true
@@ -45,6 +46,7 @@ export function roomLayout(snapshot, { query = '', status = 'all', groupId } = {
   const allRooms = candidates.map(room => ({
     ...room, key: spaceKey(room.groupId),
     entities: selectSpaceEntities(snapshot, { query, status, groupId: room.groupId })
+      .filter(isSceneEntity)
       .sort((a, b) => a.id.localeCompare(b.id)),
   })).filter(room => (!query.trim() && status === 'all') || room.entities.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key))

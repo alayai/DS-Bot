@@ -11,6 +11,9 @@
 
 ## 当前实现范围
 
+2026-11-09 更新：按用户要求，中央 `main` 面板迁入 DSH 原生右侧标签页，
+见 [右侧面板设计](2026-11-09-dsh-bothub-right-panel.md)。以下 slot 描述保留为首版记录。
+
 - 独立 `dsh-bothub` 包，与 DS Bot 共享宿主。
 - DS Bot 增加公开 Cordis 服务 `botMonitor`，version 1；它只读当前团队，
   不调用 bootstrap、不提供执行命令。

@@ -5,6 +5,28 @@ import { createMonitorStore, request } from '../src/client/store.js'
 const snapshot = { version: 2, capturedAt: 1, entities: [], sessions: [], runs: [], groups: [] }
 const flush = () => new Promise(resolve => setImmediate(resolve))
 
+test('visible right-sidebar tabs share a monitor until the final lease leaves', () => {
+  const signals = []
+  const store = createMonitorStore(signal => {
+    signals.push(signal)
+    return new Promise(() => {})
+  })
+  const first = store.start(), second = store.start()
+  assert.equal(signals.length, 1)
+  first()
+  first()
+  assert.equal(signals[0].aborted, false)
+  second()
+  assert.equal(signals[0].aborted, true)
+  const old = store.start()
+  store.stop()
+  const current = store.start()
+  old()
+  assert.equal(signals[2].aborted, false)
+  current()
+  assert.equal(signals[2].aborted, true)
+})
+
 test('store keeps last known data on disconnect, clears it on auth loss, and recovers', async () => {
   let mode = 'ok'
   const store = createMonitorStore(async () => {

@@ -29,6 +29,7 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
   let active = false, generation = 0, timer, controller, watchdog, projection
   let failures = 0, retries = 0, fallbackPolls = 0, authBlocked = false
   const listeners = new Set()
+  const leases = new Set()
   const publish = next => { state = next; for (const listener of listeners) listener() }
   const visible = () => !environment.document?.hidden
   const clearTimers = () => {
@@ -142,6 +143,7 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
     void attempt()
   }
   const stop = () => {
+    leases.clear()
     active = false
     cancel()
     environment.document?.removeEventListener('visibilitychange', visibility)
@@ -152,14 +154,17 @@ export function createMonitorStore(fetchSnapshot = fetchCurrent, environment = g
     getSnapshot: () => state,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
     start() {
-      if (active) return () => {}
-      active = true
-      if (state.data) publish({ ...state, phase: 'loading' })
-      environment.document?.addEventListener('visibilitychange', visibility)
-      environment.addEventListener?.('offline', offline)
-      environment.addEventListener?.('online', online)
-      void attempt()
-      return stop
+      const lease = {}
+      leases.add(lease)
+      if (!active) {
+        active = true
+        if (state.data) publish({ ...state, phase: 'loading' })
+        environment.document?.addEventListener('visibilitychange', visibility)
+        environment.addEventListener?.('offline', offline)
+        environment.addEventListener?.('online', online)
+        void attempt()
+      }
+      return () => { if (leases.delete(lease) && leases.size === 0) stop() }
     },
     refresh() {
       // Legacy polling callers keep single-flight refresh; stream refresh restarts

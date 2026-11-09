@@ -12,7 +12,8 @@ snapshots. Update **both DS Bot and BotHub** for this feature: DS Bot must expos
 `passivePreview` so background screens do not postpone automatic idle shutdown.
 Up to four visible Bots refresh about once per second, with two captures at a
 time; the same Bot shares its picture across group rooms. No desktop is started
-or controlled by opening BotHub. Ordinary Agents keep the standby screen.
+or controlled by opening BotHub. Ordinary Agents remain in 2D monitoring and do
+not get a 3D workstation.
 
 In browsers with Web Locks, windows in the same storage partition take turns
 capturing the same Bot, normally sharing one capture per second. Each window
@@ -66,8 +67,9 @@ compatible bridge; private desktop previews require the companion DS Bot update.
 The 3D view now gives each group its own room. A Bot that belongs to several groups
 has a seat in each room; team totals still count that Bot once. Each seat shows
 only that group's activity. The common area seats members who belong to no group;
-the 2D overview still offers every member and their direct chats. Subagents
-follow their actual root conversation. Select a room label to enter it, then
+the 3D scene seats only Bots. Ordinary Agents and subagents remain available in
+the 2D overview and details; subagents follow their actual root conversation.
+Select a room label to enter it, then
 select a member to open the corresponding group chat.
 
 Selecting a 3D seat enters its room and brings the member into close view.
@@ -203,8 +205,11 @@ slice. It does not patch DSH.
 
 2. In the DSH plugin manager, install this local package directory as a bundle
    alongside the compatible DS Bot bundle, and enable BotHub.
-3. Open **BotHub** using the cube button beside the account button in the DS Bot
-   sidebar. The ordinary DSH sidebar also has a BotHub panel entry.
+3. Open a conversation, then use the cube button beside the account button in
+   the DS Bot sidebar or the ordinary DSH sidebar footer. **BotHub** opens as a
+   tab in DSH's right sidebar; the conversation and composer stay in the center.
+   The right-sidebar guide also lists BotHub. DSH manages resizing, collapse,
+   and fullscreen presentation on narrow windows.
    Choose **2D** if your device cannot create a WebGL renderer.
 4. Click a Bot and use **Quick message**, or choose **Open conversation**.
    Group work opens the group chat, where DS Bot owns approvals and member controls.
@@ -217,8 +222,9 @@ requests. No new server or port is required.
 Disabling BotHub removes its channel, UI and renderer. It does not stop the team.
 Monitoring uses an event stream with 5-second reconciliation, or 2.5-second
 fallback polling while the panel is visible. Hidden pages do
-not draw or start additional polls. 3D displays up to 50 contextual seats; 2D
-lists all of them. No external assets or CDN requests are used.
+not draw or start additional polls. 3D displays up to 50 Bot seats; 2D lists
+all monitored members, including Agents and subagents. No external assets or
+CDN requests are used.
 
 ## Isolated development bench
 
