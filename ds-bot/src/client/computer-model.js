@@ -1,5 +1,5 @@
 // Older hosts do not advertise Computers. False means supported but not configured.
-export const hasComputerEntry = roster => typeof roster?.computer === 'boolean'
+export const hasComputerEntry = roster => typeof roster?.desktop === 'boolean'
 
 export function imagePoint(frame, rect, clientX, clientY) {
   if (!frame || rect.width <= 0 || rect.height <= 0) return null

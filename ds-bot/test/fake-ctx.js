@@ -52,6 +52,10 @@ export function fakeContext({ services = {} } = {}) {
       provided.set(name, value)
       return () => { provided.delete(name) }
     },
+    // As in real cordis: the plugin does not inject this service, so reading it throws.
+    get subagents() { throw new Error('cannot get property "subagents" without inject') },
+    // The real ctx guards plain access with `inject`; service() reads this.
+    reflect: { get: name => ctx.get(name) },
     on(name, listener, options) {
       calls.push(`on ${name}${options?.prepend ? ' (prepend)' : ''}`)
       listeners.set(name, [...(listeners.get(name) ?? []), listener])
@@ -120,7 +124,15 @@ export function fakeContext({ services = {} } = {}) {
         },
       },
     },
-    llm: { listProviders: () => [] },
+    llm: {
+      listProviders: () => [],
+      registerAdapter: (routes, adapter) => {
+        ctx.adapters = [...(ctx.adapters ?? []), { routes, adapter }]
+        const handle = () => {}
+        handle.replace = (next) => { ctx.adapters.at(-1).routes = next }
+        return handle
+      },
+    },
   }
   return ctx
 }

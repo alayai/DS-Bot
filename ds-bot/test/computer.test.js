@@ -1,1900 +1,1311 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
-import { createComputerService } from '../src/host/computer/service.js'
+import { createRuntime } from '../index.js'
+import { fakeContext } from './fake-ctx.js'
+import { classify, levelAllows, isComputerTool } from '../src/host/computer/catalog.js'
 import { createLeases } from '../src/host/computer/leases.js'
-import { checkActions, checkFrame, checkBrowserAction, refused } from '../src/host/computer/contract.js'
-import { createFakeComputer } from '../src/host/computer/providers/fake.js'
-import { install as installApprovals } from '../src/host/approvals.js'
+import { isProtectedApp } from '../src/host/computer/index.js'
 
-const fails = code => error => error.code === `bot/computer-${code}`
-const recoverable = () => Object.assign(createFakeComputer(), { recoverySupported: true, reconnect: async () => {} })
-async function recoveryDone(service) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const state = await service.state()
-    if (state.recovery.status !== 'running') return state
-    await delay(5)
-  }
-  assert.fail('Desktop service recovery did not settle.')
+const TEAM = {
+  version: 1,
+  mainBotIds: ['m1'],
+  revision: 1,
+  bots: {
+    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 },
+    w1: { id: 'w1', sessionId: 'w1', name: 'Writer', role: '', instructions: '', createdAt: 2 },
+  },
+  rooms: {},
+  exchanges: [],
+  exchangeTurns: {},
+  questions: {},
 }
-async function setup(t, { provider = createFakeComputer(), options } = {}) {
-  const home = await mkdtemp(join(tmpdir(), 'ds-bot-computer-'))
-  const owners = new Map([['a', 'a'], ['a-group', 'a'], ['b', 'b']])
-  const bots = { a: { id: 'a', name: 'Alpha' }, b: { id: 'b', name: 'Beta' } }
-  const room = { id: 'r', members: ['a', 'b'] }
-  const messages = new Map()
-  let attachment = 0
-  let readOnly
-  const services = {
-    approval: { request: async () => 'allowed-once' },
-    attachments: {
-      async saveImage({ data, mediaType }) {
-        return { attachmentId: `sha256:${++attachment}`, mediaType, bytes: data.length, width: data.readUInt32BE(16), height: data.readUInt32BE(20) }
-      },
-    },
+
+function setup({ team = TEAM, services = {} } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-computer-'))
+  if (team !== undefined) {
+    const { writeFileSync } = process.getBuiltinModule('node:fs')
+    writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   }
-  const rt = {
-    home, config: {}, load: async () => {}, readOnly: () => readOnly,
-    selfOf: id => owners.get(id), isBotSession: id => owners.has(id),
-    botOf: id => bots[id], roomOf: id => id === 'r' ? room : undefined,
-    groupOwners: new Map([['a-group', { botId: 'a', roomId: 'r' }]]),
-    live: new Map([...owners.keys()].map(id => [id, { turn: 1 }])),
+  const ctx = fakeContext({ services })
+  const rt = createRuntime(ctx, { home })
+  return { ctx, home, rt }
+}
+
+test('the catalog classifies every provider call into observe, background, foreground', () => {
+  // cua observe
+  for (const method of ['getCapabilities', 'listApps', 'findApps', 'getApp', 'listWindows', 'getState', 'screenshot', 'permissionStatus', 'applicationIcons']) {
+    assert.deepEqual(classify('cua', { method }), { provider: 'cua', kind: 'observe', method })
+  }
+  // cua foreground: activate, hover and the permission UI
+  for (const method of ['activate', 'hover', 'requestPermission', 'openPermissionSettings']) {
+    assert.equal(classify('cua', { method }).kind, 'foreground')
+  }
+  // cua background input
+  for (const method of ['click', 'scroll', 'drag', 'setValue', 'selectText', 'performSecondaryAction', 'typeText', 'paste', 'pressKey', 'show', 'launchApp']) {
+    assert.equal(classify('cua', { method }).kind, 'background')
+  }
+  // unknown methods fail closed to foreground
+  assert.equal(classify('cua', { method: 'reboot' }).kind, 'foreground')
+  assert.equal(classify('cua', {}).kind, 'foreground')
+  // cua-driver read-only names
+  for (const name of ['list_apps', 'list_windows', 'get_window_state', 'get_accessibility_tree', 'verify_state', 'parse_visual_regions', 'get_desktop_state', 'get_screen_size', 'get_cursor_position', 'zoom', 'debug_window_info', 'get_browser_state', 'get_session', 'list_sessions', 'get_session_state', 'get_agent_cursor_state', 'get_recording_state', 'get_config', 'check_permissions', 'health_report']) {
+    assert.equal(classify(`cua_driver_native__${name}`, {}).kind, 'observe', name)
+  }
+  // driver foreground: window raising and cursor-moving names, and an explicit ask
+  for (const name of ['bring_to_front', 'move_cursor', 'escalate_session', 'set_agent_cursor_enabled']) {
+    assert.equal(classify(`cua_driver_native__${name}`, {}).kind, 'foreground', name)
+  }
+  for (const name of ['click', 'double_click', 'right_click', 'drag', 'type_text', 'press_key', 'hotkey', 'set_value', 'scroll', 'launch_app', 'kill_app', 'invoke_menu', 'browser_click', 'browser_type']) {
+    assert.equal(classify(`cua_driver_native__${name}`, {}).kind, 'background', name)
+  }
+  assert.equal(classify('cua_driver_native__click', { foreground: true }).kind, 'foreground')
+  assert.equal(classify('cua_driver_native__mystery', {}).kind, 'foreground')
+  // not a computer tool
+  assert.equal(classify('message_bot', {}), undefined)
+  assert.equal(isComputerTool('cua'), true)
+  assert.equal(isComputerTool('cua_driver_native__click'), true)
+  assert.equal(isComputerTool('schedule_list'), false)
+})
+
+test('levels admit their kinds and nothing above', () => {
+  assert.equal(levelAllows('off', 'observe'), false)
+  assert.equal(levelAllows('view', 'observe'), true)
+  assert.equal(levelAllows('view', 'background'), false)
+  assert.equal(levelAllows('background', 'background'), true)
+  assert.equal(levelAllows('background', 'foreground'), false)
+  assert.equal(levelAllows('foreground', 'foreground'), true)
+})
+
+test('leases: one Bot per app, release on turn end, idle and release', async () => {
+  const leases = createLeases({ idleMs: 50 })
+  assert.equal(leases.takeApp('notes', 'w1', 'w1'), undefined)
+  const held = leases.takeApp('notes', 'm1', 'm1')
+  assert.equal(held.botId, 'w1')
+  // same Bot refreshes its lease
+  assert.equal(leases.takeApp('notes', 'w1', 'w1'), undefined)
+  // turn end releases
+  leases.endSession('w1')
+  assert.equal(leases.takeApp('notes', 'm1', 'm1'), undefined)
+  // foreground is one Bot at a time
+  assert.equal(leases.takeForeground('m1', 'm1'), undefined)
+  assert.equal(leases.takeForeground('w1', 'w1').botId, 'm1')
+  // release all of a Bot's leases on stop
+  leases.releaseBot('m1')
+  assert.equal(leases.takeApp('notes', 'w1', 'w1'), undefined)
+  assert.equal(leases.takeForeground('w1', 'w1'), undefined)
+  // idle release
+  assert.equal(leases.takeApp('mail', 'w1', 'w1'), undefined)
+  await new Promise(resolve => setTimeout(resolve, 90))
+  assert.equal(leases.takeApp('mail', 'm1', 'm1'), undefined)
+  leases.dispose()
+})
+
+test('protected apps match by id, name and executable', () => {
+  for (const app of [
+    { id: 'io.github.fei2411.dsbot' },
+    { id: 'com.apple.systempreferences' },
+    { id: 'com.apple.keychainaccess' },
+    { name: 'DS Bot' },
+    { name: 'DSH Computer Use' },
+    { name: 'DeepSeek Harness' },
+    { name: 'Keychain Access' },
+    { name: 'Credential Manager' },
+    { path: '/Applications/DSH Computer Use.app/Contents/MacOS/dsh-cua-native' },
+    { path: 'C:\\Windows\\ImmersiveControlPanel\\SystemSettings.exe' },
+  ]) assert.equal(isProtectedApp(app), true, JSON.stringify(app))
+  assert.equal(isProtectedApp({ name: 'Notes' }), false)
+  assert.equal(isProtectedApp({ id: 'com.apple.Notes' }), false)
+  assert.equal(isProtectedApp({ name: 'Mail', path: '/Applications/Mail.app' }), false)
+})
+
+test('the guard refuses in order: switch, Bot, level, control, protected, consent, lease, user idle', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  // state with the switch off
+  await rt.load()
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const allow = async () => 'allowed'
+  const call = (sessionId, name, args = {}) => gate({ name, arguments: args, agent: { id: sessionId }, callId: `c-${sessionId}` }, allow)
+  // off: refused before anything else
+  assert.equal((await call('w1', 'cua', { method: 'click', params: {} })).kind, 'deny')
+  // turn it on through the endpoint like the switch does
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  // view level: reads pass, input does not
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  assert.equal(await call('w1', 'cua', { method: 'getState', params: {} }), 'allowed')
+  assert.equal((await call('w1', 'cua', { method: 'click', params: {} })).kind, 'deny')
+  // background: clicks pass, foreground does not
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  assert.equal(await call('w1', 'cua', { method: 'click', params: {} }), 'allowed')
+  assert.equal((await call('w1', 'cua', { method: 'activate', params: {} })).kind, 'deny')
+  // foreground level allows it
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  assert.equal(await call('w1', 'cua', { method: 'activate', params: {} }), 'allowed')
+  // a protected app is refused even at getApp
+  const denied = await call('w1', 'cua', { method: 'getApp', params: { selector: 'DSH Computer Use' } })
+  assert.equal(denied.kind, 'deny')
+  assert.match(denied.reason, /protected/)
+  // another Bot holds the app lease: the refusal names it
+  await rt.computerEndpoint('set-level', { botId: 'm1', level: 'background' })
+  const [track] = ctx.listeners.get('tools/execute').filter(fn => fn.name === 'computerTrack')
+  // w1 holds an Always grant for Notes, so its calls on the handle are allowed.
+  const w1 = rt.botOf('w1')
+  w1.computer = { ...w1.computer, apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'w1' }, callId: 'get-1' },
+    async () => ({ isError: false, value: { appHandle: 'h1', pid: 42, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  assert.equal(await call('w1', 'cua', { method: 'click', params: { appHandle: 'h1' } }), 'allowed')
+  // m1 sees the same app through its own getApp; its call is refused and names w1.
+  const m1 = rt.botOf('m1')
+  m1.computer = { ...m1.computer, apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'm1' }, callId: 'get-2' },
+    async () => ({ isError: false, value: { appHandle: 'h1', pid: 42, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  const blocked = await call('m1', 'cua', { method: 'click', params: { appHandle: 'h1' } })
+  assert.equal(blocked.kind, 'deny')
+  assert.match(blocked.reason, /Writer is using Notes/)
+  // A call another Bot's lease refuses takes no lease of its own.
+  const other = await call('w1', 'cua', { method: 'click', params: { appHandle: 'h1' } })
+  assert.equal(other, 'allowed')
+})
+
+test('cua-driver consent: first call asks, This time lasts the session, Deny refuses it', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const allow = async () => 'allowed'
+  const call = (sessionId, name, args = {}) => gate({ name, arguments: args, agent: { id: sessionId }, callId: `c-${sessionId}` }, allow)
+  // unknown pid: refused until the Bot lists windows
+  const unknown = await call('w1', 'cua_driver_native__click', { pid: 42 })
+  assert.equal(unknown.kind, 'deny')
+  assert.match(unknown.reason, /list/i)
+  // record the pid through a list result
+  const execute = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  await execute({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-1' }, async () => ({ windows: [{ pid: 42, name: 'Notes', path: '/Applications/Notes.app' }] }))
+  // the first input call opens an ask; answering resolves it
+  const pending = call('w1', 'cua_driver_native__click', { pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  const asks = rt.computerLive().asks
+  assert.equal(Object.keys(asks).length, 1)
+  const ask = Object.values(asks)[0]
+  const id = ask.id // the card answers with the id inside the payload, not the map key
+  assert.equal(typeof id, 'string')
+  assert.equal(ask.appName, 'Notes')
+  assert.equal(await rt.computerEndpoint('app-answer', { id, answer: 'once' }), true)
+  assert.equal(await pending, 'allowed')
+  // same session asks no more for the allowed app; another app asks again
+  assert.equal(await call('w1', 'cua_driver_native__click', { pid: 42 }), 'allowed')
+  await execute({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-2' }, async () => ({ windows: [{ pid: 43, name: 'Mail' }] }))
+  const denied = call('w1', 'cua_driver_native__type_text', { pid: 43 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask2 = Object.entries(rt.computerLive().asks)[0]
+  assert.notEqual(ask2, undefined)
+  await rt.computerEndpoint('app-answer', { id: ask2[0], answer: 'deny' })
+  assert.equal((await denied).kind, 'deny')
+})
+
+test('macOS consent answerer: grants allow, the card answers, Always records, DSH Always is never returned', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  const answerer = ctx.listeners.get('user-questions/request').find(fn => fn.name === 'computerConsent')
+  const ask = (sessionId, name = 'Notes') => answerer({
+    agent: { id: sessionId },
+    questions: [{ id: 'cua-app-access', intent: { subject: { name } }, options: [{ label: 'Allow for this session' }, { label: 'Deny' }] }],
+  }, async () => 'next')
+  // non-Bot sessions pass through
+  assert.equal(await ask('plain'), 'next')
+  // a protected name denies without a card
+  assert.deepEqual(await ask('w1', 'Keychain Access'), { answers: [{ id: 'cua-app-access', selected: ['Deny'] }] })
+  // the card answers This time
+  const pending = ask('w1')
+  await new Promise(resolve => setImmediate(resolve))
+  const shown = Object.values(rt.computerLive().asks)[0]
+  const id = shown.id
+  assert.equal(typeof id, 'string')
+  assert.equal(shown.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id, answer: 'once' })
+  assert.deepEqual(await pending, { answers: [{ id: 'cua-app-access', selected: ['Allow for this session'] }] })
+  // Always records the grant and still answers session-allow
+  const pending2 = ask('w1', 'Mail')
+  await new Promise(resolve => setImmediate(resolve))
+  const [id2] = Object.entries(rt.computerLive().asks)[0]
+  await rt.computerEndpoint('app-answer', { id: id2, answer: 'always' })
+  const answer2 = await pending2
+  assert.equal(answer2.answers[0].selected[0], 'Allow for this session')
+  assert.notEqual(answer2.answers[0].selected[0], 'Always allow')
+  // a later ask for the same app is auto-allowed by the grant
+  assert.deepEqual(await ask('w1', 'Mail'), { answers: [{ id: 'cua-app-access', selected: ['Allow for this session'] }] })
+  assert.equal(rt.botOf('w1').computer.apps['mail']?.name, 'Mail')
+})
+
+// A fake Cordis plugin mount + the registry the provider registers on.
+function withProvider(ctx, services, { providerName } = {}) {
+  const fibers = []
+  ctx.plugin = (module, config) => {
+    const entry = { module, config }
+    fibers.push(entry)
+    // The registry mount brings the service up; only the provider mount names a provider.
+    if (String(module?.name ?? '').includes('experimental')) {
+      services.computerUse ??= { providerName: undefined }
+      services.computerUse.providerName = providerName ?? 'fake-provider'
+    } else services.computerUse ??= { providerName: undefined }
+    return {
+      await: async () => {},
+      dispose: async () => { const index = fibers.indexOf(entry); if (index >= 0) fibers.splice(index, 1) },
+    }
+  }
+  return fibers
+}
+
+test('the provider mounts when the switch comes on and reports its status', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = {}
+  ctx.get = name => services[name]
+  services.loader = { import: async name => ({ name }) }
+  services.agents = { list: () => [] }
+  const fibers = withProvider(ctx, services)
+  await rt.load()
+  assert.deepEqual(rt.computerStatus().state, 'off')
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  // provider-retry joins the mount that set-enabled started
+  await rt.computerEndpoint('provider-retry', {})
+  assert.deepEqual(rt.computerStatus(), { state: 'ready', name: 'fake-provider' })
+  // registry + provider fibers mounted, provider with the platform config
+  assert.equal(fibers.length, 2)
+  assert.deepEqual(fibers[1].config, process.platform === 'darwin' ? { agentPreset: false } : {})
+  // switching off disposes the provider
+  await rt.computerEndpoint('set-enabled', { enabled: false })
+  assert.deepEqual(rt.computerStatus(), { state: 'off' })
+  assert.equal(fibers.length, 0)
+})
+
+test('provider status: occupied, missing, unsupported, error and retry', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = {}
+  ctx.get = name => services[name]
+  services.loader = { import: async name => { if (name.includes('missing')) throw new Error('Cannot find package') ; return { name } } }
+  services.agents = { list: () => [] }
+  withProvider(ctx, services)
+  // occupied: another provider is already registered
+  services.computerUse = { providerName: 'other-provider' }
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  assert.deepEqual(rt.computerStatus(), { state: 'occupied', name: 'other-provider' })
+  services.computerUse.providerName = undefined
+  await rt.computerEndpoint('provider-retry', {})
+  assert.equal(rt.computerStatus().state, 'ready')
+  // missing: the package cannot be imported; the fake registry keeps its name field
+  services.computerUse.providerName = undefined
+  services.loader = { import: async () => { throw Object.assign(new Error('Cannot find package'), { code: 'ERR_MODULE_NOT_FOUND' }) } }
+  await rt.computerEndpoint('provider-retry', {})
+  assert.equal(rt.computerStatus().state, 'missing')
+  // the status says what to install, at the running DSH's version (#1050)
+  const { install } = rt.computerStatus()
+  assert.equal(install.packages.length, 1)
+  assert.match(install.packages[0], /^@deepseek-ai\/dsh-experimental-[\w-]+@\d/)
+  assert.equal(install.command, `pnpm add ${install.packages[0]}`)
+  // without the registry both packages are missing, and the profile folder is named
+  services.profileContext = { dir: '/profiles/desktop' }
+  services.computerUse = undefined
+  await rt.computerEndpoint('provider-retry', {})
+  const both = rt.computerStatus().install
+  assert.match(both.packages[0], /^@deepseek-ai\/dsh-computer-use@/)
+  assert.equal(both.packages.length, 2)
+  assert.equal(both.command, `pnpm --dir "/profiles/desktop" add ${both.packages.join(' ')}`)
+  services.computerUse = { providerName: undefined }
+  // error: any other import failure
+  services.loader = { import: async () => { throw new Error('boom') } }
+  await rt.computerEndpoint('provider-retry', {})
+  assert.equal(rt.computerStatus().state, 'error')
+})
+
+test('masking: non-Bot agents and off Bots lose the tools and the sections', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const denied = []
+  const scoped = []
+  const makeAgent = id => ({
+    id, session: { id },
     ctx: {
-      get: name => services[name],
-      llm: { resolveModelInfo: async () => ({ inputModalities: ['text', 'image'] }) },
-    },
-  }
-  const service = createComputerService(rt, provider, options)
-  t.after(async () => {
-    await service.dispose()
-    await rm(home, { recursive: true, force: true })
-  })
-  const exec = (sessionId = 'a', callId = 'c1', extra = {}) => ({
-    callId, ...extra,
-    agent: {
-      id: sessionId,
-      session: {
-        id: sessionId,
-        requestHeader: () => ({ config: { provider: 'mock', model: 'vision' } }),
-        deriveMessages: () => messages.get(sessionId) ?? [],
-      },
+      tools: { register: tool => { ctx.registeredTools.set(tool.name, tool); return () => {} }, restrict: filter => { denied.push([id, filter.deny]); return () => {} } },
+      on: (event, listener) => { scoped.push({ id, event, listener }); return () => {} },
+      effect: () => {},
     },
   })
-  async function bind(botId = 'a', grant = 'operate') {
-    return service.bind({ botId, grant, expectedRevision: (await service.state()).revision })
-  }
-  async function start(botId = 'a', grant = 'operate') {
-    const record = await bind(botId, grant)
-    await service.manage('start', { botId, expectedGeneration: record.generation })
-    return record
-  }
-  let controlToken
-  async function manage(method, botId = 'a') {
-    const record = (await service.state()).computers.find(item => item.botId === botId && !item.archived)
-    const result = await service.manage(method, { botId, expectedGeneration: record.generation, controlToken })
-    controlToken = result.controlToken ?? controlToken
-    return result
-  }
-  async function observe(sessionId = 'a') {
-    const result = await service.observe(exec(sessionId))
-    messages.set(sessionId, [{ content: [{ type: 'image', attachment: result.attachment }] }])
-    return JSON.parse(result.text)
-  }
-  const click = frame => ({ observationId: frame.observationId, actions: [{ type: 'click', x: 3, y: 4 }] })
-  return { service, provider, rt, services, exec, bind, start, manage, observe, click, home, messages, bots, room, owners, readOnly: value => { readOnly = value } }
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  const w1 = makeAgent('w1')
+  const plain = makeAgent('plain')
+  ctx.tools.schemas = () => [{ name: 'cua' }, { name: 'bash' }]
+  services.agents = { list: () => [w1, plain] }
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'off' })
+  // both masked: w1 is off, plain is not a Bot
+  assert.deepEqual(denied.map(([id, deny]) => [id, deny]), [['w1', ['cua']], ['plain', ['cua']]])
+  // w1 at view loses its mask but keeps the handoff tool off until background
+  const registeredBefore = ctx.registeredTools.size
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  assert.equal(ctx.registeredTools.has('computer_handoff'), true)
+  assert.ok(ctx.registeredTools.size > registeredBefore)
+})
+
+const gateOf = ctx => {
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  return (sessionId, name, args = {}) => gate({ name, arguments: args, agent: { id: sessionId }, callId: `c-${sessionId}` }, async () => 'allowed')
 }
+const maskingAgent = (ctx, id, denied) => ({
+  id, session: { id },
+  ctx: {
+    tools: { register: tool => { ctx.registeredTools.set(tool.name, tool); return () => {} }, restrict: filter => { denied.push([id, filter.deny]); return () => {} } },
+    on: () => () => {},
+    effect: () => {},
+  },
+})
 
-test('semantic browser tools share screenshots, approvals, receipts and session fences', async t => {
-  const h = await setup(t); await h.start()
-  let dispatched = 0, approvals = 0
-  h.provider.browserObserve = async () => ({ token: 'fixture-token', elements: [{ ref: '1', name: 'Save' }], text: 'Page content' })
-  h.provider.browserPerform = async (_record, options) => {
-    assert.equal(options.token, 'fixture-token'); dispatched++
-    return { outcome: 'completed', completedActions: 1 }
+test('a plain Session keeps DSH\'s own computer use while the DS Bot switch is off (#1101)', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const denied = []
+  const services = { agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  await rt.load()
+  ctx.tools.schemas = () => [{ name: 'cua' }, { name: 'bash' }]
+  const call = gateOf(ctx)
+  assert.equal(await call('plain', 'cua', { method: 'click', params: {} }), 'allowed')
+  assert.equal((await call('w1', 'cua', { method: 'click', params: {} })).kind, 'deny')
+  services.agents = { list: () => [maskingAgent(ctx, 'w1', denied), maskingAgent(ctx, 'plain', denied)] }
+  rt.refreshComputer()
+  assert.deepEqual(denied, [['w1', ['cua']]])
+})
+
+test('with DSH\'s own provider in place Bots are refused and a plain Session is not', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] }, computerUse: { providerName: 'dsh-cua' } }
+  ctx.get = name => services[name]
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  assert.equal(rt.computerStatus().state, 'occupied')
+  const call = gateOf(ctx)
+  assert.equal(await call('plain', 'cua', { method: 'click', params: {} }), 'allowed')
+  assert.equal((await call('w1', 'cua', { method: 'getState', params: {} })).kind, 'deny')
+})
+
+test('a plain Session is refused on the provider DS Bot mounted', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  assert.equal(rt.computerStatus().state, 'ready')
+  assert.equal((await gateOf(ctx)('plain', 'cua', { method: 'click', params: {} })).kind, 'deny')
+})
+
+test('Windows Bots that can operate apps are told how input really lands', async (t) => {
+  const { ctx, home, rt } = setup()
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  t.after(async () => { Object.defineProperty(process, 'platform', platform); await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  const text = () => ctx.sections.get('computer-use:ds-bot').text({ agent: { id: 'w1' } })
+  assert.match(text(), /If the text field supports set_value/)
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  assert.doesNotMatch(text(), /set_value/)
+})
+
+test('the helper is protected by its real bundle id', async () => {
+  const { isProtectedApp } = await import('../src/host/computer/index.js')
+  assert.equal(isProtectedApp({ id: 'com.deepseek.harness.computer-use' }), true)
+})
+
+test('the ds-bot section is empty for a non-Bot, off, or provider-not-ready agent', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  const section = ctx.sections.get('computer-use:ds-bot')
+  const text = agent => section.text({ agent: { id: agent } })
+  assert.equal(text('w1'), '')
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  assert.match(text('w1'), /## Using the computer/)
+  assert.equal(text('plain'), '')
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'off' })
+  assert.equal(text('w1'), '')
+})
+
+test('a revoke removes the grant, aborts the call, revokes in the provider and the guard refuses the handle', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const revoked = []
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] }, cuaAccess: { applications: async () => ({ allowedApps: [{ id: 'hash-notes', name: 'Notes', executablePath: '/Applications/Notes.app/Contents/MacOS/Notes' }], blockedApps: [], persistentAvailable: true }), revoke: async id => revoked.push(id) } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  // the Bot got a name-only Always grant, then getApp returned the id
+  const bot = rt.botOf('w1')
+  bot.computer = { ...bot.computer, apps: { notes: { name: 'Notes', grantedAt: 0 } } }
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'w1' }, callId: 'g1' },
+    async () => ({ isError: false, value: { appHandle: 'h1', pid: 9, authorization: { id: 'com.apple.Notes', name: 'Notes', executablePath: '/Applications/Notes.app/Contents/MacOS/Notes' } } }))
+  // the grant learned the id
+  assert.equal(rt.botOf('w1').computer.apps.notes.id, 'com.apple.Notes')
+  const allow = async () => 'allowed'
+  const call = args => gate({ name: 'cua', arguments: args, agent: { id: 'w1' }, callId: 'c1' }, allow)
+  assert.equal(await call({ method: 'click', params: { appHandle: 'h1' } }), 'allowed')
+  // revoke: grant gone, provider revoked, the old handle asks again instead of running
+  assert.equal(await rt.computerEndpoint('revoke-app', { botId: 'w1', appKey: 'notes' }), true)
+  assert.equal(rt.botOf('w1').computer.apps, undefined)
+  assert.deepEqual(revoked, ['hash-notes'])
+  // the recorded handle is gone, so the next call refuses revoked, not a card
+  assert.match((await call({ method: 'click', params: { appHandle: 'h1' } })).reason, /was revoked/)
+  // a fresh getApp asks through the card again
+  const answerer = ctx.listeners.get('user-questions/request').find(fn => fn.name === 'computerConsent')
+  void answerer({ agent: { id: 'w1' }, questions: [{ id: 'cua-app-access', intent: { subject: { name: 'Notes' } }, options: [] }] }, async () => 'next')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(Object.keys(rt.computerLive().asks).length, 1)
+})
+
+test("one Bot's revoke leaves another Bot's handle working", async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  await rt.computerEndpoint('set-level', { botId: 'm1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  for (const botId of ['w1', 'm1']) {
+    rt.botOf(botId).computer = { apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
   }
-  h.services.approval.request = async args => { assert.equal(args.toolName, 'computer_browser_act'); approvals++; return 'allowed-once' }
-  const observed = await h.service.observe(h.exec(), true), frame = JSON.parse(observed.text)
-  h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
-  assert.equal(frame.browser.text, 'Page content')
-  const args = { observationId: frame.observationId, action: { type: 'click', ref: '1' } }
-  await assert.rejects(h.service.act(args, h.exec('a-group', 'other'), true), fails('stale-observation'))
-  assert.equal((await h.service.act(args, h.exec(), true)).outcome, 'completed')
-  assert.equal((await h.service.act(args, h.exec(), true)).outcome, 'completed')
-  assert.equal(dispatched, 1); assert.equal(approvals, 1)
-  await assert.rejects(h.service.act(args, h.exec()), fails('conflict'))
-  await assert.rejects(h.service.act(args, h.exec('a', 'new'), true), fails('stale-observation'))
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'w1' }, callId: 'g1' },
+    async () => ({ isError: false, value: { appHandle: 'hA', pid: 1, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'm1' }, callId: 'g2' },
+    async () => ({ isError: false, value: { appHandle: 'hB', pid: 2, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  await rt.computerEndpoint('revoke-app', { botId: 'w1', appKey: 'com.apple.Notes' })
+  // w1's handle is dead; m1's still resolves and runs
+  assert.match((await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'hA' } }, agent: { id: 'w1' }, callId: 'c1' }, allow)).reason, /was revoked/)
+  assert.equal(await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'hB' } }, agent: { id: 'm1' }, callId: 'c2' }, allow), 'allowed')
 })
 
-test('semantic browser cannot use missing context, ordinary frames for refs or human-owned control', async t => {
-  const h = await setup(t); await h.start()
-  h.provider.browserObserve = async () => ({ token: 'token', elements: [] })
-  h.provider.browserPerform = async () => assert.fail('No input should be dispatched')
-  const observed = await h.service.observe(h.exec(), true), frame = JSON.parse(observed.text)
-  const args = { observationId: frame.observationId, action: { type: 'back' } }
-  await assert.rejects(h.service.act(args, h.exec(), true), fails('stale-observation'))
-  h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
-  const ordinary = await h.observe()
-  await assert.rejects(h.service.act({ ...args, observationId: ordinary.observationId }, h.exec(), true), fails('stale-observation'))
-  await h.manage('takeover')
-  await assert.rejects(h.service.observe(h.exec(), true), fails('human-control'))
+test('grants hold in a later part and in a group Session of the same Bot', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const bot = rt.botOf('w1')
+  bot.computer = { ...bot.computer, apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const allow = async () => 'allowed'
+  // another Session of the same Bot (a later part, or its group Session) sees the app
+  const other = 'w1-group'
+  rt.isBotSession = id => id === 'w1' || id === other
+  const selfOf = rt.selfOf
+  rt.selfOf = id => (id === other ? 'w1' : selfOf(id))
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: other }, callId: 'g' },
+    async () => ({ isError: false, value: { appHandle: 'h2', authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  assert.equal(await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h2' } }, agent: { id: other }, callId: 'c' }, allow), 'allowed')
 })
 
-test('semantic rejected and unknown outcomes are durable and never replayed', async t => {
-  const h = await setup(t); await h.start()
-  h.provider.browserObserve = async () => ({ token: 'token', elements: [] })
-  let calls = 0
-  for (const outcome of ['rejected', 'unknown']) {
-    h.provider.browserPerform = async () => {
-      calls++
-      if (outcome === 'unknown') throw Error('connection lost after input')
-      return { outcome, completedActions: 0, error: 'The page changed.' }
-    }
-    const observed = await h.service.observe(h.exec(), true)
-    h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
-    const args = { observationId: JSON.parse(observed.text).observationId, action: { type: 'back' } }
-    const result = await h.service.act(args, h.exec('a', outcome), true)
-    assert.equal(result.outcome, outcome)
-    if (outcome === 'rejected') assert.equal(result.note, 'The page changed.')
-    assert.deepEqual(await h.service.act(args, h.exec('a', outcome), true), result)
+test('getApp refuses a protected selector by bundle id', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const denied = await gate({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'com.apple.systempreferences' } }, agent: { id: 'w1' }, callId: 'c' }, async () => 'allowed')
+  assert.equal(denied.kind, 'deny')
+  assert.match(denied.reason, /protected/)
+})
+
+test('leases release at turn end, stop and takeover; user-busy gates foreground', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  await rt.computerEndpoint('set-level', { botId: 'm1', level: 'foreground' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const allow = async () => 'allowed'
+  const call = (sessionId, args) => gate({ name: 'cua', arguments: args, agent: { id: sessionId }, callId: `c-${sessionId}` }, allow)
+  const grant = (botId) => { const bot = rt.botOf(botId); bot.computer = { ...bot.computer, apps: { notes: { name: 'Notes', grantedAt: 0 } } } }
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const seed = async sessionId => track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: sessionId }, callId: `g-${sessionId}` },
+    async () => ({ isError: false, value: { appHandle: `h-${sessionId}`, authorization: { name: 'Notes' } } }))
+  grant('w1'); grant('m1')
+  await seed('w1')
+  // m1 sees a different app so only the foreground lease collides with w1's.
+  rt.botOf('m1').computer.apps.mail = { name: 'Mail', grantedAt: 0 }
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Mail' } }, agent: { id: 'm1' }, callId: 'g-m1' },
+    async () => ({ isError: false, value: { appHandle: 'h-m1', authorization: { name: 'Mail' } } }))
+  // user busy gates a foreground call
+  await rt.computerEndpoint('user-active', { idleSeconds: 0 })
+  const busy = await call('w1', { method: 'activate', params: { appHandle: 'h-w1' } })
+  assert.equal(busy.kind, 'deny')
+  assert.match(busy.reason, /user is using/)
+  // the refused call took no lease: a background call still works
+  await rt.computerEndpoint('user-active', { idleSeconds: 10 })
+  assert.equal(await call('w1', { method: 'click', params: { appHandle: 'h-w1' } }), 'allowed')
+  // let it continue buys foreground
+  await rt.computerEndpoint('user-active', { idleSeconds: 0 })
+  await rt.computerEndpoint('allow-foreground', { botId: 'w1' })
+  assert.equal(await call('w1', { method: 'activate', params: { appHandle: 'h-w1' } }), 'allowed')
+  // m1's foreground call is refused and names w1
+  const other = await call('m1', { method: 'activate', params: { appHandle: 'h-m1' } })
+  assert.equal(other.kind, 'deny')
+  assert.match(other.reason, /Writer is using the foreground/)
+  // turn end releases w1's leases
+  for (const fn of ctx.listeners.get('session/event') ?? []) if (fn.length >= 2) fn({ id: 'w1' }, { type: 'turn/end' })
+  await rt.computerEndpoint('user-active', { idleSeconds: 10 })
+  assert.equal(await call('m1', { method: 'activate', params: { appHandle: 'h-m1' } }), 'allowed')
+  // stop releases m1's
+  await rt.computerEndpoint('stop', { botId: 'm1' })
+  assert.equal(await call('w1', { method: 'activate', params: { appHandle: 'h-w1' } }), 'allowed')
+})
+
+test('takeover refuses the Bot and handback delivers a message with nothing the user did', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  await rt.computerEndpoint('takeover', { botId: 'w1' })
+  const denied = await gate({ name: 'cua', arguments: { method: 'click', params: {} }, agent: { id: 'w1' }, callId: 'c' }, async () => 'allowed')
+  assert.equal(denied.kind, 'deny')
+  assert.match(denied.reason, /user is operating/)
+  // handback: control goes idle and the Bot gets the standard message
+  const followups = []
+  ctx.sessions = { flush: async () => {} }
+  rt.resolveAgent = async () => ({ followup: message => followups.push(message), session: { id: 'w1' } })
+  rt.chatOf = () => 'w1'
+  await rt.computerEndpoint('handback', { botId: 'w1' })
+  assert.equal(rt.computerLive().bots.w1.state, 'idle')
+  const last = followups.at(-1)
+  const text = last.content?.[0]?.text ?? JSON.stringify(last)
+  assert.match(text, /handed|back/i)
+  assert.doesNotMatch(text, /typed|clicked|password/i)
+})
+
+test('Stop all stops only Bots that hold a lease, are in-flight, or are bot/waiting', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const stopped = []
+  rt.stopChat = async botId => stopped.push(botId)
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const bot = rt.botOf('w1')
+  bot.computer = { ...bot.computer, apps: { notes: { name: 'Notes', grantedAt: 0 } } }
+  await track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'w1' }, callId: 'g' },
+    async () => ({ isError: false, value: { appHandle: 'h1', authorization: { name: 'Notes' } } }))
+  await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h1' } }, agent: { id: 'w1' }, callId: 'c' }, async () => 'allowed')
+  // w1 holds a lease; m1 has a control entry but nothing held (simulated by a user state)
+  await rt.computerEndpoint('takeover', { botId: 'm1' })
+  await rt.computerEndpoint('stop', { all: true })
+  assert.deepEqual([...stopped].sort(), ['w1'])
+})
+
+test('the Windows path also asks consent for observe calls on a known app', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const allow = async () => 'allowed'
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'l' },
+    async () => ({ windows: [{ pid: 7, name: 'Notes' }] }))
+  // a screenshot of the known pid asks; list calls do not
+  assert.equal(await gate({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'c1' }, allow), 'allowed')
+  const pending = gate({ name: 'cua_driver_native__get_desktop_state', arguments: { pid: 7 }, agent: { id: 'w1' }, callId: 'c2' }, allow)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(Object.keys(rt.computerLive().asks).length, 1)
+  const [id] = Object.entries(rt.computerLive().asks)[0]
+  await rt.computerEndpoint('app-answer', { id, answer: 'once' })
+  assert.equal(await pending, 'allowed')
+})
+
+test('computer_handoff: the hold answers done, skip and takeover', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  // the per-agent tool is registered for an allowed Bot
+  const agent = ctx.scopeAgent('w1')
+  await ctx.emitAsync('agent/created', { agent })
+  const handoff = ctx.registeredTools.get('computer_handoff')
+  assert.notEqual(handoff, undefined)
+  const followups = []
+  ctx.sessions = { flush: async () => {} }
+  rt.resolveAgent = async () => ({ followup: message => followups.push(message), session: { id: 'w1' } })
+  rt.chatOf = () => 'w1'
+  await handoff.execute({ reason: 'login', note: 'needs a sign-in' }, { agent: { id: 'w1' }, callId: 'call-9' })
+  // the call shows the hold in the Bot's own chat
+  const hold = Object.entries(rt.computerLive().holds ?? {})[0]
+  assert.notEqual(hold, undefined)
+  // done: the Bot gets the handback message
+  await rt.computerEndpoint('hold-answer', { botId: 'w1', outcome: 'done' })
+  const reply = JSON.parse(followups.at(-1).content[0].text)
+  assert.equal(reply.kind, 'answer_to_pending_handoff')
+  assert.equal(reply.outcome, 'done')
+  assert.match(reply.message, /gave the computer back|handed/)
+})
+
+test('a cua call DS Bot never decided asks by card instead of saying revoked', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  // DSH's saved decision let getApp through; DS Bot's post-getApp consent asks
+  // by the same card before the model ever sees the handle.
+  const got = track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: 'w1' }, callId: 'g1' },
+    async () => ({ isError: false, value: { appHandle: 'h1', pid: 9, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+  for (let i = 0; i < 50 && Object.keys(rt.computerLive().asks).length === 0; i++) await new Promise(resolve => setImmediate(resolve))
+  const ask = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'once' })
+  await got
+  assert.equal(await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h1' } }, agent: { id: 'w1' }, callId: 'c1' }, allow), 'allowed')
+  // the Session decision now covers later calls without a new card
+  assert.equal(await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h1' } }, agent: { id: 'w1' }, callId: 'c2' }, allow), 'allowed')
+  // an explicit Deny is still a refusal, not a card
+  const denied = gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h1' } }, agent: { id: 'w1' }, callId: 'c3' }, allow)
+  assert.equal(await denied, 'allowed')
+  // but a deny recorded for another app refuses outright — the card now answers
+  // inside getApp, and the refused handle never reaches the model
+  const gotMail = track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Mail' } }, agent: { id: 'w1' }, callId: 'g2' },
+    async () => ({ isError: false, value: { appHandle: 'h2', pid: 10, authorization: { id: 'com.apple.Mail', name: 'Mail' } } }))
+  for (let i = 0; i < 50 && Object.keys(rt.computerLive().asks).length === 0; i++) await new Promise(resolve => setImmediate(resolve))
+  const [id2] = Object.entries(rt.computerLive().asks)[0]
+  await rt.computerEndpoint('app-answer', { id: id2, answer: 'deny' })
+  const refused = await gotMail
+  assert.match(refused.content[0].text, /did not allow/)
+  const again = await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: 'h2' } }, agent: { id: 'w1' }, callId: 'c5' }, allow)
+  assert.match(again.reason, /did not allow/)
+})
+
+test('a revoke clears the Bot’s session decisions for the app in every Session', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const other = 'w1-part2'
+  rt.isBotSession = id => id === 'w1' || id === other
+  const selfOf = rt.selfOf
+  rt.selfOf = id => (id === other ? 'w1' : selfOf(id))
+  for (const sessionId of ['w1', other]) {
+    const got = track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: sessionId }, callId: `g-${sessionId}` },
+      async () => ({ isError: false, value: { appHandle: `h-${sessionId}`, pid: 9, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+    for (let i = 0; i < 50 && Object.keys(rt.computerLive().asks).length === 0; i++) await new Promise(resolve => setImmediate(resolve))
+    const [id] = Object.entries(rt.computerLive().asks)[0]
+    await rt.computerEndpoint('app-answer', { id, answer: 'once' })
+    await got
+    assert.equal(await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: `h-${sessionId}` } }, agent: { id: sessionId }, callId: `c-${sessionId}` }, allow), 'allowed')
   }
-  assert.equal(calls, 2)
-})
-
-test('browser action contract rejects scripts, credentials and unknown fields', () => {
-  for (const action of [{ type: 'open', url: 'javascript:alert(1)' }, { type: 'open', url: 'http://user:secret@localhost' },
-    { type: 'script', text: 'document.cookie' }, { type: 'click', ref: '1', script: 'x' },
-    { type: 'fill', ref: '1', text: 'x'.repeat(4001) }, { type: 'back', url: 'https://example.test' }]) {
-    assert.throws(() => checkBrowserAction(action))
+  // revoke: recorded handles refuse "was revoked" in each Session — the card
+  // comes from the next getApp, which denies here
+  await rt.computerEndpoint('revoke-app', { botId: 'w1', appKey: 'com.apple.Notes' })
+  for (const sessionId of ['w1', other]) {
+    const refused = await gate({ name: 'cua', arguments: { method: 'click', params: { appHandle: `h-${sessionId}` } }, agent: { id: sessionId }, callId: `d-${sessionId}` }, allow)
+    assert.match(refused.reason, /was revoked/, sessionId)
+    const got = track({ name: 'cua', arguments: { method: 'getApp', params: { selector: 'Notes' } }, agent: { id: sessionId }, callId: `g2-${sessionId}` },
+      async () => ({ isError: false, value: { appHandle: `n-${sessionId}`, pid: 9, authorization: { id: 'com.apple.Notes', name: 'Notes' } } }))
+    for (let i = 0; i < 50 && Object.keys(rt.computerLive().asks).length === 0; i++) await new Promise(resolve => setImmediate(resolve))
+    const [id] = Object.entries(rt.computerLive().asks)[0]
+    await rt.computerEndpoint('app-answer', { id, answer: 'deny' })
+    assert.match((await got).content[0].text, /did not allow/)
   }
-  assert.deepEqual(checkBrowserAction({ type: 'fill', ref: '1', text: '' }), { type: 'fill', ref: '1', text: '' })
 })
 
-test('Computer starts only on an explicit management request and survives service reload', async t => {
-  const h = await setup(t)
-  const record = await h.bind()
-  assert.equal((await h.service.status(h.exec())).phase, 'stopped')
-  await assert.rejects(h.observe(), fails('not-ready'))
-  assert.equal(h.provider.calls.length, 0)
-  await h.manage('start')
-  assert.equal((await h.service.status(h.exec())).phase, 'ready')
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.state()).computers[0].id, record.id)
+
+test("the macOS consent answerer is prepended ahead of DSH answerer", async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  assert.ok(ctx.calls.includes('on user-questions/request (prepend)'))
 })
 
-test('service recovery drains input, revokes both desktops and preserves unknown receipts and files', async t => {
-  const h = await setup(t, { provider: recoverable() })
-  const a = await h.start(), b = await h.start('b')
-  const first = await h.manage('takeover')
-  await h.service.files({ botId: 'a', expectedGeneration: a.generation, controlToken: first.controlToken, operation: 'write', name: 'kept', data: 'YQ==' })
-  const entered = Promise.withResolvers(), resume = Promise.withResolvers(), reconnecting = Promise.withResolvers()
-  let inputs = 0
-  h.provider.perform = async (_, { signal }) => {
-    inputs++
-    entered.resolve()
-    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('lost input reply')), { once: true }))
+test('a provider status change saves, so the view reaches the next poll', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  const saves = []
+  const save = rt.save
+  rt.save = async () => { saves.push(1); return save() }
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  const before = saves.length
+  await rt.computerEndpoint('provider-retry', {})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(rt.computerView().provider.state, 'ready')
+  assert.ok(saves.length > before, 'the status change did not advance the revision')
+})
+
+test('a group computer_handoff docks by its hold id and the answer reaches the Bot chat', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const services = { loader: { import: async name => ({ name }) }, agents: { list: () => [] } }
+  ctx.get = name => services[name]
+  withProvider(ctx, services)
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('provider-retry', {})
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  const agent = ctx.scopeAgent('w1')
+  await ctx.emitAsync('agent/created', { agent })
+  const handoff = ctx.registeredTools.get('computer_handoff')
+  const group = 'w1-group'
+  const selfOf = rt.selfOf
+  rt.selfOf = id => (id === group ? 'w1' : selfOf(id))
+  const isBotSession = rt.isBotSession
+  rt.isBotSession = id => (id === group ? true : isBotSession(id))
+  const followups = []
+  ctx.sessions = { flush: async () => {} }
+  rt.resolveAgent = async () => ({ followup: message => followups.push(message), session: { id: 'w1' } })
+  rt.chatOf = () => 'w1'
+  // the group call has no callId for the Bot's own chat
+  await handoff.execute({ reason: 'login' }, { agent: { id: group }, callId: 'call-group' })
+  const [, hold] = Object.entries(rt.computerLive().holds ?? {})[0]
+  assert.equal(typeof hold.id, 'string')
+  assert.equal(hold.callId, undefined)
+  await rt.computerEndpoint('hold-answer', { botId: 'w1', outcome: 'skip' })
+  const reply = JSON.parse(followups.at(-1).content[0].text)
+  assert.equal(reply.kind, 'answer_to_pending_handoff')
+  assert.equal(reply.callId, hold.id)
+  assert.equal(reply.outcome, 'skipped')
+  assert.equal(rt.computerLive().holds?.w1, undefined)
+})
+
+test('cua-driver resolves a window_id or an element token to the app, and refuses what it cannot', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (name, args = {}) => gate({ name, arguments: args, agent: { id: 'w1' }, callId: `c-${name}` }, allow)
+  // a targeted call with nothing to resolve against is refused before consent
+  const blind = await call('cua_driver_native__click', {})
+  assert.equal(blind.kind, 'deny')
+  assert.match(blind.reason, /list_windows/)
+  // untargeted capture and desktop-state reads are refused at every level
+  assert.equal((await call('cua_driver_native__get_desktop_state', {})).kind, 'deny')
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  assert.equal((await call('cua_driver_native__zoom', {})).kind, 'deny')
+  // list_windows stays allowed metadata
+  assert.equal(await call('cua_driver_native__list_windows', {}), 'allowed')
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  // get_window_state records the window and its element tokens
+  await track({ name: 'cua_driver_native__get_window_state', arguments: { window_id: 7 }, agent: { id: 'w1' }, callId: 'state-1' },
+    async () => ({ window_id: 7, pid: 42, name: 'Notes', path: '/Applications/Notes.app', elements: [{ token: 'el-9' }] }))
+  // a window_id call resolves to Notes and asks once, then runs
+  const pending = call('cua_driver_native__click', { window_id: 7 })
+  await new Promise(resolve => setImmediate(resolve))
+  const [id, ask] = Object.entries(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id, answer: 'once' })
+  assert.equal(await pending, 'allowed')
+  // an element token from the same window resolves to the same app
+  assert.equal(await call('cua_driver_native__click', { target: 'el-9' }), 'allowed')
+  // an unknown window is refused
+  const unknown = await call('cua_driver_native__click', { window_id: 99 })
+  assert.equal(unknown.kind, 'deny')
+})
+
+test('revoke clears a This time under every key, so the next call asks again', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args = {}) => gate({ name: 'cua_driver_native__click', arguments: args, agent: { id: 'w1' }, callId: 'c-revoke' }, allow)
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-1' }, async () => ({ windows: [{ pid: 42, name: 'Notes', path: '/Applications/Notes.app' }] }))
+  // Always grant, then a This time decision in the same Session
+  const grantAsk = call({ pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'always' })
+  assert.equal(await grantAsk, 'allowed')
+  // revoke the grant and record a Session decision under a different key, then revoke again
+  await rt.computerEndpoint('revoke-app', { botId: 'w1', appKey: '/Applications/Notes.app' })
+  const onceAsk = call({ pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'once' })
+  assert.equal(await onceAsk, 'allowed')
+  await rt.computerEndpoint('revoke-app', { botId: 'w1', appKey: '/Applications/Notes.app' })
+  // the This time is gone with it: the next call opens the card again
+  const again = call({ pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(Object.keys(rt.computerLive().asks).length, 1)
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'deny' })
+  assert.equal((await again).kind, 'deny')
+})
+
+test('computer-shot serves only screenshots the module recorded, with a safe MIME', async (t) => {
+  const services = { attachments: { readFileStream: async function* () { yield Buffer.from('img') } } }
+  const { ctx, home, rt } = setup({ services })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  // an arbitrary attachment id is not readable
+  assert.equal(await rt.computerEndpoint('shot', { attachmentId: 'any-1' }), null)
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  // a screenshot result with a hostile MIME is served as png
+  await track({ name: 'cua', arguments: { method: 'screenshot', params: {} }, agent: { id: 'w1' }, callId: 'shot-1' },
+    async () => ({ attachment: { attachmentId: 'rec-1', mimeType: 'text/html' } }))
+  const shot = await rt.computerEndpoint('shot', { attachmentId: 'rec-1' })
+  assert.match(shot.dataUrl, /^data:image\/png;base64,/)
+  // a real image MIME survives
+  await track({ name: 'cua', arguments: { method: 'screenshot', params: {} }, agent: { id: 'w1' }, callId: 'shot-2' },
+    async () => ({ attachment: { attachmentId: 'rec-2', mimeType: 'image/jpeg' } }))
+  assert.match((await rt.computerEndpoint('shot', { attachmentId: 'rec-2' })).dataUrl, /^data:image\/jpeg;base64,/)
+})
+
+test('same-named apps do not share an approval; a name-only consent still matches', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args = {}) => gate({ name: 'cua_driver_native__click', arguments: args, agent: { id: 'w1' }, callId: `c-${args.pid}` }, allow)
+  // app A at path X gets an Always grant
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-a' }, async () => ({ windows: [{ pid: 42, name: 'Notes', path: '/a/Notes.app' }] }))
+  const askA = call({ pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'always' })
+  assert.equal(await askA, 'allowed')
+  // app B: same name, another path — it asks again
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-b' }, async () => ({ windows: [{ pid: 43, name: 'Notes', path: '/b/Notes.app' }] }))
+  const askB = call({ pid: 43 })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(Object.keys(rt.computerLive().asks).length, 1)
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'deny' })
+  assert.equal((await askB).kind, 'deny')
+  // the macOS consent question carries only a name; that path stays name-matched
+  const consent = ctx.listeners.get('user-questions/request').find(fn => fn.name === 'computerConsent')
+  const w1 = rt.botOf('w1')
+  const question = { questions: [{ id: 'cua-app-access', intent: { subject: { name: 'Notes' } } }], agent: { id: 'w1', session: { id: 'w1' } }, signal: new AbortController().signal }
+  // drop the path-keyed grants and keep a name-only Always grant
+  w1.computer = { apps: { notes: { name: 'Notes', grantedAt: 0 } } }
+  const answer = await consent(question, async () => 'next')
+  assert.deepEqual(answer.answers[0].selected, ['Allow for this session'])
+})
+
+test('browser tools need a resolvable target, and the driver-refused methods deny at every level', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'foreground' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (name, args = {}) => gate({ name, arguments: args, agent: { id: 'w1' }, callId: `c-${name}` }, allow)
+  // the refused list denies at every level, before any consent or target work
+  for (const method of ['set_config', 'start_recording', 'stop_recording', 'replay_trajectory', 'install_ffmpeg']) {
+    const denied = await call(`cua_driver_native__${method}`, {})
+    assert.equal(denied.kind, 'deny', method)
+    assert.match(denied.reason, /may not use/, method)
   }
-  h.provider.reconnect = async () => { reconnecting.resolve(); await resume.promise }
-  const frame = await h.observe('b')
-  const input = h.service.act(h.click(frame), h.exec('b'))
-  await entered.promise
-  const before = await h.service.state()
-  const args = { botId: 'a', expectedGeneration: a.generation, expectedRecovery: before.recovery.version }
-  assert.equal((await h.service.reconnect(args)).recovery.status, 'running')
-  await reconnecting.promise
-  assert.equal((await input).outcome, 'unknown')
-  await assert.rejects(h.service.reconnect(args), fails('conflict'))
-  await assert.rejects(h.service.observe(h.exec('b')), fails('recovery-required'))
-  await assert.rejects(h.service.manage('start', { botId: 'b', expectedGeneration: b.generation }), fails('recovery-required'))
-  await assert.rejects(h.service.files({ botId: 'a', expectedGeneration: a.generation, controlToken: first.controlToken, operation: 'list' }), fails('recovery-required'))
-  resume.resolve()
-  const after = await recoveryDone(h.service)
-  assert.equal(after.recovery.status, 'completed')
-  assert.equal(after.recovery.completed, 2)
-  assert.ok(after.computers.every(record => record.phase === 'stopped' && record.control === 'none' && record.generation === 2))
-  assert.equal(h.provider.targets.get(a.id).files.get('kept'), 'YQ==')
-  const registry = JSON.parse(await readFile(join(h.home, 'computers/registry.json')))
-  assert.equal(Object.values(registry.operations)[0].outcome, 'unknown')
-  await assert.rejects(h.service.files({ botId: 'a', expectedGeneration: 2, controlToken: first.controlToken, operation: 'list' }), fails('stale-control'))
-  await h.manage('start', 'b')
-  await assert.rejects(h.service.act(h.click(frame), h.exec('b')), fails('stale-observation'))
-  assert.equal(inputs, 1)
+  // get_browser_state and the browser_* tools are no longer global: no target, no call
+  assert.match((await call('cua_driver_native__get_browser_state', {})).reason, /list_windows/)
+  assert.match((await call('cua_driver_native__browser_navigate', { url: 'https://example.com' })).reason, /list_windows/)
+  // with a recorded window they resolve their app and reach consent like any target
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-b' },
+    async () => ({ windows: [{ window_id: 5, pid: 44, name: 'Browser', path: '/Applications/Browser.app' }] }))
+  const pending = call('cua_driver_native__browser_navigate', { window_id: 5, url: 'https://example.com' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(Object.keys(rt.computerLive().asks).length, 1)
+  await rt.computerEndpoint('app-answer', { id: Object.keys(rt.computerLive().asks)[0], answer: 'once' })
+  assert.equal(await pending, 'allowed')
 })
 
-test('partial recovery fails closed, refuses stale consent and retries without discarding metadata', async t => {
-  const h = await setup(t, { provider: recoverable() })
-  const a = await h.start()
-  await h.start('b')
-  const stop = h.provider.stop.bind(h.provider)
-  h.provider.stop = async record => { if (record.botId === 'b') throw new Error('engine unavailable'); await stop(record) }
-  const args = { botId: 'a', expectedGeneration: a.generation, expectedRecovery: (await h.service.state()).recovery.version }
-  h.readOnly('another host owns the team')
-  await assert.rejects(h.service.reconnect(args), fails('read-only'))
-  h.readOnly(undefined)
-  await h.service.reconnect(args)
-  const failed = await recoveryDone(h.service)
-  assert.equal(failed.recovery.status, 'failed')
-  assert.equal(failed.recovery.completed, 1)
-  assert.ok(failed.computers.every(record => record.control === 'blocked' && record.generation === 1))
-  await assert.rejects(h.manage('start'), fails('recovery-required'))
-  await assert.rejects(h.service.reconnect(args), fails('conflict'))
-  h.provider.stop = stop
-  await h.service.reconnect({ ...args, expectedRecovery: failed.recovery.version })
-  const done = await recoveryDone(h.service)
-  assert.equal(done.recovery.status, 'completed')
-  assert.ok(done.computers.every(record => record.generation === 2 && record.phase === 'stopped'))
+test('launch_app resolves by its own name or path: consent, protected check, recorded app', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args = {}) => gate({ name: 'cua_driver_native__launch_app', arguments: args, agent: { id: 'w1' }, callId: 'launch' }, allow)
+  // no identifying argument: refused
+  const blind = await call({})
+  assert.equal(blind.kind, 'deny')
+  // a protected path is refused without a card
+  const protectedCall = await call({ path: '/Applications/DSH Computer Use.app' })
+  assert.equal(protectedCall.kind, 'deny')
+  assert.match(protectedCall.reason, /protected/)
+  // an unprotected app asks by card, then runs
+  const pending = call({ name: 'Notes', path: '/Applications/Notes.app' })
+  await new Promise(resolve => setImmediate(resolve))
+  const [id, ask] = Object.entries(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id, answer: 'once' })
+  assert.equal(await pending, 'allowed')
+  // the launched app is recorded: a later call on its window resolves without a card
+  await track({ name: 'cua_driver_native__launch_app', arguments: { path: '/Applications/Notes.app' }, agent: { id: 'w1' }, callId: 'launch-2' },
+    async () => ({ pid: 50, name: 'Notes', path: '/Applications/Notes.app', window_id: 9 }))
+  assert.equal(await gate({ name: 'cua_driver_native__click', arguments: { window_id: 9 }, agent: { id: 'w1' }, callId: 'c9' }, allow), 'allowed')
 })
 
-test('recovery refuses an active lifecycle change instead of racing its journal', async t => {
-  const h = await setup(t, { provider: recoverable() })
-  const record = await h.bind()
-  const entered = Promise.withResolvers(), finish = Promise.withResolvers()
-  h.provider.start = async () => { entered.resolve(); await finish.promise }
-  const pending = h.service.manage('start', { botId: 'a', expectedGeneration: record.generation })
-  await entered.promise
-  const before = await h.service.state()
-  await assert.rejects(h.service.reconnect({ botId: 'a', expectedGeneration: record.generation, expectedRecovery: before.recovery.version }), fails('busy'))
-  finish.resolve()
-  await pending
-  assert.equal((await h.service.state()).recovery.version, before.recovery.version)
+test('the Bot cursor: relative, pixel and index calls publish a point', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  rt.botOf('w1').computer = { apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  const cua = (method, params, callId = 'c') => ({ name: 'cua', arguments: { method, params }, agent: { id: 'w1' }, callId })
+  // getState records window bounds; a screenshot records that window's pixels
+  await track(cua('getState', { appHandle: 'h1' }, 'g1'), async () => ({ isError: false, value: { appHandle: 'h1', focusedWindowId: 7, windows: [{ windowId: 7, pid: 42, bounds: { x: 100, y: 200, width: 300, height: 400 } }] } }))
+  await track(cua('screenshot', { appHandle: 'h1', windowId: 7 }, 'g2'), async () => ({ isError: false, value: { windowId: 7, pixelWidth: 600, pixelHeight: 800 } }))
+  const okResult = async () => ({ isError: false, value: { dispatched: true } })
+  // relative click: thousandths of the window
+  await gate(cua('click', { appHandle: 'h1', windowId: 7, relative: true, x: 500, y: 250 }, 'c1'), allow)
+  await track(cua('click', { appHandle: 'h1', windowId: 7, relative: true, x: 500, y: 250 }, 'c1'), okResult)
+  let cursor = rt.computerLive().cursors.find(event => event.botId === 'w1')
+  assert.equal(cursor.mode, 'point')
+  assert.equal(cursor.ripple, true)
+  assert.ok(Math.abs(cursor.x - (100 + 500 * 300 / 999)) < 0.5)
+  assert.ok(Math.abs(cursor.y - (200 + 250 * 400 / 999)) < 0.5)
+  assert.equal(cursor.pid, 42)
+  // pixel coordinates scale by that window's last screenshot size
+  await track(cua('click', { appHandle: 'h1', windowId: 7, x: 300, y: 400 }, 'c2'), okResult)
+  cursor = rt.computerLive().cursors.find(event => event.botId === 'w1')
+  assert.ok(Math.abs(cursor.x - 250) < 0.5)
+  assert.ok(Math.abs(cursor.y - 400) < 0.5)
+  // an element-index click sits at the title bar with no ripple
+  await track(cua('click', { appHandle: 'h1', windowId: 7, index: 6 }, 'c3'), okResult)
+  cursor = rt.computerLive().cursors.find(event => event.botId === 'w1')
+  assert.equal(cursor.mode, 'window')
+  assert.equal(cursor.ripple, false)
+  assert.ok(Math.abs(cursor.x - 250) < 0.5)
+  assert.ok(Math.abs(cursor.y - 214) < 0.5)
+  // a call on an unknown window publishes nothing
+  await track(cua('click', { appHandle: 'h1', windowId: 99, index: 1 }, 'c4'), okResult)
+  assert.equal(rt.computerLive().cursors.find(event => event.botId === 'w1').mode, 'window')
 })
 
-test('off, unknown Sessions, archived parts and subagents cannot reach the provider', async t => {
-  const h = await setup(t)
-  await assert.rejects(h.observe(), fails('off'))
-  await h.start()
-  for (const id of ['unknown', 'old-part', 'child']) {
-    await assert.rejects(h.service.observe(h.exec(id)), fails('owner-denied'))
-  }
-  assert.equal(h.provider.calls.length, 0)
-})
-
-test('same Bot own/group Sessions serialize while another Bot uses its own desktop', async t => {
-  const h = await setup(t)
-  const a = await h.start()
-  const b = await h.start('b')
-  await h.observe()
-  await assert.rejects(h.observe('a-group'), fails('busy'))
-  await h.observe('b')
-  assert.notEqual(a.id, b.id)
-  await assert.rejects(h.service.release(h.exec('a-group')), fails('busy'))
-  await h.service.release(h.exec())
-  await h.observe('a-group')
-})
-
-test('input requires successful image persistence and image visibility in this Session', async t => {
-  const h = await setup(t)
-  await h.start()
-  const frame = await h.observe()
-  h.messages.clear()
-  await assert.rejects(h.service.act(h.click(frame), h.exec()), fails('stale-observation'))
-  h.services.attachments.saveImage = async () => { throw new Error('disk full') }
-  await assert.rejects(h.observe(), fails('observation-unavailable'))
-  await assert.rejects(h.service.act(h.click(frame), h.exec()), fails('stale-observation'))
-  assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
-})
-
-test('text-only and unknown models cannot obtain pixel observations', async t => {
-  const h = await setup(t)
-  await h.start()
-  for (const info of [{ inputModalities: ['text'] }, {}]) {
-    h.rt.ctx.llm.resolveModelInfo = async () => info
-    await assert.rejects(h.observe(), fails('vision-required'))
-  }
-  assert.equal(h.provider.calls.length, 0)
-})
-
-test('observe-only grants cannot perform input and bindings reject unverified isolation', async t => {
-  const h = await setup(t)
-  await h.start('a', 'observe')
-  const frame = await h.observe()
-  await assert.rejects(h.service.act(h.click(frame), h.exec()), fails('policy-denied'))
-  await assert.rejects(h.service.bind({
-    botId: 'a', executionPolicy: 'computer-only', expectedRevision: (await h.service.state()).revision,
-  }), fails('policy-denied'))
-})
-
-test('approved actions invalidate coordinates and duplicate call ids do not repeat input', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = h.click(await h.observe())
-  const result = await h.service.act(args, h.exec())
-  assert.equal(result.outcome, 'completed')
-  assert.deepEqual(await h.service.act(args, h.exec()), result)
-  assert.equal(h.provider.targets.get(record.id).actions.length, 1)
-  await assert.rejects(h.service.act(args, h.exec('a', 'c2')), fails('stale-observation'))
-  await assert.rejects(h.service.act({ ...args, actions: [{ type: 'key', key: 'Enter' }] }, h.exec()), fails('conflict'))
-})
-
-test('driver failure after input records unknown and does not replay on retry or reload', async t => {
-  const provider = createFakeComputer()
-  const perform = provider.perform
-  provider.perform = async (...args) => { await perform(...args); throw new Error('response lost') }
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const args = h.click(await h.observe())
-  assert.equal((await h.service.act(args, h.exec())).outcome, 'unknown')
-  assert.equal((await h.service.act(args, h.exec())).outcome, 'unknown')
-  const second = createComputerService(h.rt, provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.act(args, h.exec())).outcome, 'unknown')
-  assert.equal(provider.targets.get(record.id).actions.length, 1)
-})
-
-test('unfinished receipts become unknown after a host restart', async t => {
-  const h = await setup(t)
-  await h.start()
-  const args = h.click(await h.observe())
-  await h.service.act(args, h.exec())
-  const path = join(h.home, 'computers/registry.json')
-  const saved = JSON.parse(await readFile(path, 'utf8'))
-  Object.values(saved.operations)[0].outcome = 'pending'
-  await writeFile(path, JSON.stringify(saved))
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.act(args, h.exec())).outcome, 'unknown')
-})
-
-test('human takeover interrupts the desktop task and task cancellation preserves its control token', async t => {
-  const h = await setup(t), record = await h.start()
-  const agent = h.exec().agent
-  let cancelled = 0
-  agent.inbox = { nextTurn: [], nextStep: [] }
-  agent.cancel = async () => { cancelled++ }
-  h.rt.chatOf = () => 'a'
-  h.rt.resolveAgent = async () => agent
-  h.rt.ctx.sessions = { flush: async () => {} }
-  h.rt.deliver = async () => {}
-  h.rt.live.clear()
-  const [item] = await h.service.tasks.command('add', { botId: 'a', expectedGeneration: record.generation, goal: 'Inspect the page' })
-  await h.service.tasks.tick()
-  const [sending] = await h.service.tasks.list('a')
-  h.rt.live.set('a', { turn: 2, info: { exchangeId: sending.attempt } })
-  await h.service.tasks.enter(agent)
-  const { controlToken } = await h.manage('takeover')
-  assert.equal((await h.service.tasks.list('a'))[0].status, 'interrupted')
-  assert.equal(cancelled, 1)
-  await h.service.tasks.command('cancel', { botId: 'a', expectedGeneration: record.generation, id: item.id })
-  await h.service.preview({ botId: 'a', expectedGeneration: record.generation, controlToken })
-  assert.equal((await h.service.state()).computers.find(item => item.botId === 'a').control, 'human')
-})
-
-test('late task cancellation cannot clear control granted during its pending cancellation', async t => {
-  const h = await setup(t), record = await h.start(), agent = h.exec().agent
-  let release, entered
-  const gate = new Promise(resolve => { release = resolve })
-  const cancelling = new Promise(resolve => { entered = resolve })
-  agent.inbox = { nextTurn: [], nextStep: [] }
-  agent.cancel = async () => { entered(); await gate }
-  h.rt.chatOf = () => 'a'
-  h.rt.resolveAgent = async () => agent
-  h.rt.ctx.sessions = { flush: async () => {} }
-  h.rt.deliver = async () => {}
-  h.rt.live.clear()
-  await h.service.tasks.command('add', { botId: 'a', expectedGeneration: record.generation, goal: 'Inspect' })
-  await h.service.tasks.tick()
-  const [item] = await h.service.tasks.list('a')
-  h.rt.live.set('a', { turn: 2, info: { exchangeId: item.attempt } })
-  await h.service.tasks.enter(agent)
-  const pending = h.service.tasks.interrupt('a')
-  try {
-    await cancelling
-    const { controlToken } = await h.manage('takeover')
-    release(); await pending
-    await h.service.preview({ botId: 'a', expectedGeneration: record.generation, controlToken })
-    assert.equal((await h.service.state()).computers.find(item => item.botId === 'a').control, 'human')
-  } finally { release(); await pending }
-})
-
-test('human takeover stops observation, rejects input and invalidates old coordinates', async t => {
-  const h = await setup(t)
-  await h.start()
-  const args = h.click(await h.observe())
-  await h.manage('takeover')
-  assert.equal((await h.service.status(h.exec())).control, 'human')
-  await assert.rejects(h.manage('start'), fails('human-control'))
-  await assert.rejects(h.observe(), fails('human-control'))
-  await assert.rejects(h.service.act(args, h.exec()), fails('human-control'))
-  await h.manage('release')
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-  await h.observe()
-})
-
-test('explicit startup invalidates any observation from the previous desktop lifetime', async t => {
-  const h = await setup(t)
-  await h.start()
-  const args = h.click(await h.observe())
-  await h.manage('start')
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-  await h.observe()
-})
-
-test('takeover during a pending provider call waits for revocation and never confirms stale input', async t => {
-  let entered
-  const inside = new Promise(resolve => { entered = resolve })
-  const provider = createFakeComputer({
-    beforePerform: async ({ signal }) => {
-      entered()
-      await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+test('driver cursors: session injection, refused cursor tools, one disable per session', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const executions = []
+  ctx.tools = {
+    get: (name) => {
+      if (name === 'cua_driver_native__set_agent_cursor_enabled') return { execute: async (args) => { executions.push(['disable', args]); return { value: {} } } }
+      if (name === 'cua_driver_native__get_agent_cursor_state') return { execute: async (args) => { executions.push(['state', args]); return { isError: false, value: { position: { x: 311, y: 222 } } } } }
+      return { inputSchema: { properties: { session: {}, pid: {} } } }
     },
-  })
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const pending = h.service.act(h.click(await h.observe()), h.exec())
-  await inside
-  await h.manage('takeover')
-  assert.equal((await pending).outcome, 'unknown')
-  assert.equal(provider.targets.get(record.id).actions.length, 0)
-  assert.equal((await h.service.status(h.exec())).control, 'human')
-})
-
-test('revocation failure keeps the desktop blocked', async t => {
-  const h = await setup(t)
-  await h.start()
-  await h.observe()
-  h.provider.revoke = async () => { throw new Error('offline') }
-  await assert.rejects(h.manage('takeover'), fails('revoke-failed'))
-  assert.equal((await h.service.status(h.exec())).control, 'blocked')
-  await assert.rejects(h.observe(), fails('human-control'))
-})
-
-test('a blocked desktop starts again once revocation can be confirmed', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const revoke = h.provider.revoke
-  h.provider.revoke = async () => { throw new Error('offline') }
-  await assert.rejects(h.manage('stop'), fails('revoke-failed'))
-  assert.equal((await h.service.status(h.exec())).control, 'blocked')
-  await assert.rejects(h.manage('start'), fails('revoke-failed'))
-  await assert.rejects(h.observe(), fails('human-control'))
-  h.provider.revoke = revoke
-  await h.manage('start')
-  const view = await h.service.status(h.exec())
-  assert.equal(view.phase, 'ready')
-  assert.equal(view.control, 'none')
-  assert.equal(view.id, record.id)
-})
-
-test('an engine inspection failure stays visible and is not reported as human control', async t => {
-  const h = await setup(t)
-  await h.start()
-  const message = 'The container runtime could not inspect this desktop.'
-  h.provider.inspect = async () => { throw refused('provider-failed', message) }
-  h.provider.revoke = async () => { throw refused('provider-failed', message) }
-  const view = (await h.service.state()).computers[0]
-  assert.equal(view.phase, 'unavailable')
-  assert.equal(view.problem, message)
-  await assert.rejects(h.manage('start'), error => error.code === 'bot/computer-provider-failed' && error.message === message)
-  assert.equal((await h.service.status(h.exec())).control, 'blocked')
-  await assert.rejects(h.observe(), fails('human-control'))
-})
-
-test('a rejected or unavailable approval causes no input', async t => {
-  const h = await setup(t)
-  await h.start()
-  const args = h.click(await h.observe())
-  h.services.approval.request = async () => 'rejected'
-  await assert.rejects(h.service.act(args, h.exec()), fails('approval-denied'))
-  delete h.services.approval
-  await assert.rejects(h.service.act(args, h.exec()), fails('approval-required'))
-  assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
-})
-
-async function setApproval(h, approvalMode, grant = 'operate') {
-  return h.service.bind({ botId: 'a', grant, approvalMode, expectedRevision: (await h.service.state()).revision })
-}
-
-test('YOLO skips approval for this desktop, persists, and never replays unknown input', async t => {
-  const h = await setup(t)
-  const original = await h.start()
-  const record = await setApproval(h, 'yolo')
-  assert.equal(record.id, original.id)
-  delete h.services.approval
-  const perform = h.provider.perform
-  h.provider.perform = async (...args) => { await perform(...args); throw new Error('receipt lost') }
-  const args = h.click(await h.observe())
-  assert.equal((await h.service.act(args, h.exec())).outcome, 'unknown')
-  assert.equal((await h.service.act(args, h.exec())).outcome, 'unknown')
-  assert.equal(h.provider.targets.get(record.id).actions.length, 1)
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.state()).computers[0].approvalMode, 'yolo')
-})
-
-test('YOLO retains observe-only, stale-frame, owner and human-control checks', async t => {
-  const h = await setup(t)
-  await h.start()
-  const record = await setApproval(h, 'yolo')
-  delete h.services.approval
-  const args = h.click(await h.observe())
-  await assert.rejects(h.service.act(args, h.exec('unknown')), fails('owner-denied'))
-  h.provider.targets.get(record.id).actions.push({ type: 'external-change' })
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-  await h.manage('takeover')
-  await assert.rejects(h.observe(), fails('human-control'))
-  await setApproval(h, 'yolo', 'observe')
-  await assert.rejects(h.service.act(h.click(await h.observe()), h.exec()), fails('policy-denied'))
-  assert.equal(h.provider.calls.some(call => call.method === 'perform'), false)
-})
-
-test('switching off YOLO invalidates old coordinates and restores approval', async t => {
-  const h = await setup(t)
-  await h.start()
-  await setApproval(h, 'yolo')
-  const old = h.click(await h.observe())
-  await setApproval(h, 'required')
-  await assert.rejects(h.service.act(old, h.exec()), fails('stale-observation'))
-  h.services.approval.request = async () => 'rejected'
-  await assert.rejects(h.service.act(h.click(await h.observe()), h.exec()), fails('approval-denied'))
-  await assert.rejects(h.service.act({ ...h.click(await h.observe()), approvalMode: 'yolo' }, h.exec()), fails('approval-denied'))
-  await assert.rejects(setApproval(h, 'arbitrary'), fails('policy-denied'))
-})
-
-test('older records without an approval mode still require approval', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const path = join(h.home, 'computers/registry.json')
-  const saved = JSON.parse(await readFile(path, 'utf8'))
-  delete saved.computers[record.id].approvalMode
-  await writeFile(path, JSON.stringify(saved))
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.state()).computers[0].approvalMode, 'required')
-  const observed = await second.observe(h.exec())
-  h.messages.set('a', [{ content: [{ type: 'image', attachment: observed.attachment }] }])
-  delete h.services.approval
-  await assert.rejects(second.act(h.click(JSON.parse(observed.text)), h.exec()), fails('approval-required'))
-})
-
-test('a pending user approval renews its lease while keeping other Sessions out', async t => {
-  const h = await setup(t, { options: { ttl: 120 } })
-  await h.start()
-  h.services.approval.request = async () => {
-    await delay(300)
-    await assert.rejects(h.observe('a-group'), fails('busy'))
-    return 'allowed-once'
   }
-  assert.equal((await h.service.act(h.click(await h.observe()), h.exec())).outcome, 'completed')
-})
-
-test('Computer approvals use the group bridge while another Bot can continue', async t => {
-  const h = await setup(t)
-  let middleware
-  let requested
-  const waiting = new Promise(resolve => { requested = resolve })
-  h.rt.ctx.on = (event, handler) => { if (event === 'approval/request') middleware = handler }
-  h.rt.chatOwners = new Map([['a', 'a'], ['b', 'b']])
-  installApprovals(h.rt)
-  h.services.approval.request = request => {
-    const result = middleware(request, () => 'allowed-once')
-    if (request.agent.id === 'a-group') requested()
-    return result
-  }
-  await h.start()
-  await h.start('b')
-  const pending = h.service.act(h.click(await h.observe('a-group')), h.exec('a-group'))
-  await waiting
-  const card = h.rt.approvalsView()[0]
-  assert.equal(card.roomId, 'r')
-  assert.equal(card.botId, 'a')
-  assert.equal(card.tool, 'computer_act')
-  assert.equal(card.answerable, true)
-  assert.equal((await h.service.act(h.click(await h.observe('b')), h.exec('b'))).outcome, 'completed')
-  h.rt.answerApproval(card.id, 'allow')
-  assert.equal((await pending).outcome, 'completed')
-  assert.deepEqual(h.rt.approvalsView(), [])
-  assert.throws(() => h.rt.answerApproval(card.id, 'allow'), /no longer open/)
-})
-
-test('approval never authorizes changed desktop contents', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = h.click(await h.observe())
-  h.services.approval.request = async () => {
-    h.provider.targets.get(record.id).actions.push({ type: 'external-change' })
-    return 'allowed-once'
-  }
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-  assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
-})
-
-test('grant changes during approval revoke the old action', async t => {
-  let entered, answer
-  const inside = new Promise(resolve => { entered = resolve })
-  const h = await setup(t)
-  await h.start()
-  h.services.approval.request = async ({ signal }) => {
-    entered()
-    return new Promise(resolve => {
-      answer = resolve
-      signal.addEventListener('abort', () => resolve('cancelled'), { once: true })
-    })
-  }
-  const pending = h.service.act(h.click(await h.observe()), h.exec())
-  const rejected = assert.rejects(pending)
-  await inside
-  await h.bind('a', 'observe')
-  answer('allowed-once')
-  await rejected
-  assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
-})
-
-test('turn end, group departure and context compaction cannot leave usable old coordinates', async t => {
-  const h = await setup(t)
-  await h.start()
-  let args = h.click(await h.observe())
-  await h.service.endTurn('a')
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-  args = h.click(await h.observe('a-group'))
-  h.room.members = ['b']
-  await assert.rejects(h.service.act(args, h.exec('a-group')), fails('owner-denied'))
-  await h.service.endTurn('a-group')
-  args = h.click(await h.observe())
-  h.messages.get('a')[0].content[0].offloaded = true
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-})
-
-test('turn completion releases ownership even after an action consumes its frame', async t => {
-  const h = await setup(t)
-  await h.start()
-  await h.service.act(h.click(await h.observe()), h.exec())
-  await assert.rejects(h.service.release(h.exec('a-group')), fails('busy'))
-  await h.service.endTurn('a')
-  await h.observe('a-group')
-})
-
-test('expired leases cannot act and late releases cannot revoke a replacement', () => {
-  let time = 0
-  const leases = createLeases({ now: () => time, ttl: 30 })
-  const computer = { id: 'a', generation: 1 }
-  const first = leases.acquire(computer, { sessionId: 'a', turnId: 1 })
-  time = 31
-  assert.throws(() => leases.check(first), fails('stale-lease'))
-  const next = leases.acquire(computer, { sessionId: 'b', turnId: 2 })
-  assert.equal(leases.release(first), false)
-  leases.check(next)
-})
-
-test('invalid coordinates and unrecognized action fields never reach the provider', () => {
-  for (const actions of [
-    [], [{ type: 'click', x: -1, y: 0 }], [{ type: 'click', x: 10, y: 0 }],
-    [{ type: 'text', text: '' }], [{ type: 'key', key: 'Meta+R' }],
-    [{ type: 'click', x: 1, y: 1, botId: 'b' }], [{ type: 'scroll', x: 1, y: 1, deltaY: Infinity }],
-    [{ type: '__proto__' }], [{ type: 'toString' }],
-  ]) assert.throws(() => checkActions(actions, { width: 10, height: 10 }))
-  assert.throws(() => checkFrame({ data: Buffer.alloc(1) }), fails('observation-unavailable'))
-})
-
-test('concurrent settings writes use revisions and do not create duplicate ownership', async t => {
-  const h = await setup(t)
-  const results = await Promise.allSettled([
-    h.service.bind({ botId: 'a', expectedRevision: 0 }),
-    h.service.bind({ botId: 'a', expectedRevision: 0 }),
-  ])
-  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
-  assert.equal((await h.service.state()).computers.length, 1)
-})
-
-test('Bot deletion archives the desktop without reassigning its data', async t => {
-  const h = await setup(t)
-  const original = await h.start()
-  await h.observe()
-  await h.service.archive('a')
-  await assert.rejects(h.observe(), fails('off'))
-  const replacement = await h.bind()
-  assert.notEqual(replacement.id, original.id)
-  assert.equal((await h.service.state()).computers.find(item => item.id === original.id).archived, true)
-})
-
-test('loss of the home lock fails closed before touching the provider', async t => {
-  const h = await setup(t)
-  await h.start()
-  h.readOnly('owned elsewhere')
-  await assert.rejects(h.observe(), fails('read-only'))
-  assert.equal(h.provider.calls.length, 0)
-})
-
-test('corrupt metadata is preserved and never silently reset', async t => {
-  const h = await setup(t)
-  await h.start()
-  const path = join(h.home, 'computers/registry.json')
-  await writeFile(path, '{broken')
-  const second = createComputerService(h.rt, h.provider)
-  await assert.rejects(second.state())
-  assert.equal(await readFile(path, 'utf8'), '{broken')
-  let disposed = false
-  h.provider.dispose = async () => { disposed = true }
-  await assert.rejects(second.dispose())
-  assert.equal(disposed, true)
-})
-
-test('operation journal does not retain entered text or screenshot bytes', async t => {
-  const h = await setup(t)
-  await h.start()
-  const frame = await h.observe()
-  await h.service.act({
-    observationId: frame.observationId, actions: [{ type: 'text', text: 'fixture-private-text-123' }],
-  }, h.exec())
-  const saved = await readFile(join(h.home, 'computers/registry.json'), 'utf8')
-  assert.ok(!saved.includes('fixture-private-text-123'))
-  assert.ok(!saved.includes('data:image'))
-})
-
-test('coordinates follow DSH normalized attachment dimensions', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  h.services.attachments.saveImage = async () => ({
-    attachmentId: 'sha256:normalized', mediaType: 'image/jpeg', width: 32, height: 24, bytes: 100,
-  })
-  const frame = await h.observe()
-  assert.equal(frame.width, 32)
-  assert.equal(frame.scaleX, 2)
-  await h.service.act(h.click(frame), h.exec())
-  assert.deepEqual(h.provider.targets.get(record.id).actions[0], { type: 'click', x: 6, y: 8 })
-})
-
-test('a failed fresh observation invalidates the previous frame', async t => {
-  const h = await setup(t)
-  await h.start()
-  const args = h.click(await h.observe())
-  h.provider.observe = async () => { throw new Error('driver offline') }
-  await assert.rejects(h.observe())
-  await assert.rejects(h.service.act(args, h.exec()), fails('stale-observation'))
-})
-
-test('a delayed end event from an old turn cannot revoke the new turn lease', async t => {
-  const h = await setup(t)
-  await h.start()
-  await h.observe()
-  await h.service.endTurn('a', 1)
-  h.rt.live.set('a', { turn: 2 })
-  const frame = await h.observe()
-  await h.service.endTurn('a', 1)
-  assert.equal((await h.service.act(h.click(frame), h.exec())).outcome, 'completed')
-})
-
-test('read-only previews never consume the model observation binding', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const frame = await h.observe()
-  const preview = await h.service.preview({ botId: 'a', expectedGeneration: record.generation })
-  assert.equal(preview.width, 64)
-  assert.equal((await h.service.act(h.click(frame), h.exec())).outcome, 'completed')
-})
-
-test('read-only preview stays available while a model action waits for approval', async t => {
-  let allow
-  let requested
-  const waiting = new Promise(resolve => { requested = resolve })
-  const h = await setup(t)
-  h.services.approval.request = () => new Promise(resolve => { allow = resolve; requested() })
-  const record = await h.start()
-  const frame = await h.observe()
-  const pending = h.service.act(h.click(frame), h.exec())
-  await waiting
-  const preview = await h.service.preview({ botId: 'a', expectedGeneration: record.generation })
-  assert.equal(preview.width, 64)
-  allow('allowed-once')
-  assert.equal((await pending).outcome, 'completed')
-})
-
-test('approval drains the in-flight preview before model input and rejects overlapping previews', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const frame = await h.observe()
-  let allow, requested, finish, entered
-  const waiting = new Promise(resolve => { requested = resolve })
-  const capturing = new Promise(resolve => { entered = resolve })
-  const held = new Promise(resolve => { finish = resolve })
-  h.services.approval.request = () => new Promise(resolve => { allow = resolve; requested() })
-  const preview = h.provider.preview.bind(h.provider)
-  h.provider.preview = async (...args) => { entered(); await held; return preview(...args) }
-  const pending = h.service.act(h.click(frame), h.exec())
-  await waiting
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const shot = h.service.preview(args)
-  await capturing
-  await assert.rejects(h.service.preview(args), fails('busy'))
-  allow('allowed-once')
-  await delay(0)
-  assert.equal(h.provider.targets.get(record.id).actions.length, 0)
-  await assert.rejects(h.service.preview(args), fails('busy'))
-  finish()
-  assert.equal((await shot).width, 64)
-  assert.equal((await pending).outcome, 'completed')
-})
-
-test('takeover cancels an approval preview and cannot publish its revoked frame', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const frame = await h.observe()
-  let requested, entered
-  const waiting = new Promise(resolve => { requested = resolve })
-  const capturing = new Promise(resolve => { entered = resolve })
-  h.services.approval.request = ({ signal }) => new Promise(resolve => {
-    signal.addEventListener('abort', () => resolve('denied'), { once: true })
-    requested()
-  })
-  const preview = h.provider.preview.bind(h.provider)
-  h.provider.preview = async (record, options) => {
-    const result = await preview(record, options)
-    entered()
-    await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }))
-    return result
-  }
-  const pending = h.service.act(h.click(frame), h.exec())
-  const rejected = assert.rejects(pending)
-  await waiting
-  const shot = h.service.preview({ botId: 'a', expectedGeneration: record.generation })
-  const revoked = assert.rejects(shot)
-  await capturing
-  await h.manage('takeover')
-  await Promise.all([rejected, revoked])
-  assert.equal(h.provider.targets.get(record.id).actions.length, 0)
-  assert.equal((await h.service.state()).computers[0].control, 'human')
-})
-
-test('human tokens are window-specific, expire without resuming the Bot, and reject late releases', async t => {
-  let time = 1000
-  const h = await setup(t, { options: { now: () => time } })
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const first = (await h.service.manage('takeover', args)).controlToken
-  assert.ok(first)
-  await assert.rejects(h.service.manage('release', args), fails('stale-control'))
-  const second = (await h.service.manage('takeover', args)).controlToken
-  assert.notEqual(first, second)
-  await assert.rejects(h.service.preview({ ...args, controlToken: first }), fails('stale-control'))
-  await assert.rejects(h.service.manage('release', { ...args, controlToken: first }), fails('stale-control'))
-  time += 60001
-  await assert.rejects(h.service.preview({ ...args, controlToken: second }), fails('stale-control'))
-  await assert.rejects(h.observe(), fails('human-control'))
-  assert.equal((await h.service.state()).computers[0].humanExpired, true)
-  await h.service.manage('stop', args)
-  await h.service.manage('start', args)
-  await h.observe()
-})
-
-test('human input uses a current displayed frame and duplicate requests never replay', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const { controlToken } = await h.service.manage('takeover', args)
-  const current = { ...args, controlToken }
-  const frame = await h.service.preview(current)
-  const input = { ...current, frameId: frame.frameId, requestId: 'click-1', actions: [{ type: 'click', x: 2, y: 3 }] }
-  await assert.rejects(h.service.humanAct({ ...input, controlToken: 'other' }), fails('stale-control'))
-  assert.equal((await h.service.humanAct(input)).outcome, 'completed')
-  assert.equal((await h.service.humanAct(input)).outcome, 'completed')
-  assert.equal(h.provider.targets.get(record.id).actions.length, 1)
-  await assert.rejects(h.service.humanAct({ ...input, requestId: 'click-2' }), fails('stale-observation'))
-  await h.service.manage('release', current)
-  await assert.rejects(h.service.humanAct(input), fails('stale-control'))
-})
-
-test('stale, changed and replaced human frames cannot input', async t => {
-  let time = 100
-  const h = await setup(t, { options: { now: () => time } })
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  args.controlToken = (await h.service.manage('takeover', args)).controlToken
-  const input = frame => h.service.humanAct({ ...args, frameId: frame.frameId, requestId: 'input', actions: [{ type: 'key', key: 'Enter' }] })
-  let frame = await h.service.preview(args)
-  time += 5001
-  await assert.rejects(input(frame), fails('stale-observation'))
-  frame = await h.service.preview(args)
-  await h.service.preview(args)
-  await assert.rejects(input(frame), fails('stale-observation'))
-  frame = await h.service.preview(args)
-  h.provider.targets.get(record.id).actions.push({ type: 'external-change' })
-  await assert.rejects(input(frame), fails('stale-observation'))
-  assert.equal(h.provider.calls.filter(call => call.method === 'perform').length, 0)
-})
-
-test('file deletion requires current human ownership, never exposes model deletion and does not retry lost replies', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const requests = []
-  h.provider.chunkedFiles = true
-  h.provider.files = async (_, args) => { requests.push(args); throw new Error('lost reply') }
-  const args = { botId: 'a', expectedGeneration: record.generation, operation: 'delete', name: 'file', version: 'a'.repeat(64) }
-  await assert.rejects(h.service.modelFiles('delete', args, h.exec()), fails('invalid'))
-  await assert.rejects(h.service.files(args), fails('stale-control'))
-  const { controlToken } = await h.manage('takeover')
-  await assert.rejects(h.service.files({ ...args, controlToken, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
-  await assert.rejects(h.service.files({ ...args, controlToken, version: null }), fails('invalid'))
-  await assert.rejects(h.service.files({ ...args, controlToken, name: '../file' }), fails('invalid'))
-  assert.equal(requests.length, 0)
-  await assert.rejects(h.service.files({ ...args, controlToken, temporary: '/host', recursive: true }), /lost reply/)
-  assert.equal(requests.length, 1)
-  assert.equal(requests[0].temporary, undefined)
-  assert.equal(requests[0].recursive, undefined)
-  assert.equal(requests[0].version, args.version)
-  await h.manage('release')
-  await assert.rejects(h.service.files({ ...args, controlToken }), fails('stale-control'))
-  assert.equal(requests.length, 1)
-})
-
-test('file transfer requires current human ownership and rejects traversal and oversized input', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  await assert.rejects(h.service.files({ ...args, operation: 'list' }), fails('stale-control'))
-  args.controlToken = (await h.service.manage('takeover', args)).controlToken
-  for (const name of ['../private', '/absolute', 'folder/file', 'folder\\file', '.hidden', 'bad\0name']) {
-    await assert.rejects(h.service.files({ ...args, operation: 'write', name, data: 'YQ==' }), fails('invalid'))
-  }
-  await assert.rejects(h.service.files({ ...args, operation: 'write', name: 'big', data: Buffer.alloc(262145).toString('base64') }), fails('invalid'))
-  await h.service.files({ ...args, operation: 'write', name: 'note.txt', data: 'YQ==' })
-  assert.equal((await h.service.files({ ...args, operation: 'read', name: 'note.txt' })).data, 'YQ==')
-  assert.equal((await h.service.files({ ...args, operation: 'list' })).files.length, 1)
-  await h.service.manage('release', args)
-  await assert.rejects(h.service.files({ ...args, operation: 'list' }), fails('stale-control'))
-})
-
-test('disabling a Computer revokes control, stops it and preserves its identity and files', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  args.controlToken = (await h.service.manage('takeover', args)).controlToken
-  await h.service.files({ ...args, operation: 'write', name: 'kept', data: 'YQ==' })
-  const disabled = await h.bind('a', 'off')
-  assert.equal(disabled.id, record.id)
-  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
-  await assert.rejects(h.observe(), fails('off'))
-  await assert.rejects(h.service.preview(args), fails('stale-generation'))
-  const enabled = await h.bind()
-  assert.equal(enabled.id, record.id)
-  assert.equal(h.provider.targets.get(record.id).files.get('kept'), 'YQ==')
-})
-
-test('host restart preserves a human pause but never restores its input token', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  args.controlToken = (await h.service.manage('takeover', args)).controlToken
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.state()).computers[0].control, 'human')
-  await assert.rejects(second.observe(h.exec()), fails('human-control'))
-  await assert.rejects(second.preview(args), fails('stale-control'))
-})
-
-function attachment(h, sessionId = 'a', text = 'desktop artifact') {
-  const ref = { attachmentId: 'sha256:fixture-file', name: 'source.txt', bytes: Buffer.byteLength(text) }
-  h.messages.set(sessionId, [{ content: [{ type: 'file', attachment: ref }] }])
-  h.services.attachments.readFileStream = async function* (value) { assert.deepEqual(value, ref); yield Buffer.from(text) }
-  h.services.attachments.saveFile = async ({ data, name }) => ({ attachmentId: 'sha256:export', name, bytes: data.length })
-  return ref
-}
-function deliveries(h) {
-  const sent = []
-  h.room.sessions = { a: 'a-group' }
-  h.rt.chatOf = id => id
-  h.rt.resolveAgent = async () => ({ inbox: { nextTurn: [], nextStep: [] } })
-  h.rt.deliver = async args => { sent.push(args) }
-  return sent
-}
-const help = { reason: 'login', note: 'Sign in, then return here.' }
-
-test('model file tools import current-context attachments, export refs and deduplicate writes', async t => {
-  const h = await setup(t)
-  await h.start()
-  const ref = attachment(h)
-  const args = { attachmentId: ref.attachmentId, name: 'result.txt' }
-  const first = await h.service.modelFiles('import', args, h.exec())
-  assert.equal(first.outcome, 'completed')
-  assert.deepEqual(await h.service.modelFiles('import', args, h.exec()), first)
-  assert.equal((await h.service.modelFiles('list', {}, h.exec())).files[0].name, 'result.txt')
-  const output = await h.service.modelFiles('export', { name: 'result.txt' }, h.exec())
-  assert.equal(output.file.bytes, ref.bytes)
-  assert.equal(output.file.name, 'result.txt')
-  await assert.rejects(h.service.modelFiles('import', { ...args, name: 'other' }, h.exec()), fails('conflict'))
-  await h.service.release(h.exec())
-  await assert.rejects(h.service.modelFiles('import', args, h.exec('a-group')), fails('owner-denied'))
-})
-
-test('chunked file requests recheck control and generation and never forward guest paths', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const identity = { botId: 'a', expectedGeneration: record.generation }
-  const first = await h.service.manage('takeover', identity)
-  const calls = []
-  h.provider.chunkedFiles = true
-  h.provider.files = async (_record, options) => { calls.push(options); return { transferId: 'a'.repeat(36) } }
-  await h.service.files({ ...identity, controlToken: first.controlToken, operation: 'begin-read', name: 'file', temporary: '/host/path' })
-  assert.equal(calls[0].temporary, undefined)
-  const second = await h.service.manage('takeover', identity)
-  const chunk = { ...identity, operation: 'read-chunk', transferId: 'a'.repeat(36), offset: 0 }
-  await assert.rejects(h.service.files({ ...chunk, controlToken: first.controlToken }), fails('stale-control'))
-  await assert.rejects(h.service.files({ ...chunk, controlToken: second.controlToken, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
-  await assert.rejects(h.service.files({ ...chunk, controlToken: second.controlToken, offset: -1 }), fails('invalid'))
-  await assert.rejects(h.service.files({ ...identity, controlToken: second.controlToken, operation: 'begin-write', name: 'file', bytes: 200 * 1024 * 1024 + 1, sha256: 'a'.repeat(64) }), fails('invalid'))
-  assert.equal(calls.length, 1)
-})
-
-test('a slow file snapshot keeps its control ticket, then returns to normal expiry', async t => {
-  let now = 0
-  const h = await setup(t, { options: { now: () => now } })
-  const record = await h.start()
-  const identity = { botId: 'a', expectedGeneration: record.generation }
-  const takeover = await h.service.manage('takeover', identity)
-  h.provider.chunkedFiles = true
-  h.provider.files = async () => { now += 100_000; return { transferId: 'a'.repeat(36) } }
-  await h.service.files({ ...identity, controlToken: takeover.controlToken, operation: 'begin-read', name: 'large.bin' })
-  now += 60_001
-  await assert.rejects(h.service.files({ ...identity, controlToken: takeover.controlToken, operation: 'list' }), fails('stale-control'))
-})
-
-test('model import respects approval, observe grants, offloaded refs and human pauses', async t => {
-  const h = await setup(t)
-  await h.start()
-  const ref = attachment(h)
-  const args = { attachmentId: ref.attachmentId, name: 'result.txt' }
-  h.services.approval.request = async () => 'denied'
-  await assert.rejects(h.service.modelFiles('import', args, h.exec()), fails('approval-denied'))
-  h.messages.get('a')[0].content[0].offloaded = true
-  await assert.rejects(h.service.modelFiles('import', args, h.exec()), fails('owner-denied'))
-  await h.bind('a', 'observe')
-  await assert.rejects(h.service.modelFiles('import', args, h.exec()), fails('policy-denied'))
-  await h.manage('takeover')
-  await assert.rejects(h.service.modelFiles('export', { name: 'result.txt' }, h.exec()), fails('human-control'))
-})
-
-test('model import records ambiguous writes and never retries them', async t => {
-  const h = await setup(t)
-  await h.start()
-  const ref = attachment(h)
-  let writes = 0
-  h.provider.files = async () => { writes++; throw new Error('lost reply') }
-  const args = { attachmentId: ref.attachmentId, name: 'result.txt' }
-  const result = await h.service.modelFiles('import', args, h.exec())
-  assert.equal(result.outcome, 'unknown')
-  assert.deepEqual(await h.service.modelFiles('import', args, h.exec()), result)
-  assert.equal(writes, 1)
-})
-
-test('desktop handoff pauses observation, requires control for Done, resumes exactly once in own chat', async t => {
-  const h = await setup(t)
-  await h.start()
-  const sent = deliveries(h)
-  let ended = 0
-  const exec = h.exec('a', 'help', { concludeTurn: () => ended++ })
-  const result = await h.service.handoffs.request(help, exec)
-  assert.equal(ended, 1)
-  assert.equal((await h.service.handoffs.request(help, exec)).requestId, result.requestId)
-  await assert.rejects(h.observe(), fails('human-control'))
-  const args = { botId: 'a', requestId: result.requestId, outcome: 'done' }
-  await assert.rejects(h.service.handoffs.answer(args), fails('stale-control'))
-  const control = await h.manage('takeover')
-  await h.service.handoffs.answer({ ...args, controlToken: control.controlToken })
-  await h.service.handoffs.answer(args)
-  assert.equal(sent.length, 1)
-  assert.equal(sent[0].sessionId, 'a')
-  assert.equal(sent[0].role, 'resume')
-  assert.match(sent[0].text, /not evidence/)
-  assert.equal((await h.service.handoffs.list()).length, 0)
-  await h.observe()
-})
-
-test('group handoff follows the current group part and never resumes in own chat', async t => {
-  const h = await setup(t)
-  await h.start()
-  const sent = deliveries(h)
-  const result = await h.service.handoffs.request(help, h.exec('a-group'))
-  h.room.sessions.a = 'a-group-next'
-  await h.service.handoffs.answer({ botId: 'a', requestId: result.requestId, outcome: 'skip' })
-  assert.equal(sent[0].sessionId, 'a-group-next')
-  assert.equal(sent[0].roomId, 'r')
-  assert.equal(sent[0].role, 'room')
-})
-
-test('pending handoff survives host restart while cancelled, rebound and departed requests cannot resume', async t => {
-  const h = await setup(t)
-  await h.start()
-  const sent = deliveries(h)
-  const result = await h.service.handoffs.request(help, h.exec('a-group'))
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.handoffs.list())[0].id, result.requestId)
-  assert.equal((await second.state()).computers[0].control, 'human')
-  h.room.members = ['b']
-  await assert.rejects(second.handoffs.answer({ botId: 'a', requestId: result.requestId, outcome: 'skip' }), fails('stale-generation'))
-  h.room.members = ['a', 'b']
-  await second.handoffs.cancel('r')
-  await assert.rejects(second.handoffs.answer({ botId: 'a', requestId: result.requestId, outcome: 'skip' }), fails('stale-generation'))
-  assert.equal(sent.length, 0)
-})
-
-test('a queued continuation retries preflight failures but never resends an ambiguous delivery', async t => {
-  const h = await setup(t)
-  await h.start()
-  deliveries(h)
-  const result = await h.service.handoffs.request(help, h.exec())
-  const args = { botId: 'a', requestId: result.requestId, outcome: 'skip' }
-  h.rt.resolveAgent = async () => { throw new Error('temporarily offline') }
-  await assert.rejects(h.service.handoffs.answer(args), /temporarily offline/)
-  assert.equal((await h.service.handoffs.list())[0].status, 'queued')
-  const agent = { inbox: { nextTurn: [] } }
-  h.rt.resolveAgent = async () => agent
-  let dispatches = 0
-  h.rt.deliver = async () => { dispatches++; throw new Error('lost acknowledgement') }
-  await assert.rejects(h.service.handoffs.answer(args), fails('result-unknown'))
-  h.rt.unreadOf = () => [{ exchangeId: result.requestId }]
-  await assert.rejects(h.service.handoffs.answer(args), fails('result-unknown'))
-  assert.equal(dispatches, 1, 'a resume queue note is not proof of dispatch')
-  agent.inbox.nextTurn.push({ source: { exchangeId: result.requestId } })
-  assert.equal((await h.service.handoffs.answer(args)).status, 'delivered')
-  assert.equal(dispatches, 1)
-})
-
-test('cancellation or group departure while resolving the destination prevents continuation', async t => {
-  for (const change of ['cancel', 'leave']) {
-    const h = await setup(t)
-    await h.start()
-    const sent = deliveries(h)
-    const result = await h.service.handoffs.request(help, h.exec('a-group'))
-    h.rt.resolveAgent = async () => {
-      if (change === 'cancel') await h.service.handoffs.cancel('r')
-      else h.room.members = ['b']
-      return { inbox: {} }
-    }
-    await assert.rejects(h.service.handoffs.answer({ botId: 'a', requestId: result.requestId, outcome: 'skip' }),
-      fails(change === 'cancel' ? 'cancelled' : 'stale-generation'))
-    assert.equal(sent.length, 0)
-  }
-})
-
-test('running desktop quota serializes concurrent starts and allows reuse after stopping', async t => {
-  const h = await setup(t)
-  await h.bind('a')
-  await h.bind('b')
-  const original = h.provider.start
-  let unblock
-  h.provider.start = async (...args) => { await new Promise(resolve => { unblock = resolve }); return original(...args) }
-  const starting = h.manage('start', 'a')
-  while (!unblock) await delay(1)
-  await assert.rejects(h.manage('start', 'b'), fails('busy'))
-  unblock()
-  await starting
-  h.provider.start = original
-  h.rt.config.computer = { maxRunning: 1 }
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  await second.state()
-  await assert.rejects(second.manage('start', { botId: 'b', expectedGeneration: 1 }), fails('resource-limit'))
-  await second.manage('stop', { botId: 'a', expectedGeneration: 1 })
-  await second.manage('start', { botId: 'b', expectedGeneration: 1 })
-  assert.equal((await second.state()).limits.maxRunning, 1)
-})
-
-test('idle shutdown retains files and excludes active turns and human-controlled desktops', async t => {
-  let clock = 0
-  const h = await setup(t, { options: { now: () => clock } })
-  const a = await h.start('a')
-  await h.start('b')
-  await h.provider.files(a, { operation: 'write', name: 'keep.txt', data: 'eA==' })
-  await h.observe('a')
-  await h.manage('takeover', 'b')
-  clock = 1_000_000
-  await h.service.reapIdle()
-  assert.equal((await h.service.state()).computers.filter(item => item.phase === 'ready').length, 2)
-  await h.service.endTurn('a', 1)
-  await h.service.reapIdle()
-  assert.equal((await h.service.status(h.exec())).phase, 'stopped')
-  await h.manage('start', 'a')
-  assert.equal((await h.provider.files(a, { operation: 'read', name: 'keep.txt' })).data, 'eA==')
-})
-
-function storageProvider(h) {
-  const copies = new Map()
-  h.provider.checkpoint = async (record, { checkpointId }) => {
-    copies.set(checkpointId, new Map(h.provider.targets.get(record.id).files ?? []))
-    return { hash: 'a'.repeat(64), bytes: 10, entries: 1, skipped: 0 }
-  }
-  h.provider.restore = async (record, { checkpointId }) => {
-    h.provider.targets.get(record.id).files = new Map(copies.get(checkpointId))
-  }
-  h.provider.recreate = async () => {}
-  h.provider.rollback = async () => {}
-  h.provider.cleanup = async (_, options) => { copies.delete(options.checkpointId); return { removed: true } }
-}
-
-test('checkpoint recovery requires stopped desktops, retains the old home and invalidates stale management', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const record = await h.start()
-  await h.provider.files(record, { operation: 'write', name: 'keep', data: 'eA==' })
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  await assert.rejects(h.service.storage('checkpoint', args), fails('not-stopped'))
-  await h.manage('stop')
-  const saved = await h.service.storage('checkpoint', args)
-  h.provider.targets.get(record.id).files.set('keep', 'eQ==')
-  const restored = await h.service.storage('restore', { ...args, checkpointId: saved.checkpoints[0].id })
-  assert.equal(restored.computers[0].generation, record.generation + 1)
-  const metadata = JSON.parse(await readFile(join(h.home, 'computers/registry.json'), 'utf8')).computers[record.id]
-  assert.ok(metadata.homeRevision)
-  assert.deepEqual(metadata.previousHomes, [null])
-  assert.equal(h.provider.targets.get(record.id).files.get('keep'), 'eA==')
-  await assert.rejects(h.service.manage('start', args), fails('stale-generation'))
-  await h.bind('a', 'observe')
-  const rebound = JSON.parse(await readFile(join(h.home, 'computers/registry.json'), 'utf8')).computers[record.id]
-  assert.equal(rebound.homeRevision, metadata.homeRevision)
-  assert.deepEqual(rebound.previousHomes, [null])
-})
-
-test('failed restore never publishes a new home; recreate requires a successful checkpoint', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const record = await h.start()
-  await h.manage('stop')
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const saved = await h.service.storage('checkpoint', args)
-  h.provider.restore = async () => { throw new Error('hash mismatch') }
-  await assert.rejects(h.service.storage('restore', { ...args, checkpointId: saved.checkpoints[0].id }), /hash mismatch/)
-  assert.equal((await h.service.state()).computers[0].generation, record.generation)
-  await assert.rejects(h.service.storage('recreate', args), fails('recovery-required'))
-  await h.service.storage('recover', args)
-  args.expectedGeneration = (await h.service.state()).computers[0].generation
-  let removed = false
-  h.provider.checkpoint = async () => { throw new Error('disk full') }
-  h.provider.recreate = async () => { removed = true }
-  await assert.rejects(h.service.storage('recreate', args), /disk full/)
-  assert.equal(removed, false)
-})
-
-test('checkpoint journal is bounded and rejects another desktop backup', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const a = await h.start('a')
-  const b = await h.start('b')
-  await h.manage('stop', 'a')
-  await h.manage('stop', 'b')
-  const args = { botId: 'a', expectedGeneration: a.generation }
-  const saved = await h.service.storage('checkpoint', args)
-  await h.service.storage('checkpoint', args)
-  await assert.rejects(h.service.storage('checkpoint', args), fails('resource-limit'))
-  await assert.rejects(h.service.storage('restore', { botId: 'b', expectedGeneration: b.generation, checkpointId: saved.checkpoints[0].id }), fails('invalid'))
-})
-
-test('the final inbox guard blocks cancelled continuations, including restart resends', async t => {
-  const h = await setup(t)
-  await h.start()
-  deliveries(h)
-  const request = await h.service.handoffs.request(help, h.exec('a-group'))
-  let queued = false
-  h.rt.deliver = async args => {
-    const validate = await h.service.handoffs.validateDelivery(args.computerHandoff, args.sessionId)
-    await h.service.handoffs.cancel('r')
-    validate()
-    queued = true
-  }
-  await assert.rejects(h.service.handoffs.answer({ botId: 'a', requestId: request.requestId, outcome: 'skip' }), fails('result-unknown'))
-  assert.equal(queued, false)
-  await assert.rejects(h.service.handoffs.validateDelivery(request.requestId, 'a-group'), fails('cancelled'))
-})
-
-test('explicit stop cancels a pending desktop help card', async t => {
-  const h = await setup(t)
-  await h.start()
-  const sent = deliveries(h)
-  const request = await h.service.handoffs.request(help, h.exec())
-  await h.manage('stop')
-  assert.equal((await h.service.handoffs.list()).length, 0)
-  await assert.rejects(h.service.handoffs.answer({ botId: 'a', requestId: request.requestId, outcome: 'skip' }), fails('stale-generation'))
-  assert.equal(sent.length, 0)
-})
-
-test('storage cleanup frees capacity and rollback exchanges retained homes without deleting either', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  await h.start()
-  await h.manage('stop')
-  const storage = async (method, extra = {}) => h.service.storage(method, { botId: 'a', expectedGeneration: (await h.service.state()).computers[0].generation, ...extra })
-  const saved = await storage('checkpoint')
-  const checkpointId = saved.checkpoints[0].id
-  await storage('checkpoint')
-  await assert.rejects(storage('checkpoint'), fails('resource-limit'))
-  await storage('delete-checkpoint', { checkpointId: saved.checkpoints[0].id })
-  const replacement = await storage('checkpoint')
-  assert.equal(replacement.checkpoints.length, 2)
-  const restored = await storage('restore', { checkpointId: replacement.checkpoints[0].id })
-  const revision = restored.computers[0].previousHomes
-  assert.deepEqual(revision, [null])
-  const switched = await storage('rollback', { homeRevision: null })
-  assert.equal(switched.computers[0].previousHomes.length, 1)
-  assert.notEqual(switched.computers[0].previousHomes[0], null)
-  await assert.rejects(storage('delete-home', { homeRevision: null }), fails('invalid'))
-  await storage('delete-home', { homeRevision: switched.computers[0].previousHomes[0] })
-  assert.deepEqual((await h.service.state()).computers[0].previousHomes, [])
-  await assert.rejects(storage('restore', { checkpointId }), fails('invalid'))
-})
-
-test('interrupted restore is reconciled on restart; failed cleanup cannot bypass recovery', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const record = await h.start()
-  await h.manage('stop')
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const saved = await h.service.storage('checkpoint', args)
-  let staged
-  h.provider.restore = async (_, options) => { staged = options.homeRevision; throw new Error('host disconnected after staging') }
-  await assert.rejects(h.service.storage('restore', { ...args, checkpointId: saved.checkpoints[0].id }), /disconnected/)
-  const registry = JSON.parse(await readFile(join(h.home, 'computers/registry.json'), 'utf8'))
-  assert.equal(registry.lifecycle[record.id].homeRevision, staged)
-  assert.equal(registry.computers[record.id].homeRevision, undefined)
-  h.provider.cleanup = async () => { throw new Error('volume still referenced') }
-  await h.service.dispose()
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.equal((await second.state()).computers[0].recoveryPending, true)
-  await second.manage('stop', args)
-  await assert.rejects(second.manage('start', args), fails('recovery-required'))
-  await assert.rejects(second.manage('takeover', args), fails('recovery-required'))
-  await assert.rejects(second.observe(h.exec()), fails('recovery-required'))
-  await assert.rejects(second.bind({ botId: 'a', grant: 'operate', expectedRevision: (await second.state()).revision }), fails('recovery-required'))
-  await assert.rejects(second.storage('recover', args), /still referenced/)
-  h.provider.cleanup = async (current, options) => {
-    assert.equal(current.homeRevision, undefined)
-    assert.equal(options.staged, true)
-    assert.equal(options.homeRevision, staged)
-    return { removed: true }
-  }
-  const recovered = await second.storage('recover', args)
-  assert.equal(recovered.computers[0].recoveryPending, false)
-  assert.equal(recovered.computers[0].generation, record.generation + 1)
-  assert.equal(recovered.checkpoints.length, 1)
-})
-
-test('an interrupted explicit deletion retries idempotently and clears only its metadata', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const record = await h.start()
-  await h.manage('stop')
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const saved = await h.service.storage('checkpoint', args)
-  const checkpointId = saved.checkpoints[0].id
-  h.provider.cleanup = async () => { throw new Error('reply lost after deletion') }
-  await assert.rejects(h.service.storage('delete-checkpoint', { ...args, checkpointId }), /reply lost/)
-  assert.equal((await h.service.state()).checkpoints.length, 1)
-  h.provider.cleanup = async (_, options) => { assert.equal(options.checkpointId, checkpointId); return { removed: false } }
-  const recovered = await h.service.storage('recover', args)
-  assert.equal(recovered.checkpoints.length, 0)
-  assert.equal(recovered.computers[0].recoveryPending, false)
-})
-
-test('pruning action receipts invalidates old generations and preserves other Computers', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const a = await h.start()
-  const b = await h.start('b')
-  await h.service.act(h.click(await h.observe()), h.exec())
-  await h.service.act(h.click(await h.observe('b')), h.exec('b'))
-  const args = { botId: 'a', expectedGeneration: a.generation }
-  await assert.rejects(h.service.storage('prune-journal', args), fails('not-stopped'))
-  await h.manage('stop')
-  await h.service.storage('prune-journal', args)
-  const registry = JSON.parse(await readFile(join(h.home, 'computers/registry.json'), 'utf8'))
-  assert.equal(registry.computers[a.id].generation, a.generation + 1)
-  assert.deepEqual(Object.values(registry.operations).map(item => item.computerId), [b.id])
-  await assert.rejects(h.service.manage('start', args), fails('stale-generation'))
-})
-
-test('image pins survive rebinding and reject a different provider image before touching a desktop', async t => {
-  const h = await setup(t)
-  const image = `sha256:${'a'.repeat(64)}`
-  h.provider.image = image
-  const record = await h.start()
-  assert.equal(record.runtimeImage, image)
-  assert.equal((await h.bind()).runtimeImage, image)
-  await h.service.dispose()
-  h.provider.image = `sha256:${'b'.repeat(64)}`
-  let revoked = false
-  h.provider.revoke = async () => { revoked = true }
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  const state = await second.state()
-  const args = { botId: 'a', expectedGeneration: state.computers[0].generation }
-  assert.equal(revoked, false)
-  assert.equal(state.computers[0].runtimeImage, image)
-  await assert.rejects(second.manage('start', args), fails('image-incompatible'))
-  await assert.rejects(second.bind({ botId: 'a', grant: 'operate', expectedRevision: state.revision }), fails('image-incompatible'))
-  await assert.rejects(second.observe(h.exec()), fails('image-incompatible'))
-})
-
-test('legacy homes acquire an image pin only with matching runtime evidence or a provably empty assignment', async t => {
-  for (const evidence of [
-    { image: `sha256:${'a'.repeat(64)}`, homeExists: true, accepted: true },
-    { image: null, homeExists: false, accepted: true },
-    { image: null, homeExists: false, retained: true, accepted: false },
-    { image: null, homeExists: true, accepted: false },
-    { image: `sha256:${'b'.repeat(64)}`, homeExists: true, accepted: false },
-  ]) {
-    const h = await setup(t)
-    const original = await h.bind()
-    await h.service.dispose()
-    if (evidence.retained) {
-      const file = join(h.home, 'computers/registry.json')
-      const saved = JSON.parse(await readFile(file, 'utf8'))
-      saved.computers[original.id].previousHomes = ['bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb']
-      await writeFile(file, JSON.stringify(saved))
-    }
-    h.provider.image = `sha256:${'a'.repeat(64)}`
-    h.provider.inspect = async () => ({ phase: 'stopped', ...evidence })
-    const second = createComputerService(h.rt, h.provider)
-    t.after(() => second.dispose())
-    const state = await second.state()
-    assert.equal(state.computers[0].runtimeImage, evidence.accepted ? h.provider.image : undefined)
-    assert.equal(state.computers[0].generation, original.generation)
-    if (!evidence.accepted) await assert.rejects(second.manage('start', { botId: 'a', expectedGeneration: original.generation }), fails('image-incompatible'))
-  }
-})
-
-test('a corrected image configuration can replace a pin only on a verified empty assignment', async t => {
-  const h = await setup(t)
-  h.provider.image = `sha256:${'a'.repeat(64)}`
-  const record = await h.bind()
-  await h.service.dispose()
-  h.provider.image = `sha256:${'b'.repeat(64)}`
-  h.provider.inspect = async () => ({ phase: 'stopped', image: null, homeExists: false })
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  const state = await second.state()
-  assert.equal(state.computers[0].runtimeImage, h.provider.image)
-  assert.equal(state.computers[0].generation, record.generation + 1)
-  await assert.rejects(second.manage('start', { botId: 'a', expectedGeneration: record.generation }), fails('stale-generation'))
-})
-
-test('upgrade publishes image and home together and rollback restores the original pair', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const original = `sha256:${'a'.repeat(64)}`
-  const next = `sha256:${'b'.repeat(64)}`
-  h.provider.image = original
-  h.provider.images = [original, next]
-  let staged
-  h.provider.upgrade = async (record, options) => {
-    assert.equal(record.runtimeImage, original)
-    assert.equal(options.targetImage, next)
-    assert.match(options.hash, /^[a-f0-9]{64}$/)
-    staged = options.homeRevision
-  }
-  const record = await h.start()
-  await h.manage('stop')
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  await assert.rejects(h.service.storage('upgrade', { ...args, targetImage: original }), fails('image-incompatible'))
-  await assert.rejects(h.service.storage('upgrade', { ...args, targetImage: `sha256:${'c'.repeat(64)}` }), fails('image-incompatible'))
-  const upgraded = await h.service.storage('upgrade', { ...args, targetImage: next })
-  assert.equal(upgraded.computers[0].runtimeImage, next)
-  assert.deepEqual(upgraded.computers[0].previousImages, { original })
-  assert.equal(upgraded.checkpoints[0].image, original)
-  await assert.rejects(h.service.storage('upgrade', { botId: 'a', expectedGeneration: upgraded.computers[0].generation, targetImage: original }), fails('image-incompatible'))
-  await h.bind('a', 'observe')
-  const current = (await h.service.state()).computers[0]
-  assert.deepEqual(current.previousImages, { original })
-  await assert.rejects(h.service.storage('restore', { botId: 'a', expectedGeneration: current.generation, checkpointId: upgraded.checkpoints[0].id }), fails('image-incompatible'))
-  h.provider.rollback = async (_, options) => { assert.equal(options.targetImage, original); assert.equal(options.homeRevision, null) }
-  const rolled = await h.service.storage('rollback', { botId: 'a', expectedGeneration: current.generation, homeRevision: null })
-  assert.equal(rolled.computers[0].runtimeImage, original)
-  assert.deepEqual(rolled.computers[0].previousHomes, [staged])
-  assert.deepEqual(rolled.computers[0].previousImages, { [staged]: next })
-})
-
-test('interrupted upgrade retains the source pair and reconciles only its candidate', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const original = `sha256:${'a'.repeat(64)}`, next = `sha256:${'b'.repeat(64)}`
-  h.provider.image = original
-  h.provider.images = [original, next]
-  let staged
-  h.provider.upgrade = async (_, options) => { staged = options.homeRevision; throw new Error('candidate failed health') }
-  const record = await h.start()
-  await h.manage('stop')
-  await assert.rejects(h.service.storage('upgrade', { botId: 'a', expectedGeneration: record.generation, targetImage: next }), /failed health/)
-  const interrupted = await h.service.state()
-  assert.equal(interrupted.computers[0].runtimeImage, original)
-  assert.equal(interrupted.computers[0].generation, record.generation)
-  assert.equal(interrupted.computers[0].recoveryPending, true)
-  await assert.rejects(h.manage('start'), fails('recovery-required'))
-  h.provider.cleanup = async (_, options) => {
-    assert.equal(options.homeRevision, staged)
-    assert.equal(options.targetImage, next)
-    assert.equal(options.staged, true)
-    assert.equal(options.kind, 'home')
-  }
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  const recovered = await second.state()
-  assert.equal(recovered.computers[0].runtimeImage, original)
-  assert.equal(recovered.computers[0].recoveryPending, false)
-  assert.equal(recovered.checkpoints.length, 1)
-})
-
-test('storage diagnostics refuse stale generations and pending recovery without scanning', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  let scans = 0
-  h.provider.diagnostics = async () => { scans++; return { storage: { bytes: 7, freeBytes: 100, totalBytes: 200, hardQuota: false } } }
-  await assert.rejects(h.service.diagnostics({ botId: 'a', expectedGeneration: 0 }), fails('stale-generation'))
-  assert.equal(scans, 0)
-  assert.equal((await h.service.diagnostics({ botId: 'a', expectedGeneration: record.generation })).storage.bytes, 7)
-  storageProvider(h)
-  h.provider.checkpoint = async () => { throw new Error('disk full') }
-  await h.manage('stop')
-  await assert.rejects(h.service.storage('checkpoint', { botId: 'a', expectedGeneration: record.generation }), /disk full/)
-  await assert.rejects(h.service.diagnostics({ botId: 'a', expectedGeneration: record.generation }), fails('recovery-required'))
-  assert.equal(scans, 1)
-})
-
-test('upgrade reserves the runtime limit before allocating a checkpoint or candidate', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  h.provider.image = `sha256:${'a'.repeat(64)}`
-  h.provider.images = [h.provider.image, `sha256:${'b'.repeat(64)}`]
-  let upgraded = false
-  h.provider.upgrade = async () => { upgraded = true }
-  const record = await h.start('a')
-  await h.start('b')
-  await h.manage('stop', 'a')
-  h.rt.config.computer = { maxRunning: 1 }
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  await assert.rejects(second.storage('upgrade', { botId: 'a', expectedGeneration: record.generation, targetImage: h.provider.images[1] }), fails('resource-limit'))
-  assert.equal(upgraded, false)
-  assert.equal((await second.state()).checkpoints.length, 0)
-})
-
-function fakeViewer() {
-  let closed = false
-  const listeners = new Set()
-  return {
-    get closed() { return closed },
-    onData() {}, write() {},
-    onClose(fn) { if (closed) fn(); else listeners.add(fn) },
-    close() { if (closed) return; closed = true; for (const fn of listeners) fn() },
-  }
-}
-
-test('interactive viewers require a current takeover, are exclusive and block snapshot input', async t => {
-  const provider = createFakeComputer()
-  const opened = []
-  provider.openViewer = async (_record, options) => {
-    const stream = Object.assign(fakeViewer(), { interactive: options.interactive })
-    opened.push(stream)
-    return stream
-  }
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  await assert.rejects(h.service.openViewer({ ...args, controlToken: 'invented' }), fails('stale-control'))
-  const { controlToken } = await h.manage('takeover')
-  const stream = await h.service.openViewer({ ...args, controlToken })
-  assert.equal(stream.interactive, true)
-  await assert.rejects(h.service.openViewer({ ...args, controlToken }), fails('busy'))
-  await assert.rejects(h.service.humanAct({ ...args, controlToken }), fails('busy'))
-  const watcher = await h.service.openViewer(args)
-  assert.equal(watcher.interactive, false)
-  await h.manage('takeover')
-  await assert.rejects(stream.write(Buffer.from([4])), fails('viewer-unavailable'))
-  await assert.rejects(h.service.openViewer({ ...args, controlToken }), fails('stale-control'))
-})
-
-test('interactive stream writes cannot extend an already expired human lease', async t => {
-  let now = 0
-  const provider = createFakeComputer()
-  let writes = 0
-  provider.openViewer = async () => Object.assign(fakeViewer(), { interactive: true, write() { writes++ } })
-  const h = await setup(t, { provider, options: { now: () => now } })
-  const record = await h.start()
-  const { controlToken } = await h.manage('takeover')
-  const stream = await h.service.openViewer({ botId: 'a', expectedGeneration: record.generation, controlToken })
-  now = 60_001
-  await assert.rejects(stream.write(Buffer.from([4])), fails('stale-control'))
-  assert.equal(writes, 0)
-})
-
-test('old providers cannot silently open an interactive viewer', async t => {
-  const provider = createFakeComputer()
-  const stream = fakeViewer()
-  provider.openViewer = async () => stream
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const { controlToken } = await h.manage('takeover')
-  await assert.rejects(h.service.openViewer({ botId: 'a', expectedGeneration: record.generation, controlToken }), fails('viewer-unavailable'))
-  assert.equal(stream.closed, true)
-})
-
-test('viewers survive model turn fences but close on binding changes and read-only ownership', async t => {
-  const provider = createFakeComputer()
-  const opened = []
-  provider.openViewer = async () => { const stream = fakeViewer(); opened.push(stream); return stream }
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const stream = await h.service.openViewer({ botId: 'a', expectedGeneration: record.generation })
-  await h.observe()
-  await h.service.release(h.exec())
-  assert.equal(opened[0].closed, false)
-  await h.observe()
-  await h.service.endTurn('a', 1)
-  assert.equal(opened[0].closed, false)
-  await stream.validate()
-  await h.bind('a', 'off')
-  assert.equal(opened[0].closed, true)
-  const next = await h.start()
-  const second = await h.service.openViewer({ botId: 'a', expectedGeneration: next.generation })
-  h.readOnly('another host')
-  await assert.rejects(second.validate(), fails('read-only'))
-  second.close()
-  h.readOnly(undefined)
-})
-
-test('a viewer opening concurrently with stop cannot outlive revocation', async t => {
-  const provider = createFakeComputer()
-  let finish
-  provider.openViewer = () => new Promise(resolve => { finish = resolve })
-  const h = await setup(t, { provider })
-  const record = await h.start()
-  const opening = h.service.openViewer({ botId: 'a', expectedGeneration: record.generation })
-  const rejected = assert.rejects(opening)
-  while (!finish) await delay(1)
-  await h.manage('stop')
-  const stream = fakeViewer()
-  finish(stream)
-  await rejected
-  assert.equal(stream.closed, true)
-})
-
-test('resource settings persist, fence stale revisions and apply to admission without stopping desktops', async t => {
-  const h = await setup(t)
-  await h.start('a')
-  await h.start('b')
-  const initial = await h.service.state()
-  const limits = { ...initial.limits, maxRunning: 1, idleStopMs: 60_000 }
-  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('resource-limit'))
-  assert.equal((await h.service.state()).computers.filter(item => item.phase === 'ready').length, 2)
-  await h.manage('stop', 'b')
-  await h.service.setResourceLimits({ expectedRevision: (await h.service.state()).revision, limits })
-  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('conflict'))
-  await assert.rejects(h.manage('start', 'b'), fails('resource-limit'))
-  const second = createComputerService(h.rt, h.provider)
-  t.after(() => second.dispose())
-  assert.deepEqual((await second.state()).limits, limits)
-  h.readOnly('another host')
-  await assert.rejects(h.service.setResourceLimits({ expectedRevision: initial.revision, limits }), fails('read-only'))
-})
-
-test('background resource samples retain failures, detect warnings and do not postpone idle shutdown', async t => {
-  let clock = 0, scans = 0, failed = false
-  const h = await setup(t, { options: { now: () => clock } })
-  await h.start()
-  h.provider.diagnostics = async () => {
-    scans++
-    if (failed) throw Error('scan failed')
-    return { storage: { bytes: 12 * 1024 ** 3, freeBytes: 1, totalBytes: 100 * 1024 ** 3 } }
-  }
-  const initial = await h.service.state()
-  await h.service.setResourceLimits({ expectedRevision: initial.revision, limits: { ...initial.limits, idleStopMs: 60_000 } })
-  clock = 30_000
-  await h.service.sampleResources()
-  const sample = (await h.service.state()).computers[0].resources
-  assert.deepEqual(sample.warnings, ['low-space', 'large-home'])
-  await h.service.sampleResources()
-  assert.equal(scans, 1)
-  clock = 65_000
-  await h.service.reapIdle()
-  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
-  clock = 100_000; failed = true
-  await h.service.sampleResources()
-  assert.equal((await h.service.state()).computers[0].resources.error, true)
-  assert.equal((await h.service.state()).computers[0].resources.at, sample.at)
-  await h.bind()
-  assert.equal((await h.service.state()).computers[0].resources, null)
-})
-
-test('hard quota defaults require a verified backend and never resize an existing home', async t => {
-  const h = await setup(t)
-  const a = await h.bind()
-  const initial = await h.service.state()
-  const limits = { ...initial.limits, newHomeQuotaBytes: 4 * 1024 ** 3 }
-  const args = { expectedRevision: initial.revision, limits, botId: 'a', expectedGeneration: a.generation }
-  await assert.rejects(h.service.setResourceLimits(args), fails('unsupported'))
-  h.provider.quotaBackend = 'podman-xfs'
-  h.provider.checkQuota = async () => ({ enforced: false })
-  await assert.rejects(h.service.setResourceLimits(args), fails('unsupported'))
-  h.provider.checkQuota = async () => ({ enforced: true })
-  await assert.rejects(h.service.setResourceLimits({ ...args, expectedGeneration: 0 }), fails('stale-generation'))
-  await h.service.setResourceLimits(args)
-  assert.equal((await h.bind()).homeQuotaBytes, undefined)
-  assert.equal((await h.bind('b')).homeQuotaBytes, limits.newHomeQuotaBytes)
-})
-
-test('background storage reports progress, fences cancellation and preserves recovery intent', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const record = await h.start()
-  await h.manage('stop')
-  let entered = false
-  h.provider.checkpoint = async (_record, { signal, onProgress, maxBytes }) => {
-    assert.equal(maxBytes, 20 * 1024 ** 3)
-    entered = true
-    onProgress({ stage: 'copying', doneBytes: 201 * 1024 ** 2, totalBytes: 256 * 1024 ** 2 })
-    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }))
-  }
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const started = await h.service.storageStart({ ...args, method: 'checkpoint' })
-  assert.equal(started.status, 'running')
-  for (let i = 0; !entered && i < 100; i++) await delay(2)
-  assert.equal(entered, true)
-  assert.equal((await h.service.state()).computers[0].storageJob.progress.doneBytes, 201 * 1024 ** 2)
-  await assert.rejects(h.service.storageStart({ ...args, method: 'checkpoint' }), fails('busy'))
-  await assert.rejects(h.service.storageCancel({ botId: 'a', jobId: 'old' }), fails('conflict'))
-  await h.service.storageCancel({ botId: 'a', jobId: started.id })
-  let state
-  for (let i = 0; i < 100; i++) {
-    state = await h.service.state()
-    if (state.computers[0].storageJob.status === 'cancelled') break
-    await delay(2)
-  }
-  assert.equal(state.computers[0].storageJob.status, 'cancelled')
-  assert.equal(state.computers[0].recoveryPending, true)
-  assert.equal(state.checkpoints.length, 0)
-  assert.equal(state.computers[0].generation, record.generation)
-  await h.service.storage('recover', args)
-  assert.equal((await h.service.state()).computers[0].recoveryPending, false)
-  await assert.rejects(h.service.storageStart({ ...args, method: 'checkpoint' }), fails('stale-generation'))
-})
-
-test('background restore completion publishes a verified home and can be observed later', async t => {
-  const h = await setup(t)
-  storageProvider(h)
-  const original = h.provider.checkpoint
-  h.provider.checkpoint = async (...args) => ({ ...await original(...args), bytes: 256 * 1024 ** 2 })
-  const record = await h.start()
-  await h.manage('stop')
-  const args = { botId: 'a', expectedGeneration: record.generation }
-  const saved = await h.service.storage('checkpoint', args)
-  const job = await h.service.storageStart({ ...args, method: 'restore', checkpointId: saved.checkpoints[0].id })
-  let state
-  for (let i = 0; i < 100; i++) {
-    state = await h.service.state()
-    if (state.computers[0].storageJob.status === 'completed') break
-    await delay(2)
-  }
-  assert.equal(state.computers[0].storageJob.id, job.id)
-  assert.equal(state.computers[0].storageJob.status, 'completed')
-  assert.equal(state.computers[0].generation, record.generation + 1)
-  assert.deepEqual(state.computers[0].previousHomes, [null])
-})
-
-test('cleanup holds a global management barrier and forwards only the persisted registry', async t => {
-  const provider = recoverable()
-  provider.maintenance = async (action, options) => ({ action, options })
-  const h = await setup(t, { provider })
-  const record = await h.bind()
-  let release, entered
-  const entering = new Promise(resolve => { entered = resolve })
-  const task = h.service.maintenance(async request => {
-    const result = await request('scan', { registry: { injected: true } })
-    assert.equal(result.options.registry.computers[record.id].id, record.id)
-    assert.equal(result.options.registry.injected, undefined)
-    entered()
-    await new Promise(resolve => { release = resolve })
-  })
-  await entering
-  await assert.rejects(h.manage('start'), fails('busy'))
-  await assert.rejects(h.bind('b'), fails('busy'))
-  await assert.rejects(h.service.maintenance(() => {}), fails('busy'))
-  const state = await h.service.state()
-  await assert.rejects(h.service.reconnect({ botId: 'a', expectedGeneration: record.generation, expectedRecovery: state.recovery.version }), fails('busy'))
-  release()
-  await task
-  await h.manage('start')
-  assert.equal((await h.service.status(h.exec())).phase, 'ready')
-})
-
-test('desktop settings can be saved when status is unverified but the desktop is not running', async t => {
-  const provider = createFakeComputer(); provider.configure = async () => {}; provider.capacity = async () => ({ cpu: 4, memoryBytes: 8 * 1024 ** 3 })
-  const h = await setup(t, { provider }); const record = await h.bind()
-  const policy = { cpu: 1, memoryMiB: 1024, network: 'restricted', domains: ['www.baidu.com', 'www.sohu.com'] }
-  provider.inspect = async () => ({ phase: 'unavailable' })
-  await h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy })
-  assert.deepEqual((await h.service.state()).computers[0].policy.domains, ['www.baidu.com', 'www.sohu.com'])
-  provider.inspect = async () => { throw new Error('Computer operation failed (volume, 1).') }
-  const next = (await h.service.state()).computers[0]
-  await h.service.storage('configure', { botId: 'a', expectedGeneration: next.generation, policy: { ...policy, cpu: 2 } })
-  assert.equal((await h.service.state()).computers[0].policy.cpu, 2)
-})
-
-test('per-desktop settings require stopped generation and fit engine capacity', async t => {
-  const provider = createFakeComputer(); provider.configure = async () => {}; provider.capacity = async () => ({ cpu: 4, memoryBytes: 8 * 1024 ** 3 })
-  const h = await setup(t, { provider }); let record = await h.start()
-  const policy = { cpu: 1, memoryMiB: 1024, network: 'offline' }
-  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy }), fails('not-stopped'))
-  await h.manage('stop')
-  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy: { ...policy, cpu: 8 } }), fails('resource-limit'))
-  await h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation, policy })
-  record = (await h.service.state()).computers[0]
-  assert.equal(record.policy.network, 'offline'); assert.equal(record.policy.memoryMiB, 1024)
-  await h.bind('a', 'observe')
-  record = (await h.service.state()).computers[0]
-  assert.equal(record.policy.network, 'offline'); assert.equal(record.policy.memoryMiB, 1024)
-  await assert.rejects(h.service.storage('configure', { botId: 'a', expectedGeneration: record.generation - 1, policy }), fails('stale-generation'))
-  await h.manage('start')
-})
-
-test('disk protection stops only registered running desktops and refuses unsafe restarts', async t => {
-  let freeBytes = 10 * 1024 ** 3
-  const provider = createFakeComputer(); provider.diskSpace = async () => ({ freeBytes }); provider.diagnostics = async () => ({ storage: { bytes: 1, freeBytes, totalBytes: 100 * 1024 ** 3 } })
-  const h = await setup(t, { provider }); await h.start()
-  freeBytes = 100 * 1024 ** 2; await h.service.sampleResources()
-  let record = (await h.service.state()).computers[0]
-  assert.equal(record.phase, 'stopped'); assert.equal(record.diskProtection.freeBytes, freeBytes)
-  await assert.rejects(h.manage('start'), fails('resource-limit'))
-  freeBytes = 10 * 1024 ** 3; await h.manage('start')
-  record = (await h.service.state()).computers[0]; assert.equal(record.phase, 'ready'); assert.equal(record.diskProtection, null)
-})
-
-test('public storage requests cannot supply portable host paths or pause the desktop', async t => {
-  const h = await setup(t); const record = await h.bind()
-  await assert.rejects(h.service.storage('portable-import', { botId: 'a', expectedGeneration: record.generation, path: '/tmp/forged' }), fails('unavailable'))
-  await assert.rejects(h.service.storageStart({ method: 'portable-export', botId: 'a', expectedGeneration: record.generation }), fails('invalid'))
-  assert.equal((await h.service.state()).computers[0].control, 'none')
-})
-
-
-test('passive monitor previews preserve model observations and do not postpone idle shutdown', async t => {
-  let clock = 0
-  const h = await setup(t, { options: { now: () => clock } })
-  const record = await h.start()
-  const state = await h.service.state()
-  assert.equal(state.passivePreview, true)
-  await h.service.setResourceLimits({ expectedRevision: state.revision, limits: { ...state.limits, idleStopMs: 60_000 } })
-  const observation = await h.observe()
-  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
-  await h.service.preview(args)
-  assert.equal((await h.service.act(h.click(observation), h.exec())).outcome, 'completed')
-  await h.service.endTurn('a', 1)
-  clock = 30_000
-  await h.service.preview(args)
-  clock = 59_000
-  await h.service.preview(args)
-  clock = 61_000
-  await h.service.reapIdle()
-  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
-  await assert.rejects(h.service.preview(args), fails('not-ready'))
-  assert.equal((await h.service.state()).computers[0].phase, 'stopped')
-})
-
-test('passive preview cannot carry human authority and still checks binding generation', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
-  await assert.rejects(h.service.preview({ ...args, expectedGeneration: record.generation + 1 }), fails('stale-generation'))
-  const result = await h.manage('takeover')
-  await assert.rejects(h.service.preview({ ...args, controlToken: result.controlToken }), fails('invalid'))
-})
-
-
-test('cancelling a passive preview aborts capture and releases its lane', async t => {
-  const h = await setup(t)
-  const record = await h.start()
-  const original = h.provider.preview.bind(h.provider)
-  let entered
-  const started = new Promise(resolve => { entered = resolve })
-  h.provider.preview = (_record, { signal }) => new Promise((resolve, reject) => {
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-    entered()
-  })
-  const controller = new AbortController()
-  const args = { botId: 'a', expectedGeneration: record.generation, passive: true }
-  const request = h.service.preview(args, controller.signal)
-  const rejected = assert.rejects(request, error => error.name === 'AbortError')
-  await started
-  controller.abort()
-  await rejected
-  h.provider.preview = original
-  assert.equal((await h.service.preview(args)).width, 64)
+  rt.botOf('w1').computer = { apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'list-1' }, async () => ({ windows: [{ pid: 42, name: 'Notes', path: '/Applications/Notes.app', bundleId: 'com.apple.Notes' }] }))
+  // a call whose schema carries session gets a stable per-Bot session injected
+  const exec = { name: 'cua_driver_native__click', arguments: { pid: 42 }, agent: { id: 'w1' }, callId: 'c1' }
+  await gate(exec, allow)
+  assert.match(exec.arguments.session, /^dsbot-[0-9a-f]+$/)
+  await track(exec, async () => ({ isError: false, value: { done: true } }))
+  // disable ran once for the session; the state query published the point
+  assert.equal(executions.filter(e => e[0] === 'disable').length, 1)
+  await new Promise(resolve => setImmediate(resolve))
+  const cursor = rt.computerLive().cursors.find(event => event.botId === 'w1')
+  assert.equal(cursor.x, 311)
+  assert.equal(cursor.y, 222)
+  assert.equal(cursor.ripple, true)
+  // the cursor tools themselves are refused to Bots
+  assert.equal((await gate({ name: 'cua_driver_native__set_agent_cursor_enabled', arguments: { session: 'x', enabled: true }, agent: { id: 'w1' }, callId: 'c2' }, allow)).kind, 'deny')
+  // a tool whose schema has no session property gets nothing injected
+  ctx.tools.get = () => ({ inputSchema: { properties: { pid: {} } } })
+  const bare = { name: 'cua_driver_native__click', arguments: { pid: 42 }, agent: { id: 'w1' }, callId: 'c3' }
+  await gate(bare, allow)
+  assert.equal(bare.arguments.session, undefined)
+})
+
+test('cursor-wait returns fresh events, wakes on publish, and times out empty', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  rt.botOf('w1').computer = { apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const cua = (method, params, callId) => ({ name: 'cua', arguments: { method, params }, agent: { id: 'w1' }, callId })
+  await track(cua('getState', { appHandle: 'h1' }, 'g1'), async () => ({ isError: false, value: { appHandle: 'h1', focusedWindowId: 7, windows: [{ windowId: 7, bounds: { x: 0, y: 0, width: 100, height: 100 } }] } }))
+  // a handle-only relative click resolves through the remembered windowId
+  const okResult = async () => ({ isError: false, value: { dispatched: true } })
+  const click = { name: 'cua', arguments: { method: 'click', params: { appHandle: 'h1', relative: true, x: 500, y: 500 } }, agent: { id: 'w1' }, callId: 'c1' }
+  await gate(click, allow)
+  await track(click, okResult)
+  const first = await rt.computerEndpoint('cursor-wait', { after: 0 })
+  assert.equal(first.events.length, 1)
+  assert.ok(Math.abs(first.events[0].x - 50) < 0.5)
+  assert.equal(first.events[0].windowId, 7)
+  // a waiter with the same seq wakes only when a newer event lands
+  const waiting = rt.computerEndpoint('cursor-wait', { after: first.events[0].seq })
+  await new Promise(resolve => setImmediate(resolve))
+  await track(cua('pressKey', { appHandle: 'h1', key: 'a' }, 'c2'), okResult)
+  const woke = await waiting
+  assert.equal(woke.events.length, 1)
+  assert.equal(woke.events[0].mode, 'window')
+  // nothing newer → the wait resolves empty after the timeout (stubbed short)
+  // a seq ahead of ours means the host restarted: answer like after=0
+  const restarted = await rt.computerEndpoint('cursor-wait', { after: 9999 })
+  assert.equal(restarted.events.length, 1)
+  // dispose resolves a pending waiter with no events
+  const held = rt.computerEndpoint('cursor-wait', { after: restarted.events[0].seq })
+  rt.closeComputerWaiters()
+  assert.deepEqual((await held).events, [])
+})
+
+test('computer-shot serves a real screenshot attachment by its mediaType', async (t) => {
+  const { ctx, home, rt } = setup({ services: { attachments: { readFileStream: async function* () { yield Buffer.from('PNGDATA') } } } })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'view' })
+  rt.botOf('w1').computer = { apps: { 'com.apple.Notes': { name: 'Notes', id: 'com.apple.Notes', grantedAt: 0 } } }
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  // the real provider's attachment carries mediaType, not mimeType
+  await track(
+    { name: 'cua', arguments: { method: 'screenshot', params: { appHandle: 'h1', windowId: 7 } }, agent: { id: 'w1' }, callId: 's1' },
+    async () => ({ isError: false, value: { windowId: 7, attachment: { attachmentId: 'sha256:abc', mediaType: 'image/webp', width: 100, height: 100, bytes: 7 } } }),
+  )
+  const shot = await rt.computerEndpoint('shot', { attachmentId: 'sha256:abc' })
+  assert.equal(shot?.dataUrl, `data:image/webp;base64,${Buffer.from('PNGDATA').toString('base64')}`)
+  // an id this module never recorded is not readable
+  assert.equal(await rt.computerEndpoint('shot', { attachmentId: 'sha256:other' }), null)
+})
+
+// A tool result as the DSH MCP bridge hands it to the tool runtime: the driver's own
+// JSON stays under structuredContent, with the text rendering beside it.
+const mcpResult = (structuredContent, text = 'ok') => ({
+  isError: false,
+  content: [{ type: 'text', text }],
+  value: { content: [{ type: 'text', text }], structuredContent },
+})
+
+test('cua-driver registers apps and windows from the canonical MCP result', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (name, args = {}) => gate({ name: `cua_driver_native__${name}`, arguments: args, agent: { id: 'w1' }, callId: `c-${name}-${JSON.stringify(args)}` }, allow)
+
+  // list_apps: one running app with a window, one installed but not running.
+  await track({ name: 'cua_driver_native__list_apps', arguments: {}, agent: { id: 'w1' }, callId: 'apps-1' },
+    async () => mcpResult({
+      apps: [
+        { pid: 42, name: 'Notes', bundle_id: 'com.apple.Notes', launch_path: '/Applications/Notes.app', running: true, active: false, windows: [{ window_id: 7, pid: 42, app_name: 'Notes', title: 'Notes' }] },
+        { pid: 0, name: 'Mail', bundle_id: 'com.apple.Mail', launch_path: '/Applications/Mail.app', running: false, active: false, windows: [] },
+      ],
+    }))
+  // A running app is known by pid and its window; the app identity keeps the bundle id
+  // and path, so the grant is recorded against the same identity a later list returns.
+  const pending = call('click', { pid: 42 })
+  await new Promise(resolve => setImmediate(resolve))
+  const [, ask] = Object.entries(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'always' })
+  assert.equal(await pending, 'allowed')
+  const grant = Object.values(rt.botOf('w1').computer.apps).find(entry => entry.id === 'com.apple.Notes')
+  assert.equal(grant?.name, 'Notes')
+  assert.equal(await call('click', { window_id: 7 }), 'allowed')
+  // The not-running app's pid 0 was not registered as a usable app.
+  assert.equal((await call('click', { pid: 0 })).kind, 'deny')
+
+  // list_windows: app_name names the app, and a protected app is refused before consent.
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'wins-1' },
+    async () => mcpResult({ windows: [
+      { window_id: 8, pid: 43, app_name: 'Mail', title: '', z_index: 1, is_on_screen: true },
+      { window_id: 9, pid: 5, app_name: 'System Settings', title: 'Settings', z_index: 2, is_on_screen: true },
+    ] }))
+  const mail = call('click', { pid: 43 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask2 = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask2.appName, 'Mail')
+  await rt.computerEndpoint('app-answer', { id: ask2.id, answer: 'once' })
+  assert.equal(await mail, 'allowed')
+  const protectedCall = await call('click', { window_id: 9 })
+  assert.equal(protectedCall.kind, 'deny')
+  assert.match(protectedCall.reason, /protected/)
+
+  // get_window_state: a window and its real element_token resolve to that window's app.
+  await track({ name: 'cua_driver_native__get_window_state', arguments: { pid: 44, window_id: 11 }, agent: { id: 'w1' }, callId: 'state-1' },
+    async () => mcpResult({ pid: 44, window_id: 11, app_name: 'Reminders', elements: [{ element_index: 0, role: 'button', element_token: 'el-9' }] }))
+  const token = call('click', { element_token: 'el-9' })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask3 = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask3.appName, 'Reminders')
+  await rt.computerEndpoint('app-answer', { id: ask3.id, answer: 'once' })
+  assert.equal(await token, 'allowed')
+})
+
+test('cua-driver registers launch_app from structuredContent and leaves text-only results alone', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (name, args = {}) => gate({ name: `cua_driver_native__${name}`, arguments: args, agent: { id: 'w1' }, callId: `c-${name}-${JSON.stringify(args)}` }, allow)
+
+  // launch_app answers with the app and its windows under structuredContent.
+  await track({ name: 'cua_driver_native__launch_app', arguments: { bundle_id: 'com.apple.Mail' }, agent: { id: 'w1' }, callId: 'launch-1' },
+    async () => mcpResult({ pid: 43, bundle_id: 'com.apple.Mail', name: 'Mail', launch_state: 'window_ready', windows: [{ window_id: 9, pid: 43, app_name: 'Mail', title: 'Inbox' }] }, 'Launched Mail (pid 43)'))
+  const launched = call('click', { pid: 43 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Mail')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'once' })
+  assert.equal(await launched, 'allowed')
+  assert.equal(await call('click', { window_id: 9 }), 'allowed')
+
+  // A provider that returns text only records nothing: no app is learned from prose.
+  const textOnly = { isError: false, content: [{ type: 'text', text: 'windows: 55 Notes' }], value: { content: [{ type: 'text', text: 'windows: 55 Notes' }] } }
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'text-1' }, async () => textOnly)
+  const blind = await call('click', { pid: 55 })
+  assert.equal(blind.kind, 'deny')
+  assert.match(blind.reason, /list/i)
+})
+
+test('cua-driver keeps the plain top-level array result', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args) => gate({ name: 'cua_driver_native__click', arguments: args, agent: { id: 'w1' }, callId: `c-${JSON.stringify(args)}` }, allow)
+  // An older provider returns the window list as the value itself, not in an object.
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'array-1' },
+    async () => [{ pid: 55, name: 'Notes', window_id: 55 }])
+  const byPid = call({ pid: 55 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'once' })
+  assert.equal(await byPid, 'allowed')
+  assert.equal(await call({ window_id: 55 }), 'allowed')
+})
+
+test('cua-driver keeps the title-only window record', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args) => gate({ name: 'cua_driver_native__click', arguments: args, agent: { id: 'w1' }, callId: `c-${JSON.stringify(args)}` }, allow)
+  // A window with no pid still names its app by title and resolves by window id.
+  await track({ name: 'cua_driver_native__list_windows', arguments: {}, agent: { id: 'w1' }, callId: 'title-1' },
+    async () => ({ windows: [{ title: 'Notes', window_id: 56 }] }))
+  const pending = call({ window_id: 56 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'once' })
+  assert.equal(await pending, 'allowed')
+})
+
+test('cua-driver keeps a numeric element token', async (t) => {
+  const { ctx, home, rt } = setup()
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  await rt.load()
+  await rt.computerEndpoint('set-enabled', { enabled: true })
+  await rt.computerEndpoint('set-level', { botId: 'w1', level: 'background' })
+  const gate = ctx.listeners.get('tools/pre-execute').find(fn => fn.name === 'computerGate')
+  const track = ctx.listeners.get('tools/execute').find(fn => fn.name === 'computerTrack')
+  const allow = async () => 'allowed'
+  const call = (args) => gate({ name: 'cua_driver_native__click', arguments: args, agent: { id: 'w1' }, callId: `c-${JSON.stringify(args)}` }, allow)
+  // Old get_window_state results carried a numeric token; the read side accepts it.
+  await track({ name: 'cua_driver_native__get_window_state', arguments: { window_id: 57 }, agent: { id: 'w1' }, callId: 'num-1' },
+    async () => ({ pid: 58, window_id: 57, name: 'Notes', elements: [{ token: 9001 }] }))
+  const pending = call({ token: 9001 })
+  await new Promise(resolve => setImmediate(resolve))
+  const ask = Object.values(rt.computerLive().asks)[0]
+  assert.equal(ask.appName, 'Notes')
+  await rt.computerEndpoint('app-answer', { id: ask.id, answer: 'once' })
+  assert.equal(await pending, 'allowed')
 })

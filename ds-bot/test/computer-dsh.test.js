@@ -91,7 +91,7 @@ test('installed plugin setup enables scoped tools and reports capability changes
   assert.ok(h.ctx.registeredTools.has('computer_act'))
   const state = await h.call('state', { since: h.rt.state.revision })
   assert.equal(state.value.unchanged, true)
-  assert.equal(state.value.computer, true)
+  assert.equal(state.value.desktop, true)
   assert.equal(state.value.computerPreparing, false)
 })
 
