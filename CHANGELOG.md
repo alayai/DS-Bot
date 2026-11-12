@@ -4,6 +4,12 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-11
+
+### Changed
+
+- Package the current tree, with mainline 0.3.2 merged into the local BotHub and desktop work, as the next installable plugin.
+
 ## [0.3.2] - 2026-11-09
 
 ### Added

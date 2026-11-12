@@ -1,7 +1,8 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
-import { ArrowUpIcon, CloseIcon, ArrowDownIcon, GoalIcon, MemoryIcon } from './icons.js'
+import { ArrowUpIcon, CloseIcon, ArrowDownIcon, GoalIcon, MemoryIcon, RightSidebarIcon } from './icons.js'
+import { RIGHTBAR_ATTRIBUTES, rightColumnOpen } from './right-panel.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { AgentBadge } from './agent-badge.js'
 import { ActivityIndicator } from './activity-row.js'
@@ -43,6 +44,20 @@ function MemoryNotice({ shown }) {
   useLayoutEffect(() => { if (shown) setWidth(inner.current?.scrollWidth ?? 0) }, [label, shown])
   return h('span', { className: 'bt-pill-mem', 'aria-hidden': true, style: { '--bt-mem-w': `${width}px` } },
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
+}
+
+// Whether DSH's right column is on screen. The frame marks that on the document.
+function useRightSidebarOpen() {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const sync = () => setOpen(rightColumnOpen(document))
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: RIGHTBAR_ATTRIBUTES })
+    return () => observer.disconnect()
+  }, [])
+  return open
 }
 
 export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
@@ -110,6 +125,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     else delete document.body.dataset.btRoom
     return () => { delete document.body.dataset.btRoom }
   }, [Boolean(room)])
+  const rightOpen = useRightSidebarOpen()
   const memoryNotice = !away && notice && changed !== null && roster.memory !== false
   const showGoal = room !== undefined && !away && (goal !== undefined || goalCompose)
   // The goal island pads the transcript so its pod does not cover the first message.
@@ -134,11 +150,22 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     goalShown && view?.number !== undefined ? h('span', { className: 'bt-pill-count' }, `${view.number}/${view.count}`) : null,
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow)))
+  // DSH puts this switch in the session header the pill replaces. The main
+  // view keeps only it, not the rest of that sidebar's button group.
+  const sideLabel = t(rightOpen ? 'Collapse sidebar' : 'Expand sidebar')
+  const sideKeys = actions.rightSidebarKeys?.() ?? {}
   return h('div', { className: 'bt-head' },
     showGoal ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }))
+    h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }),
+    actions.hasRightSidebar?.() ? h('button', {
+      type: 'button', className: 'bt-icon-btn bt-head-side', 'data-bt-right-sidebar': '',
+      'aria-label': sideLabel, 'aria-pressed': rightOpen,
+      'aria-keyshortcuts': sideKeys.aria || undefined,
+      title: sideKeys.label ? `${sideLabel} ${sideKeys.label}` : sideLabel,
+      onClick: () => actions.toggleRightSidebar(),
+    }, h(RightSidebarIcon)) : null)
 }
 
 // New-message pills. "N new messages ↓" takes Back to bottom's place when

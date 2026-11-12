@@ -10,6 +10,11 @@ export function SidebarIcon() {
   return h('svg', { width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true },
     h('rect', { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }), h('path', { d: 'M8 4v12' }))
 }
+// The right-hand panel of the same frame: DSH's collapse control for its right sidebar.
+export function RightSidebarIcon() {
+  return h('svg', { width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true },
+    h('rect', { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }), h('path', { d: 'M12 4v12' }))
+}
 export function PeopleIcon() {
   return h('svg', { width: 14, height: 14, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', 'aria-hidden': true },
     h('circle', { cx: 7.5, cy: 7, r: 3 }), h('path', { d: 'M2 16.5c.6-2.8 2.8-4.5 5.5-4.5s4.9 1.7 5.5 4.5' }),

@@ -12,6 +12,7 @@
 import { appendFileSync } from 'node:fs'
 const exitAfterTurn = process.argv.includes('--exit-after-turn')
 const textOnly = process.argv.includes('--text-only')
+const pagedModels = process.argv.includes('--paged-models')
 const recordAt = process.argv.indexOf('--record')
 const recordPath = recordAt === -1 ? undefined : process.argv[recordAt + 1]
 const record = (method, params) => {
@@ -93,6 +94,16 @@ process.stdin.on('data', (chunk) => {
       case 'initialize': reply(id, { userAgent: 'fake-codex' }); break
       case 'initialized': break
       case 'model/list':
+        if (pagedModels) {
+          record('model/list', params)
+          if (params.cursor === undefined) reply(id, { data: [{ id: 'old', model: 'old', displayName: 'Old' }], nextCursor: 'next' })
+          else if (params.cursor === 'next') reply(id, { data: [{
+            id: 'sol-picker', model: 'gpt-6.1-sol', displayName: '6.1 Sol',
+            supportedReasoningEfforts: [{ reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }],
+          }], nextCursor: null })
+          else fail(id, 'invalid cursor')
+          break
+        }
         reply(id, {
           data: [{
             id: 'gpt-5.1-codex',

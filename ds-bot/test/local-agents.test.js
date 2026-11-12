@@ -297,6 +297,20 @@ test('probeModels reports the probe session\'s model options plus CLI default', 
   assert.equal(models[0].name, 'CLI default')
 })
 
+test('codex model pages retain current models, display names and the actual execution ID', async (t) => {
+  const record = join(mkdtempSync(join(tmpdir(), 'dsb-codex-models-')), 'params.jsonl')
+  const adapter = makeAdapter({ codexArgs: ['--paged-models', '--record', record] })
+  t.after(() => adapter.dispose())
+  const models = await adapter.probeModels('local-codex-cli')
+  assert.deepEqual(models.map(model => model.id), ['default', 'old', 'gpt-6.1-sol'])
+  assert.equal(models.at(-1).name, '6.1 Sol')
+  assert.deepEqual(models.at(-1).reasoning.efforts.map(effort => effort.id), ['high', 'xhigh'])
+  await collect(adapter.stream(options('s1', [user('m1', 'hello')], { provider: 'local-codex-cli', model: models.at(-1).id })))
+  const calls = readFileSync(record, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(calls.filter(call => call.method === 'model/list').map(call => call.params), [{}, { cursor: 'next' }])
+  assert.equal(calls.find(call => call.method === 'thread/start').params.model, 'gpt-6.1-sol')
+})
+
 test('codex app-server: thread per session, models from model/list', async (t) => {
   const adapter = makeAdapter()
   t.after(() => adapter.dispose())

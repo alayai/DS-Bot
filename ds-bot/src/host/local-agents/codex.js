@@ -178,10 +178,20 @@ export class CodexEngine {
 
   async listModels() {
     const peer = await this.ensure()
-    const reply = await peer.request('model/list', {}, { timeout: 30_000 })
-    return (reply?.data ?? reply?.models ?? []).map((entry) => {
+    const entries = [], cursors = new Set()
+    let cursor
+    do {
+      const reply = await peer.request('model/list', cursor === undefined ? {} : { cursor }, { timeout: 30_000 })
+      entries.push(...(reply?.data ?? reply?.models ?? []))
+      cursor = reply?.nextCursor
+      if (cursor != null) {
+        if (typeof cursor !== 'string' || cursors.has(cursor)) throw new Error('Invalid Codex model cursor')
+        cursors.add(cursor)
+      }
+    } while (cursor != null)
+    return [...new Map(entries.map(entry => [entry.model ?? entry.id, entry])).values()].map((entry) => {
       const model = {
-        id: String(entry.id ?? entry.model),
+        id: String(entry.model ?? entry.id),
         name: String(entry.displayName ?? entry.name ?? entry.id ?? entry.model),
       }
       // The app-server advertises the levels each model takes. Its default is

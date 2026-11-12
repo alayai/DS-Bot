@@ -897,6 +897,28 @@ export function apply(ctx) {
       actions.reportError(new Error(t('Couldn’t steer the queued messages. Try again.')), 'steer-queue')
     }
   }
+  // The session header this surface replaces is where DSH keeps the button
+  // that collapses its right sidebar. The main view keeps that one control.
+  actions.hasRightSidebar = () => ctx.get('sidebarRight') !== undefined
+  actions.toggleRightSidebar = () => {
+    try {
+      ctx.get('sidebarRight')?.toggleExpanded()
+    } catch (error) {
+      actions.reportError(error, 'right-sidebar')
+    }
+  }
+  actions.rightSidebarKeys = () => {
+    try {
+      const catalog = ctx.get('shortcuts')?.catalog?.getSnapshot?.()
+      const row = Array.isArray(catalog) ? catalog.find(entry => entry.id === 'sidebar.right.toggle') : undefined
+      return {
+        label: Array.isArray(row?.keys) ? row.keys.join(' ') : '',
+        aria: typeof row?.aria === 'string' ? row.aria : '',
+      }
+    } catch {
+      return { label: '', aria: '' }
+    }
+  }
   // A terminal tab in DSH's right column, only where the terminal plugin
   // registered its type and the column face is there.
   actions.canOpenTerminal = () => ctx.get('sidebarRight') !== undefined && ctx.get('sidebarRightTabs')?.get('terminal') !== undefined

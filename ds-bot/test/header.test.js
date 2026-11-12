@@ -51,11 +51,18 @@ const sideButton = (node) => {
   return null
 }
 
-// 公开#456: the Bot header carries no right-sidebar toggle — the drawer and the
-// column never share the window, and the way in sits in the drawer instead.
-test('the Bot header has no right sidebar button', () => {
-  assert.equal(sideButton(header({ hasRightSidebar: () => true, toggleRightSidebar: () => {} })), null)
+// The Bot header replaces DSH's session header, and with it the corner seat
+// where DSH puts the button that collapses its right sidebar. The main view
+// keeps that one control, not the rest of the sidebar's button group.
+test('the Bot header keeps only the right sidebar toggle', () => {
+  let toggled = 0
+  const button = sideButton(header({ hasRightSidebar: () => true, toggleRightSidebar: () => { toggled += 1 } }))
+  assert.ok(button)
+  assert.equal(button.props['aria-label'], 'Expand sidebar')
+  button.props.onClick()
+  assert.equal(toggled, 1)
   assert.equal(sideButton(header({})), null)
+  assert.equal(sideButton(header({ hasRightSidebar: () => false, toggleRightSidebar: () => {} })), null)
 })
 
 test('a Bot in another Conversation View can return to chat without changing its draft', () => {

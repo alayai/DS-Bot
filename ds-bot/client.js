@@ -21198,6 +21198,8 @@ html[data-bt-collapsing] [class*="_frame"]:has(>[class*="_sidebarCol"]){transiti
 .bt-side-foot{display:flex;padding-top:8px}
 
 .bt-head{position:relative;display:flex;justify-content:center;align-items:center;height:40px;flex:none;pointer-events:none}
+.bt-head-side{position:absolute;right:12px;top:6px;width:28px;height:28px;border-radius:6px;pointer-events:auto;color:var(--bt-ink-2)}
+.bt-head-side:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .bt-pill{pointer-events:auto;display:inline-flex;align-items:center;gap:8px;height:40px;padding:7.5px 13.5px 7.5px 7.5px;border-radius:999px;background:var(--bt-glass-bg);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border:.5px solid var(--bt-glass-rim);box-shadow:var(--bt-glass-shadow);color:var(--bt-ink);font-family:inherit;font-size:14px;line-height:20px;cursor:pointer;max-width:70%;box-sizing:border-box;transition:background-color .12s ease,transform ${SPRING_TAP.duration}ms ${SPRING_TAP.easing}}
 .bt-pill:hover{background:color-mix(in srgb,var(--bt-main),#777 9%)}
 .bt-pill:active{transform:scale(.965)}
@@ -22625,6 +22627,14 @@ function SidebarIcon() {
     { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true },
     (0, import_react3.createElement)("rect", { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }),
     (0, import_react3.createElement)("path", { d: "M8 4v12" })
+  );
+}
+function RightSidebarIcon() {
+  return (0, import_react3.createElement)(
+    "svg",
+    { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, "aria-hidden": true },
+    (0, import_react3.createElement)("rect", { x: 3, y: 4, width: 14, height: 12, rx: 2.5 }),
+    (0, import_react3.createElement)("path", { d: "M12 4v12" })
   );
 }
 function PeopleIcon() {
@@ -40671,6 +40681,35 @@ var SETTINGS_SHELL_CSS = `
 .bt-release-line.bt-release-done{border-top-style:solid;color:var(--bt-green);opacity:1}
 `;
 
+// src/client/right-panel.js
+var RIGHTBAR_ATTRIBUTES = ["data-rightbar-collapsed", "data-rightbar-fullscreen"];
+function rightColumnOpen(doc) {
+  if (doc.querySelector("[data-rightbar-fullscreen]")) return true;
+  if (doc.querySelector("[data-rightbar-collapsed]")) return false;
+  return doc.querySelector("[data-rightbar-col]") !== null;
+}
+function drawerOpened(columnOpen) {
+  return columnOpen ? "collapse-column" : null;
+}
+function columnOpened(drawerOpen, moved) {
+  if (!drawerOpen) return null;
+  return moved ? "collapse-column" : "close-drawer";
+}
+function createSwitchWindow(settle) {
+  let token = null;
+  return {
+    moved() {
+      const self = token = {};
+      settle(() => {
+        if (token === self) token = null;
+      });
+    },
+    get pending() {
+      return token !== null;
+    }
+  };
+}
+
 // src/client/header.js
 var import_react49 = require("react");
 var import_react_dom8 = require("react-dom");
@@ -40701,6 +40740,18 @@ function MemoryNotice({ shown }) {
     { className: "bt-pill-mem", "aria-hidden": true, style: { "--bt-mem-w": `${width}px` } },
     (0, import_react49.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react49.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react49.createElement)(MemoryIcon)), label)
   );
+}
+function useRightSidebarOpen() {
+  const [open, setOpen] = (0, import_react49.useState)(false);
+  (0, import_react49.useEffect)(() => {
+    if (typeof document === "undefined") return void 0;
+    const sync = () => setOpen(rightColumnOpen(document));
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: RIGHTBAR_ATTRIBUTES });
+    return () => observer.disconnect();
+  }, []);
+  return open;
 }
 function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useStore, useConversationViews, selectView, actions }) {
   const roster = useRoster((value) => value);
@@ -40757,6 +40808,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       delete document.body.dataset.btRoom;
     };
   }, [Boolean(room2)]);
+  const rightOpen = useRightSidebarOpen();
   const memoryNotice = !away && notice && changed !== null && roster.memory !== false;
   const showGoal = room2 !== void 0 && !away && (goal !== void 0 || goalCompose);
   (0, import_react49.useEffect)(() => {
@@ -40788,13 +40840,25 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     (0, import_react49.createElement)(MemoryNotice, { shown: memoryNotice }),
     (0, import_react49.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react49.createElement)(GoArrow))
   );
+  const sideLabel = t(rightOpen ? "Collapse sidebar" : "Expand sidebar");
+  const sideKeys = actions.rightSidebarKeys?.() ?? {};
   return (0, import_react49.createElement)(
     "div",
     { className: "bt-head" },
     showGoal ? (0, import_react49.createElement)(GoalIsland, { room: room2, goal, view, open: goalOpen, composing: goalCompose, roomWork, roster, actions, pill }) : pill,
     (0, import_react49.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
     (0, import_react49.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
-    (0, import_react49.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions })
+    (0, import_react49.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, useWork, actions }),
+    actions.hasRightSidebar?.() ? (0, import_react49.createElement)("button", {
+      type: "button",
+      className: "bt-icon-btn bt-head-side",
+      "data-bt-right-sidebar": "",
+      "aria-label": sideLabel,
+      "aria-pressed": rightOpen,
+      "aria-keyshortcuts": sideKeys.aria || void 0,
+      title: sideKeys.label ? `${sideLabel} ${sideKeys.label}` : sideLabel,
+      onClick: () => actions.toggleRightSidebar()
+    }, (0, import_react49.createElement)(RightSidebarIcon)) : null
   );
 }
 function useTranscriptView() {
@@ -49504,35 +49568,6 @@ var LEARNING_CSS = `
 .bt-learning-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 `;
 
-// src/client/right-panel.js
-var RIGHTBAR_ATTRIBUTES = ["data-rightbar-collapsed", "data-rightbar-fullscreen"];
-function rightColumnOpen(doc) {
-  if (doc.querySelector("[data-rightbar-fullscreen]")) return true;
-  if (doc.querySelector("[data-rightbar-collapsed]")) return false;
-  return doc.querySelector("[data-rightbar-col]") !== null;
-}
-function drawerOpened(columnOpen) {
-  return columnOpen ? "collapse-column" : null;
-}
-function columnOpened(drawerOpen, moved) {
-  if (!drawerOpen) return null;
-  return moved ? "collapse-column" : "close-drawer";
-}
-function createSwitchWindow(settle) {
-  let token = null;
-  return {
-    moved() {
-      const self = token = {};
-      settle(() => {
-        if (token === self) token = null;
-      });
-    },
-    get pending() {
-      return token !== null;
-    }
-  };
-}
-
 // src/client/queue-dock.js
 var import_react71 = require("react");
 var OWN_QUEUE_KINDS = /* @__PURE__ */ new Set(["user", "schedule", "user-question-reply"]);
@@ -50649,6 +50684,26 @@ function apply(ctx) {
     if (session === void 0) return;
     if (await steerQueued(session) === "failed") {
       actions.reportError(new Error(t("Couldn’t steer the queued messages. Try again.")), "steer-queue");
+    }
+  };
+  actions.hasRightSidebar = () => ctx.get("sidebarRight") !== void 0;
+  actions.toggleRightSidebar = () => {
+    try {
+      ctx.get("sidebarRight")?.toggleExpanded();
+    } catch (error) {
+      actions.reportError(error, "right-sidebar");
+    }
+  };
+  actions.rightSidebarKeys = () => {
+    try {
+      const catalog = ctx.get("shortcuts")?.catalog?.getSnapshot?.();
+      const row = Array.isArray(catalog) ? catalog.find((entry) => entry.id === "sidebar.right.toggle") : void 0;
+      return {
+        label: Array.isArray(row?.keys) ? row.keys.join(" ") : "",
+        aria: typeof row?.aria === "string" ? row.aria : ""
+      };
+    } catch {
+      return { label: "", aria: "" };
     }
   };
   actions.canOpenTerminal = () => ctx.get("sidebarRight") !== void 0 && ctx.get("sidebarRightTabs")?.get("terminal") !== void 0;

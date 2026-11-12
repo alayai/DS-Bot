@@ -33,7 +33,10 @@ function start({ summarize = true, outlet = false, stream } = {}) {
   const bench = { regions: [], nows: [], summarised: 0, checkpoints: [] }
   const compaction = {
     async compactIfNeeded() { return null },
-    async compactNow(target, signal, commandId) { bench.nows.push([target?.session?.id, commandId]) },
+    async compactNow(target, signal, commandId) {
+      bench.nows.push([target?.session?.id, commandId])
+      if (outlet) bench.checkpoints.push(await this.summarize({ messages: [] }, target, signal))
+    },
     // `outlet` is compaction-basic's own shape: the range is condensed through the
     // engine's summarize, which is the hook DS Bot wraps.
     async compactRegion(start, end, agent, signal) {
@@ -112,15 +115,12 @@ test('without a summary hook of its own a Bot conversation is still refused', as
   assert.deepEqual(bench.regions, [])
 })
 
-test('an explicit /compact on a Bot conversation is still refused', async (t) => {
+test('an explicit /compact on a Bot conversation condenses it instead of refusing', async (t) => {
   const { bench, compaction, adoptFor, agentOf, stop } = start()
   t.after(stop)
   adoptFor('b2')
-  await assert.rejects(
-    () => compaction.compactNow(agentOf('b2'), new AbortController().signal, 'command-1'),
-    /A Bot conversation makes room on its own/,
-  )
-  assert.deepEqual(bench.nows, [])
+  await compaction.compactNow(agentOf('b2'), new AbortController().signal, 'command-1')
+  assert.deepEqual(bench.nows, [['b2', 'command-1']])
 })
 
 test('a checkpoint the route cannot write does not fail the switch', async (t) => {

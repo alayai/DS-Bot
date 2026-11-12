@@ -5,6 +5,7 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join, win32 } from 'node:path'
+import { newestCodex } from './codex-executable.js'
 
 // The CLI signs in by itself; an API key or another agent's backend variable in
 // our environment would shadow that or leak, so neither reaches the child.
@@ -37,7 +38,8 @@ const outputOf = (file, args) => new Promise((resolve) => {
 
 // macOS/Linux apps launched from a dock icon inherit a sparse PATH; the login
 // shell knows where the user actually installed things, and so does npm's global
-// prefix. Both are looked up in the background and kept for a minute.
+// prefix. Windows also checks the installed Codex Desktop CLI. These lookups run
+// in the background and are kept for a minute.
 let found = { at: 0, dirs: [] }
 let looking
 export function refreshSearchDirs() {
@@ -48,10 +50,17 @@ export function refreshSearchDirs() {
     // `npm bin -g` is gone since npm 9; the prefix holds the bin folder. Node starts
     // no `.cmd` without a shell, and npm's Windows prefix is fixed, so it is not asked.
     windows ? undefined : outputOf('npm', ['prefix', '-g']),
-  ]).then(([loginPath, prefix]) => {
+    windows ? outputOf('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "Get-AppxPackage -Name OpenAI.Codex | ForEach-Object { $cli = Join-Path $_.InstallLocation 'app/resources/codex.exe'; if (Test-Path -LiteralPath $cli -PathType Leaf) { $cli } }"]) : undefined,
+  ]).then(async ([loginPath, prefix, desktop]) => {
     const npmBin = windows ? (process.env.APPDATA ? join(process.env.APPDATA, 'npm') : undefined)
       : prefix?.trim() ? join(prefix.trim(), 'bin') : undefined
-    found = { at: Date.now(), dirs: [...(loginPath ?? '').split(delimiter).filter(Boolean), ...(npmBin ? [npmBin] : [])] }
+    found = { at: 0, dirs: [...(loginPath ?? '').split(delimiter).filter(Boolean), ...(npmBin ? [npmBin] : [])] }
+    if (windows && desktop?.trim()) {
+      found.codex = await newestCodex(findExecutable('codex'), desktop.trim().split(/\r?\n/u).map(path => path.trim()).filter(Boolean),
+        path => probeVersion(path, ['--version'], cleanEnv()))
+    }
+    found.at = Date.now()
   }).finally(() => { looking = undefined })
   return looking
 }
@@ -83,6 +92,7 @@ export function findExecutable(name) {
     const path = name.startsWith('~') ? join(homedir(), name.slice(1)) : name
     return existsSync(path) ? path : undefined
   }
+  if (name === 'codex' && found.codex !== undefined && existsSync(found.codex)) return found.codex
   for (const dir of searchDirs()) {
     for (const file of candidates(name)) {
       const path = join(dir, file)
