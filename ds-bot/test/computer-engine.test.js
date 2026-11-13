@@ -12,7 +12,8 @@ test('cancelling an image build terminates its child process and closes inherite
   t.after(async () => {
     process.chdir(previous)
     if (descendant) { try { process.kill(descendant, 'SIGKILL') } catch {} }
-    await rm(home, { recursive: true, force: true })
+    // Windows may retain the terminated process's working-directory handle briefly.
+    await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   })
   await writeFile(join(home, 'build'), `
 const { spawn } = require('node:child_process')

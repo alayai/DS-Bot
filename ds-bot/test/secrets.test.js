@@ -334,15 +334,17 @@ test('tool results and model requests lose the values', async (t) => {
   const plain = { isError: false, value: 'nothing here' }
   assert.equal(await execute({}, async () => plain), plain)
 
-  // The usage meter registers after the secrets listener.
-  const stream = bench.listeners['llm/stream'].at(-2)
+  // Stream wrappers may defer next() until consumption; exercise the whole chain.
+  const stream = (options, next) => bench.listeners['llm/stream'].reduceRight(
+    (rest, listener) => () => listener(options, rest), next,
+  )()
   const passed = []
   const next = () => { passed.push(true); return (async function* () {})() }
   const options = {
     provider: 'p', model: 'm', sessionId: 'b2', system: `sys ${value}`,
     messages: [{ role: 'user', content: [{ type: 'text', text: `my key is ${value}` }] }, { role: 'tool', content: [{ type: 'text', text: value }] }],
   }
-  stream(options, next)
+  await Array.fromAsync(stream(options, next))
   assert.equal(passed.length, 0)
   const sent = bench.streamed.at(-1)
   assert.equal(sent.system, 'sys [secret:DEMO_TOKEN]')
@@ -350,9 +352,9 @@ test('tool results and model requests lose the values', async (t) => {
   assert.ok(!JSON.stringify(sent).includes(value))
   assert.ok(JSON.stringify(options).includes(value))
   // The rewritten request passes through, even when a value sits inside its own label.
-  stream(sent, next)
+  await Array.fromAsync(stream(sent, next))
   assert.equal(passed.length, 1)
-  stream({ ...options, system: 'clean', messages: [] }, next)
+  await Array.fromAsync(stream({ ...options, system: 'clean', messages: [] }, next))
   assert.equal(passed.length, 2)
 })
 

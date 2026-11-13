@@ -11,6 +11,7 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import LlmRuntime, { LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { LocalAttachmentStore } from '@deepseek-ai/dsh-attachment-local'
 import { install } from '../src/host/computer.js'
 import { createFakeComputer } from '../src/host/computer/providers/fake.js'
@@ -19,7 +20,7 @@ test('real DSH agent loop sends a Computer screenshot to its next model request 
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-computer-loop-'))
   const ctx = new Context()
   t.after(async () => { await ctx.fiber.dispose(); await rm(home, { recursive: true, force: true }) })
-  for (const plugin of [SessionStore, SessionProjectionRegistry, AgentRegistry, LlmRuntime, SystemPrompt, ToolRuntime]) await ctx.plugin(plugin)
+  for (const plugin of [SessionStore, SessionProjectionRegistry, AgentRegistry, LlmRuntime, SystemPrompt, ToolRuntime, NativeToolExecutor]) await ctx.plugin(plugin)
   const attachments = new LocalAttachmentStore(ctx, { dshHome: home })
   const requests = []
   class Mock extends LlmAdapter {
@@ -96,7 +97,7 @@ test('real DSH agent loop sends a Computer screenshot to its next model request 
 test('real DSH loop claims queued desktop work and records explicit completion without replay', { timeout: 20000 }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-task-loop-')), ctx = new Context()
   t.after(async () => { await ctx.fiber.dispose(); await rm(home, { recursive: true, force: true }) })
-  for (const plugin of [SessionStore, SessionProjectionRegistry, AgentRegistry, LlmRuntime, SystemPrompt, ToolRuntime]) await ctx.plugin(plugin)
+  for (const plugin of [SessionStore, SessionProjectionRegistry, AgentRegistry, LlmRuntime, SystemPrompt, ToolRuntime, NativeToolExecutor]) await ctx.plugin(plugin)
   new LocalAttachmentStore(ctx, { dshHome: home })
   let taskId, requests = 0, trigger
   class TaskModel extends LlmAdapter {

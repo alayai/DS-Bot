@@ -377,6 +377,7 @@ export class StartWindow {
     win.setContentBounds(rect)
     if (material === 'vibrancy') keepVibrancy(win, () => this.#colors().main)
     this.#window = win
+    this.#armWatchdog()
     this.#url = startUrl(this.#o.page, start)
     const contents = win.webContents
     // The window shows once its page says it has drawn its first frame (the 'painted' act), so it
@@ -971,6 +972,8 @@ export class StartWindow {
 
   #later(name, ms, run) {
     this.#clear(name)
+    // A dialog can settle after the window closed and cleared its timers.
+    if (!this.#open()) return
     this.#timers[name] = setTimeout(() => {
       delete this.#timers[name]
       run()

@@ -193,7 +193,7 @@ test('native Windows Broker uses the bundled host path and keeps the selected en
 test('the shipped plugin resolves and validates its own runtime without an app launcher', async () => {
   const payload = await loadSetupRuntime()
   assert.match(payload.recipe, /^[a-f0-9]{64}$/)
-  assert.ok(payload.broker(engine, image).entrypoint.endsWith('computer-runtime/broker/main.mjs'))
+  assert.ok(payload.broker(engine, image).entrypoint.endsWith(join('computer-runtime', 'broker', 'main.mjs')))
 })
 
 

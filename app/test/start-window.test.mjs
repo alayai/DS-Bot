@@ -688,6 +688,25 @@ test('closing the start window before the hand-off quits, and its timers go with
   assert.equal(s.start.owner(), undefined)
 })
 
+for (const reject of [false, true]) test(`a dialog ${reject ? 'rejection' : 'answer'} after closing cannot rearm the start timers`, async (t) => {
+  const s = startWindow(t)
+  s.start.open('first')
+  let settle
+  const asked = s.start.asking(new Promise((resolve, fail) => { settle = reject ? () => fail(new Error('Dialog closed')) : resolve }))
+  const result = reject ? assert.rejects(asked, /Dialog closed/) : asked
+  const win = s.win()
+  win.destroy()
+  const schedule = t.mock.method(globalThis, 'setTimeout')
+  const sent = win.webContents.sent.length
+  settle()
+  await result
+  assert.equal(schedule.mock.callCount(), 0)
+  s.tick(WATCHDOG_MS + TEAM_VIEW_MS)
+  assert.equal(win.webContents.sent.length, sent)
+  assert.equal(s.calls.close, 1)
+  assert.equal(s.start.owner(), undefined)
+})
+
 test('the whale lands on the avatar the team view reported, in the start page\'s own coordinates', () => {
   const team = { x: 300, y: 90, width: 1280, height: 860 }
   const avatar = { x: 98, y: 70, width: 60, height: 60, viewportWidth: 1280, viewportHeight: 860 }

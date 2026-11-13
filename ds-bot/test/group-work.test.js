@@ -1521,8 +1521,13 @@ test('parallel batch barrier posts each late reply at once and wakes the caller 
   await settle(() => host.agentOf('gb').calls.length === 1 && host.agentOf('gc').calls.length === 1)
   host.begin('gb')
   host.begin('gc')
+  const waiters = [...rt.roomWaiters.values()].filter(waiter => ['gb', 'gc'].includes(waiter.sessionId))
+  assert.equal(waiters.length, 2)
+  const working = waiters.map(waiter => t.mock.method(waiter, 'work'))
   host.emit('gb', 'tool/call', { callId: 'k1', name: 'read', arguments: '{}' })
   host.emit('gc', 'tool/call', { callId: 'k2', name: 'pwsh', arguments: '{}' })
+  // Tool events can cross async hooks; advance grace only after both work timers exist.
+  await settle(() => working.every(work => work.mock.callCount() > 0))
   t.mock.timers.tick(ROOM_WORK_GRACE_MS)
   await settle(() => first() !== undefined)
   assert.deepEqual(kinds(first()), [['message', 'Chief'], ['working', 'Writer'], ['working', 'Tester']])

@@ -13,7 +13,7 @@ test('standalone runtime bundle verifies its inventory and refuses overwrites or
   const output = join(dir, 'runtime')
   await bundleRuntime(output)
   assert.equal((await verifyBundle(output)).verified, true)
-  assert.ok(verifyComputerRuntime(output).entrypoint.endsWith('broker/main.mjs'))
+  assert.equal(verifyComputerRuntime(output).entrypoint, join(output, 'broker', 'main.mjs'))
   await assert.rejects(bundleRuntime(output), { code: 'EEXIST' })
   await writeFile(join(output, 'broker/files.py'), 'tampered')
   await assert.rejects(verifyBundle(output), /integrity/)

@@ -186,7 +186,10 @@ test('abort cancels the turn and the pending calls', async (t) => {
   assert.equal(out.finish.kind, 'aborted')
 })
 
-test('env sanitization drops agent and key variables', () => {
+test('env sanitization drops agent and key variables', (t) => {
+  const names = ['ACP_BACKEND', 'OPENAI_API_KEY', 'DS_BOT_HOME']
+  const saved = names.map(name => [name, process.env[name]])
+  t.after(() => { for (const [name, value] of saved) { if (value === undefined) delete process.env[name]; else process.env[name] = value } })
   process.env.ACP_BACKEND = 'windsurf'
   process.env.OPENAI_API_KEY = 'sk-test'
   process.env.DS_BOT_HOME = '/x'
@@ -195,7 +198,8 @@ test('env sanitization drops agent and key variables', () => {
   assert.equal(env.OPENAI_API_KEY, undefined)
   assert.equal(env.DS_BOT_HOME, undefined)
   assert.equal(env.EXTRA, '1')
-  assert.ok(env.PATH.startsWith(process.env.PATH))
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH')
+  assert.ok(env[pathKey].startsWith(process.env[pathKey]))
 })
 
 // A Dock-launched app has PATH=/usr/bin:/bin:…; a CLI found in ~/.local/bin or

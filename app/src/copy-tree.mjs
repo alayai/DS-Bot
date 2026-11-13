@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 // readdir, which still goes through Electron; plain Node has only fs.
 export const disk = process.getBuiltinModule('original-fs') ?? process.getBuiltinModule('node:fs')
 const { existsSync, realpathSync } = disk
-const { cp, lstat, readlink, realpath, stat, symlink } = disk.promises
+const { cp, lstat, readlink, realpath, stat } = disk.promises
 
 export const within = (inner, outer) => {
   const path = relative(resolve(outer), resolve(inner))
@@ -56,7 +56,7 @@ async function relink(source, path, roots, to) {
   const folder = (await stat(source).catch(() => undefined))?.isDirectory() === true
   const windows = process.platform === 'win32'
   const inside = root === undefined ? written : join(to, relative(root, target))
-  await symlink(direct && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
+  await disk.promises.symlink(direct && !isAbsolute(text) && !(windows && folder) ? text : inside, path, folder ? (windows ? 'junction' : 'dir') : 'file')
 }
 
 /**

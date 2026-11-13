@@ -3,11 +3,16 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { candidateBaseline } from './candidate-baseline.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const { version } = JSON.parse(await readFile(join(root, 'dsh-bothub/package.json'), 'utf8'))
 const destination = resolve(process.argv[2] ?? join(root, `artifacts/bothub-${version}`))
 if (!process.env.npm_execpath) throw new Error('Run with npm run candidate -- <new-output-directory>')
+const baseline = await candidateBaseline(root)
+for (const [directory, script] of [
+  ['ds-bot', 'build-client.mjs'], ['ds-bot', 'build-computer-runtime.mjs'], ['dsh-bothub', 'build-client.mjs'],
+]) execFileSync(process.execPath, [join(root, directory, 'scripts', script), '--check'], { stdio: 'inherit' })
 await mkdir(dirname(destination), { recursive: true })
 await mkdir(destination, { recursive: false })
 const packages = []
@@ -32,7 +37,7 @@ const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encodin
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, encoding: 'utf8' }).trim())
 await writeFile(join(destination, 'manifest.json'), JSON.stringify({
   candidate: 'BotHub MVP', createdAt: new Date().toISOString(), revision, dirty,
-  dsh: '0.2.1-rc.4', cordis: '4.0.5', packages,
+  ...baseline, packages,
   note: 'Local working-tree candidate. Install both archives; version alone does not identify the companion DS Bot build.',
 }, null, 2) + '\n')
 console.log(JSON.stringify({ destination, packages: packages.map(({ files, ...info }) => ({ ...info, fileCount: files.length })) }, null, 2))

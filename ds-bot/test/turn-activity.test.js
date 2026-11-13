@@ -4,16 +4,16 @@ import { install } from '../src/host/turns.js'
 import { monitorSnapshot } from '../src/host/monitor.js'
 
 function fixture() {
-  let onEvent
+  const listeners = new Map()
   const rt = {
-    ctx: { on: (_name, fn) => { onEvent = fn }, get: () => undefined },
+    ctx: { on: (name, fn) => { listeners.set(name, fn) }, get: () => undefined },
     state: { bots: { b: { id: 'b', name: 'Builder' } }, rooms: {}, mainBotIds: ['b'], questions: {}, exchangeTurns: {} },
     groupOwners: new Map(), chatOwners: new Map([['s', 'b']]),
     isBotSession: id => id === 's', roomOf: () => undefined, chatOf: () => 's',
     switchJobs: () => [], approvalsView: () => [], waitingView: () => ({}), readOnly: () => undefined,
   }
   install(rt)
-  const emit = (type, data) => onEvent({ id: 's' }, { type, data })
+  const emit = (type, data) => listeners.get('session/event')({ id: 's' }, { type, data })
   emit('turn/start', { turn: 1 })
   const call = (callId, name) => emit('tool/call', { turn: 1, step: 1, callId, name, arguments: '{}' })
   const result = (toolCallId, isError = false) => emit('tool/result', {

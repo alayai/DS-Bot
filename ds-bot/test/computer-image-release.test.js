@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, rm, copyFile } from 'node:fs/promises'
-import { devNull, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { recordCandidate, verifyCandidate, promoteCandidate } from '../scripts/computer-image-release.mjs'
 import { imageRecipe, checkPublishedImage } from '../../computer-runtime/runtime.mjs'
@@ -12,6 +12,8 @@ const reference = `ghcr.io/example/ds-bot/cua-desktop@sha256:${'b'.repeat(64)}`
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'cua-image-release-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
+  const gitConfig = join(directory, 'gitconfig')
+  await writeFile(gitConfig, '')
   const project = join(directory, 'source'), evidence = join(directory, 'evidence')
   await mkdir(evidence)
   for (const name of ['computer-runtime/desktop', 'ds-bot/dev', 'ds-bot/scripts', '.github/workflows']) await mkdir(join(project, name), { recursive: true })
@@ -22,7 +24,7 @@ async function fixture(t) {
     await writeFile(join(project, name), 'fixture')
   }
   const git = args => execFileSync('git', ['-C', project, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull } }).trim()
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gitConfig } }).trim()
   git(['init', '-q'])
   git(['add', '.'])
   // This isolated repository is test data, not a development commit.

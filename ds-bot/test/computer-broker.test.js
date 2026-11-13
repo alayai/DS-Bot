@@ -113,7 +113,7 @@ test('malformed MCP output cannot leave a pending request or a reusable input tr
   assert.equal(client.closed, true)
 })
 
-test('Broker IPC disconnection rejects pending requests and forbids automatic reconnection', { skip: process.platform !== 'linux' }, async t => {
+test('Broker IPC disconnection rejects pending requests and forbids automatic reconnection', { skip: !['linux', 'win32'].includes(process.platform) }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-broker-'))
   const entrypoint = join(home, 'fixture.mjs')
   await writeFile(entrypoint, `
@@ -122,7 +122,7 @@ process.on('message', message => {
   process.send({ id: message.id, ok: true, value: { phase: 'stopped' } })
 })
 `)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   assert.equal((await provider.inspect(target.record)).phase, 'stopped')
   await assert.rejects(provider.start(target.record), /disconnected/)
@@ -148,7 +148,7 @@ process.on('message', message => {
   process.send({id:message.id, ok:true, runtimeKey, value:message.method === 'health' ? {protocolVersion:1,runtimeKey} : {phase:'stopped'}})
 })
 `)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   await provider.inspect(target.record)
   await assert.rejects(provider.perform(target.record, {}), /disconnected/)
@@ -177,7 +177,7 @@ const runtimeKey = readFileSync(${JSON.stringify(identity)}, 'utf8')
 process.on('message', message => process.send({id:message.id, ok:true, runtimeKey,
 value:message.method === 'health' ? {protocolVersion:1,runtimeKey} : {phase:'stopped'}}))
 `)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   await provider.inspect(target.record)
   await writeFile(identity, 'b'.repeat(64))
@@ -192,7 +192,7 @@ test('a crashed Broker with unconfirmed lifecycle work cannot be replaced in pla
   const home = await mkdtemp(join(tmpdir(), 'ds-bot-broker-unsafe-'))
   const entrypoint = join(home, 'fixture.mjs')
   await writeFile(entrypoint, `process.on('message', () => process.exit(23))`)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   await assert.rejects(provider.start(target.record), /disconnected/)
   await assert.rejects(provider.reconnect(), error => error.code === 'bot/computer-recovery-unsafe')
@@ -245,7 +245,7 @@ process.on('message', message => {
   else if (message.type === 'write') setTimeout(() => process.send({ stream, type: 'written' }), 30)
 })
 `)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   const stream = await provider.openViewer(target.record)
   const chunks = []
@@ -283,7 +283,7 @@ process.on('message',m=>{
  process.send({id:m.id,ok:true,runtimeKey,value:m.method==='health'?{protocolVersion:1,runtimeKey}:m.method==='checkpoint'?{bytes:30}:{images}});
 });process.on('disconnect',()=>process.exit(0));
 `)
-  const provider = createBrokerProvider({ entrypoint, image })
+  const provider = createBrokerProvider({ entrypoint, image, native: true })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   await provider.registerImage(next)
   assert.deepEqual(provider.images, [image, next])
@@ -306,7 +306,7 @@ process.on('message',m=>{
  process.send({id:m.id,ok:true,runtimeKey,value});
 });process.on('disconnect',()=>process.exit(0));
 `)
-  const provider = createBrokerProvider({ entrypoint, image, images: [next] })
+  const provider = createBrokerProvider({ entrypoint, image, native: true, images: [next] })
   t.after(async () => { await provider.dispose(); await rm(home, { recursive: true, force: true }) })
   await provider.maintenance('remove', { id: next, kind: 'image', token: 'checked' })
   assert.deepEqual(provider.images, [image])

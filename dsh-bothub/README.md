@@ -199,13 +199,13 @@ scene editing and direct stop/approval controls remain outside this slice.
 
 ## Requirements and installation
 
-This preview targets the repository's DSH `0.2.1-rc.4` baseline and the **DS Bot
+This preview targets the repository's DSH `0.2.2-rc.1` baseline and the **DS Bot
 checkout containing `src/host/monitor.js`**. An older published DS Bot will show
 the bridge-unavailable message. Quick messages also require the companion
 `src/host/monitor-commands.js` implementation; update **both plugins** for this
 slice. It does not patch DSH.
 
-1. Build this directory with Node.js 22.19+:
+1. Build this directory with Node.js 24.9+ (the pinned DSH engine requirement):
 
    ```sh
    npm ci
@@ -240,24 +240,19 @@ CDN requests are used.
 
 ## Isolated development bench
 
-Use native Node and pnpm for your OS; do not mix Windows package links with a
-Linux DSH process. The helper uses the public installed `dsh` CLI and the
-repository's scripted mock model:
+Use native Node 24.9+ for your OS. The foreground helper creates a fresh profile,
+uses strict peer resolution, and owns every child process; it never mixes Windows
+package links with a Linux DSH process:
 
 ```sh
 # From the repository root; choose unused ports.
-CONTEXT_WINDOW=100000 CHECK_RATIO=0.45 \
-  sh dsh-bothub/dev/bench.sh bothub-smoke 3196 8896 start
-
-# Existing host regression smoke:
-node ds-bot/dev/smoke.mjs bothub-smoke 3196
-
-# Always stop processes started by the bench.
-sh dsh-bothub/dev/bench.sh bothub-smoke 3196 8896 stop
+npm --prefix dsh-bothub run bench -- bothub-smoke 3196 8896 full
 ```
 
-The bench writes only to `.dsh-test-bothub-smoke/`. `DSH_CLI` may name another
-installed public CLI. It never uses the user's actual DSH profile.
+The bench writes only to `.dsh-test-bothub-smoke/` and always cleans its process
+tree in a `finally` block. Set `BENCH_BOT_PACKAGE` and `BENCH_HUB_PACKAGE` to
+absolute `.tgz` paths to test a candidate pair. It never uses the user's actual
+DSH profile. `probe` runs the host and BotHub checks without the longer DS Bot smoke.
 
 On WSL, the bench data must support owner-only file permissions. If your Windows
 mount reports every file as mode `777`, create a fresh directory on the Linux
@@ -336,7 +331,8 @@ for replay limits, reconnect behavior, verification and current coverage.
 
 ## Release candidate installation and rollback
 
-`0.1.0-rc.7` accepts DSH `0.2.1-rc.3` and `0.2.1-rc.4`, with Cordis `4.0.5`. Install the
+`0.1.0-rc.7` candidate is paired with DSH `0.2.2-rc.1`, Cordis `4.1.0`, and
+DSH Web `0.2.2-rc.1`. Install the
 companion DS Bot archive from the **same candidate directory** first, then the
 BotHub archive, through the host plugin manager's local bundle installation.
 The DS Bot archive identifies as `0.3.4`; its version alone cannot prove

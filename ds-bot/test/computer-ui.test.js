@@ -183,5 +183,6 @@ test('the computer settings page sits inside the scroll container', () => {
 test('the computer styles register in their own effect call', () => {
   const src = new URL('../src/client/index.js', import.meta.url)
   const code = String((process.getBuiltinModule('node:fs')).readFileSync(src))
-  assert.match(code, /ctx\.effect\(\(\) => installCompiledStyles\(COMPUTER_CSS, 'computer'\)/)
+  assert.match(code, /ctx\.effect\(\(\) => installCompiledStyles\(APP_COMPUTER_CSS, 'computer'\)/)
+  assert.match(code, /ctx\.effect\(\(\) => installCompiledStyles\(DESKTOP_COMPUTER_CSS, 'desktop'\)/)
 })

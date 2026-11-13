@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
+import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { createScope, bindScopeParent } from '@deepseek-ai/dsh-scope'
 import { LocalAttachmentStore } from '@deepseek-ai/dsh-attachment-local'
 import { createRuntime } from '../index.js'
@@ -121,6 +123,7 @@ test('DSH public guard denies direct and nested dispatch despite a later allow l
   t.after(() => ctx.fiber.dispose())
   ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {} })
   const tools = new ToolRuntime(ctx)
+  await ctx.plugin(NativeToolExecutor)
   let ran = 0
   tools.register(defineTool({
     name: 'probe_input', description: 'Test dispatch policy.', parameters: {},
@@ -129,22 +132,29 @@ test('DSH public guard denies direct and nested dispatch despite a later allow l
   }))
   tools.guard(exec => exec.name === 'probe_input' ? 'revoked' : undefined)
   ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }))
-  const invoke = extra => tools.execute({
-    name: 'probe_input', arguments: {}, callId: 'call', signal: new AbortController().signal, ...extra,
-  })
-  assert.equal((await invoke()).isError, true)
+  const invoke = async name => (await tools.execute({
+    calls: [{ type: 'tool-call', id: name, name, arguments: '{}' }], signal: new AbortController().signal,
+  })).results[0].result
+  const direct = await invoke('probe_input')
+  assert.equal(direct.isError, true)
+  assert.match(JSON.stringify(direct), /revoked/)
   // Use an execution token minted by the public executor, as the PTC bridge does.
   let nested
   tools.register(defineTool({
     name: 'probe_outer', description: 'Dispatch one nested call.', parameters: {},
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     execute: async (_args, exec) => {
-      nested = await invoke({ parent: exec.token, rootCallId: exec.callId })
+      const pipeline = new ToolExecutionPipeline(ctx)
+      const prepared = await pipeline.prepare({ name: 'probe_input', arguments: {}, callId: 'nested',
+        signal: exec.signal, parent: exec.token, rootCallId: exec.rootCallId })
+      const dispatched = prepared.kind === 'dispatch' ? await pipeline.dispatch(prepared.exec) : prepared
+      nested = await pipeline.complete(prepared.exec, dispatched)
       return 'settled'
     },
   }))
-  await tools.execute({ name: 'probe_outer', arguments: {}, callId: 'outer', signal: new AbortController().signal })
+  assert.equal((await invoke('probe_outer')).isError, false)
   assert.equal(nested.isError, true)
+  assert.match(JSON.stringify(nested), /revoked/)
   assert.equal(ran, 0)
 })
 
@@ -153,6 +163,7 @@ test('DSH scoped tools inherit into children but execution guards can deny the c
   t.after(() => ctx.fiber.dispose())
   ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {} })
   const tools = new ToolRuntime(ctx)
+  await ctx.plugin(NativeToolExecutor)
   const a = { id: 'a' }, b = { id: 'b' }, child = { id: 'child' }
   const scoped = createScope(ctx, a)
   bindScopeParent(child, a)
@@ -165,10 +176,12 @@ test('DSH scoped tools inherit into children but execution guards can deny the c
   assert.ok(tools.schemas(a).some(tool => tool.name === 'probe_desktop'))
   assert.ok(!tools.schemas(b).some(tool => tool.name === 'probe_desktop'))
   assert.ok(tools.schemas(child).some(tool => tool.name === 'probe_desktop'))
-  const result = await tools.execute({
-    name: 'probe_desktop', arguments: {}, callId: 'child-call', agent: child, signal: new AbortController().signal,
+  const batch = await tools.execute({
+    calls: [{ type: 'tool-call', id: 'child-call', name: 'probe_desktop', arguments: '{}' }], agent: child, signal: new AbortController().signal,
   })
+  const result = batch.results[0].result
   assert.equal(result.isError, true)
+  assert.match(JSON.stringify(result), /no child grant/)
 })
 
 test('real DSH attachment storage and tool rendering preserve image references and normalized dimensions', async t => {
@@ -184,13 +197,15 @@ test('real DSH attachment storage and tool rendering preserve image references a
   assert.equal(attachment.width, 32)
   assert.equal(attachment.height, 32)
   const tools = new ToolRuntime(ctx)
+  await ctx.plugin(NativeToolExecutor)
   tools.register(defineTool({
     name: 'probe_image', description: 'Test durable image output.', parameters: {},
     output: browserOutput, execute: async () => ({ text: 'frame', attachment }),
   }))
-  const result = await tools.execute({
-    name: 'probe_image', arguments: {}, callId: 'image-call', signal: new AbortController().signal,
+  const batch = await tools.execute({
+    calls: [{ type: 'tool-call', id: 'image-call', name: 'probe_image', arguments: '{}' }], signal: new AbortController().signal,
   })
+  const result = batch.results[0].result
   assert.equal(result.isError, false)
   assert.deepEqual(result.content.find(block => block.type === 'image')?.attachment, attachment)
   assert.ok(!JSON.stringify(result).includes('base64'))

@@ -30,12 +30,12 @@ test('Computer opens without the Electron browser bridge and follows only Bot co
 
 
 test('an installed but disabled Computer runtime keeps its discoverable setup entry', () => {
-  for (const computer of [true, false]) {
-    const canComputer = hasComputerEntry({ computer })
+  for (const desktop of [true, false]) {
+    const canComputer = hasComputerEntry({ desktop })
     assert.equal(canComputer, true)
     assert.equal(panelHasStrip(false, 0, 0, canComputer), true)
     assert.ok(drawerMenuKeys({ bot: true, canComputer }).includes('computer'))
     assert.equal(drawerMenuKeys({ bot: false, room: true, canComputer }).includes('computer'), false)
   }
-  for (const roster of [undefined, {}, { computer: null }, { computer: 'false' }]) assert.equal(hasComputerEntry(roster), false)
+  for (const roster of [undefined, {}, { desktop: null }, { desktop: 'false' }, { computer: true }]) assert.equal(hasComputerEntry(roster), false)
 })

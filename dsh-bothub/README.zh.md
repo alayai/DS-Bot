@@ -153,12 +153,12 @@ Home 重置当前视角；搜索框和选择器保留正常按键行为。实时
 
 ## 要求与安装
 
-本预览版以仓库的 DSH `0.2.1-rc.4` 为基线，需要安装**包含
+本预览版以仓库的 DSH `0.2.2-rc.1` 为基线，需要安装**包含
 `src/host/monitor.js` 的 DS Bot 工作区版本**。旧的已发布 DS Bot 会显示
 桥接不可用提示。快捷消息还需要配套的 `src/host/monitor-commands.js`，
 本切片应**同时更新两个插件**。插件不修改 DSH。
 
-1. 使用 Node.js 22.19+，在本目录构建：
+1. 使用 Node.js 24.9+（固定 DSH 的运行时要求），在本目录构建：
 
    ```sh
    npm ci
@@ -186,23 +186,18 @@ Home 重置当前视角；搜索框和选择器保留正常按键行为。实时
 
 ## 隔离开发测试台
 
-使用当前操作系统原生的 Node 和 pnpm，不要让 Linux DSH 进程使用 Windows
-创建的包链接。辅助脚本通过公开的已安装 `dsh` CLI 和仓库模拟模型启动：
+使用当前操作系统原生的 Node 24.9+。前台辅助脚本创建全新 profile，严格解析
+peer 依赖并拥有本次启动的全部子进程，不会让 Linux DSH 进程使用 Windows
+创建的包链接：
 
 ```sh
 # 在仓库根目录执行，选择未占用的端口。
-CONTEXT_WINDOW=100000 CHECK_RATIO=0.45 \
-  sh dsh-bothub/dev/bench.sh bothub-smoke 3196 8896 start
-
-# 现有 host 回归冒烟：
-node ds-bot/dev/smoke.mjs bothub-smoke 3196
-
-# 结束时停止测试台进程。
-sh dsh-bothub/dev/bench.sh bothub-smoke 3196 8896 stop
+npm --prefix dsh-bothub run bench -- bothub-smoke 3196 8896 full
 ```
 
-测试台仅写入 `.dsh-test-bothub-smoke/`。可用 `DSH_CLI` 指定其他已安装的
-公开 CLI，不使用用户真实 DSH profile。
+测试台仅写入 `.dsh-test-bothub-smoke/`，并在 finally 中清理本次进程树。
+设置 `BENCH_BOT_PACKAGE` 和 `BENCH_HUB_PACKAGE` 为绝对 `.tgz` 路径即可验证候选包；
+它不使用用户真实 DSH profile。`probe` 模式跳过较长的 DS Bot host smoke。
 
 在 WSL 中，测试数据目录必须支持仅所有者可读的文件权限。若 Windows 挂载盘
 将所有文件报告为 `777`，请在 Linux 文件系统建立新的测试目录，并在**首次
@@ -272,7 +267,7 @@ alpha.3 见 [活动状态设计与验收](../docs/plans/2026-11-07-dsh-bothub-ac
 
 ## 候选版安装、升级和回滚
 
-`0.1.0-rc.7` 可安装在 DSH `0.2.1-rc.3` 和 `0.2.1-rc.4` 上，Cordis 为 `4.0.5`。通过宿主插件管理器的
+`0.1.0-rc.7` 候选包配套 DSH `0.2.2-rc.1`、Cordis `4.1.0` 和 DSH Web `0.2.2-rc.1`。通过宿主插件管理器的
 本地 bundle 安装，先安装**同一候选目录**内的配套 DS Bot 包，再安装 BotHub 包。
 配套 DS Bot 包版本为 `0.3.4`，仅凭版本号不能确定桥接兼容性；请核对候选的
 SHA-256 清单。两包更新后重启宿主，每个 bundle 只启用一份。旧版公开 DS Bot 不够。
