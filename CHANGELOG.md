@@ -4,6 +4,16 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-12
+
+### Added
+
+- The chat header keeps the control that expands or collapses the host's right sidebar.
+
+### Fixed
+
+- On Windows, Codex model discovery uses the newer Codex Desktop CLI when it is newer than the CLI on PATH, and reads every page of `model/list` so current models appear.
+
 ## [0.3.3] - 2026-11-11
 
 ### Changed
