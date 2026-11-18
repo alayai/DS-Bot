@@ -131,6 +131,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'effect ds-bot: monitor question waits',
     'on user-questions/request (prepend)',
     'effect ds-bot: monitor bridge',
+    'effect ds-bot: loaded read-only settings',
   ])
 })
 

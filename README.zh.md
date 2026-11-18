@@ -159,3 +159,5 @@ bot 可以直接创建、检查和修改 Word（`.docx`）、PowerPoint（`.pptx
 ds bot 是独立的社区项目，**不是 DeepSeek 官方产品**，与 DeepSeek 没有隶属、认可或赞助关系。“DeepSeek”“DeepSeek Harness”等名称是各自所有者的商标，这里只用来说明本插件和什么一起用。
 
 bot 会消耗你自己的模型额度，也会按你的要求读写文件、运行命令。重要的操作请自己检查。
+
+DSH 云端可通过 `botReadOnly` v1 查看已加载的 Bot 配置只读摘要。查看不会刷新团队或启动本地执行，也不包含密钥、目录或记忆；发布及运行云端 Bot 仍需后续适配。
