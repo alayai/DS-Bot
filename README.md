@@ -167,4 +167,4 @@ DS Bot is an independent community project. **It is not an official DeepSeek pro
 
 Bots use your own model quota, and they read and write files and run commands when you ask them to. Check important actions yourself.
 
-DSH cloud can display read-only summaries of already loaded Bot settings through `botReadOnly` v1. Viewing them does not refresh the roster or start local execution; credentials, paths and memory are excluded. Cloud publication and Bot execution require a separate adapter.
+DSH cloud can display read-only summaries of already loaded Bot settings through `botReadOnly` v1. Viewing them does not refresh the roster or start local execution; credentials, paths and memory are excluded. Public Bots can now be explicitly exported through the separate `botExport` v1 provider. The export is a declarative definition only; private Bots are refused, and model credentials, paths, skills, connectors, memory, history and sessions are never included. Full cloud execution, skill migration and bidirectional synchronization remain follow-up work.

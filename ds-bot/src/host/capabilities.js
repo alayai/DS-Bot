@@ -464,7 +464,9 @@ export function install(rt) {
     }
     for (const sessionId of sessionIds) {
       try {
-        trackAgent(await rt.resolveAgent(sessionId))
+        // Discovery must not resume a cold chat: that would keep its exclusive
+        // Session writer in Desktop and prevent an ACP client from resuming it.
+        trackAgent(ctx.get('agents')?.get(sessionId))
       } catch (error) {
         rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, error)
       }

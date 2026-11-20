@@ -251,14 +251,14 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   const resolved = []
   const env = await setup({
     state,
-    beforeLoad: ({ rt, mounts, skills }) => {
+    beforeLoad: ({ ctx, rt, mounts, skills }) => {
       const existing = Object.fromEntries(['chief', 'room-chief', 'worker', 'helper'].map(id => [id, testAgent(id, mounts, skills)]))
       rt.chatOf = botId => botId
       rt.groupSessionsOf = botId => botId === 'chief' ? ['room-chief', 'room-chief'] : []
-      rt.resolveAgent = async sessionId => {
+      ctx.provide('agents', { get(sessionId) {
         if (Object.hasOwn(existing, sessionId)) resolved.push(sessionId)
         return existing[sessionId]
-      }
+      } })
     },
   })
   t.after(() => env.dispose())
@@ -272,6 +272,25 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   await env.rt.scheduleCapabilitiesReconcile()
   assert.deepEqual(resolved, ['chief', 'room-chief', 'worker', 'helper'])
   assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker', 'helper'])
+})
+
+test('capability startup leaves a cold Bot chat available to other writers', async t => {
+  const state = team()
+  state.rooms = {}
+  state.capabilities = { items: { echo: { ...mcp('echo'), approved: true, createdBy: 'chief', createdAt: 1, updatedAt: 1 } } }
+  state.bots.chief.capabilities = ['echo']
+  const activations = []
+  const env = await setup({ state, beforeLoad({ ctx, rt }) {
+    ctx.provide('agents', { get: () => undefined })
+    rt.resolveAgent = async id => { activations.push(id); throw Error('must remain cold') }
+  } })
+  t.after(() => env.dispose())
+  await new Promise(resolve => setImmediate(resolve))
+  await env.rt.scheduleCapabilitiesReconcile()
+  assert.deepEqual(activations, [])
+  assert.deepEqual(env.mounts, [])
+  await created(env)({ agent: testAgent('chief', env.mounts, env.skills), source: 'resume' })
+  assert.deepEqual(env.mounts.map(m => m.sessionId), ['chief'])
 })
 
 test('one-item attach changes keep the other attachments', async t => {

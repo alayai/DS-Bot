@@ -4,6 +4,16 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-20
+
+### Added
+
+- The host owner can read a bounded summary of loaded Bots, and explicitly export a public Bot as a declarative definition that leaves out models, secrets, memory, and history.
+
+### Fixed
+
+- An empty tool-call id from an OpenAI-compatible model is filled in before the turn is saved.
+
 ## [0.3.4] - 2026-11-12
 
 ### Added
