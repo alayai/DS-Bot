@@ -4,6 +4,18 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-11-27
+
+### Added
+
+- **Private desktop**: the plugin archive keeps the desktop runtime, and the chat header can open the right sidebar.
+- **Cloud summary and export**: a public Bot can publish a bounded read-only summary (`botReadOnly`) and a declarative definition (`botExport`) without models, secrets, memory, or history.
+
+### Fixed
+
+- **Tool calls**: an empty OpenAI-compatible tool-call id is filled in before the turn is saved.
+- **Windows Codex**: discovery prefers the newest Codex Desktop CLI when it is newer than the copy on `PATH`.
+
 ## [0.3.10] - 2026-11-22
 
 ### Added
