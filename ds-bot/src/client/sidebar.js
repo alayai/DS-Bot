@@ -99,23 +99,47 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     h('span', { className: 'bt-tile-name' }, bot.name),
     bot.role ? h('span', { className: 'bt-chip' }, bot.role) : null))
   }
-  return h('button', {
-    type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
-    'data-bot-id': id, title: wide ? undefined : bot.name,
+  return h(BotListRow, { bot, wide, state, main, pinned, active, unread, alert, label,
+    preview: runningLine || awayLine || waitsFor || preview,
+    button: { 'data-bot-id': id,
     draggable: wide && !tile && onDragStart ? true : undefined,
     onDragStart: wide && !tile && onDragStart ? event => onDragStart(event, id) : undefined,
-    onMouseEnter: wide ? nameIfCut : undefined, onClick: () => actions.openSession(id), onContextMenu,
+    onClick: () => actions.openSession(id), onContextMenu } })
+}
+
+// Presentation only: the caller owns selection, navigation and context actions.
+function BotListRow({ bot, wide, state, main, pinned, active, unread, alert, label, preview, button }) {
+  return h('button', {
+    type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
+    title: wide ? undefined : bot.name, onMouseEnter: wide ? nameIfCut : undefined, ...button,
   },
   h(BotAvatar, { bot, size: wide ? 36 : 44, state, main }),
   pinned && !wide ? h(PinMark) : null,
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, bot.name), bot.engine ? h(AgentBadge, { engine: bot.engine }) : null, pinned ? h(PinMark) : null),
-    runningLine ? h('span', { className: 'bt-row-preview' }, runningLine)
-      : awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
-        : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
-          : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
+    preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true })
     : !wide && !active && (alert || unread) ? h('span', { className: `bt-dot${alert ? ' bt-dot-wait' : ''}`, 'aria-hidden': true }) : null)
+}
+
+function CloudTeamDirectory({ wide, title, bots, selected, busyId, status, error, refresh, resources, resourcesLabel, toggle, choose, create }) {
+  const [search, setSearch] = useState(false), [query, setQuery] = useState('')
+  const rows = bots.filter(bot => !wide || !search || bot.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const icon = (label, action, child) => h('button', { type: 'button', title: label, 'aria-label': label, className: 'bt-round', onClick: action }, child)
+  return h(Fragment, null,
+    h('div', { className: wide ? 'bt-side-top' : 'bt-rail-top' },
+      wide && h('span', { className: 'bt-brand', title }, h(BrandName)),
+      icon(resourcesLabel, resources, h(FolderIcon)),
+      wide && icon(t('Search'), () => { setSearch(!search); setQuery('') }, h(SearchIcon)),
+      refresh && icon(t('Refresh'), refresh, '↻'),
+      create && icon(t('New Bot'), create, h(PlusIcon)),
+      icon(t(wide ? 'Collapse sidebar' : 'Expand sidebar'), toggle, h(SidebarIcon))),
+    wide && search && h('input', { className: 'bt-input', type: 'search', autoFocus: true, 'aria-label': t('Search Bots…'), placeholder: t('Search Bots…'), value: query, onChange: e => setQuery(e.target.value) }),
+    h('div', { className: 'bt-list', role: 'region', 'aria-label': title },
+      (status || error) && h('p', { className: 'bt-hint', role: error ? 'alert' : 'status' }, error || status),
+      rows.map(bot => h(BotListRow, { key: bot.id, bot, wide, state: 'idle', active: bot.id === selected,
+        preview: title + ' · v' + bot.latestRevision, label: bot.name, button: { onClick: () => choose(bot.id), 'aria-busy': busyId === bot.id } })),
+      !status && !error && search && bots.length > 0 && !rows.length && h('p', { className: 'bt-hint' }, t('No results'))))
 }
 
 function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked, onDragStart }) {
@@ -803,10 +827,9 @@ export function TeamSidebar(props) {
   const foot = wideContent
     ? h('div', { className: 'bt-leftcol-foot' }, h(AccountLauncher, { seat: false, actions }), extensionActions)
     : h('div', { className: 'bt-leftcol-foot bt-leftcol-foot-rail' },
-        h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)),
         extensionActions,
         h(AccountLauncher, { seat: false, actions }))
-  const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail', onKeyDown: typeToSearch },
+  const localDirectory = h('div', { style: { display: 'contents' }, onKeyDown: typeToSearch },
     top,
     wideContent && roster.readOnly ? h('div', { className: 'bt-hint bt-read-only', role: 'status' }, hostText(roster.readOnly)) : null,
     h('div', {
@@ -836,7 +859,12 @@ export function TeamSidebar(props) {
         onDragOverSec,
         onDropSec,
       }))),
-    foot)
+    !wideContent && h('button', { type: 'button', className: 'bt-round', 'aria-label': t('New…'), title: t('New…'), onClick: () => actions.openNewChat('new') }, h(PlusIcon)))
+  const content = h('div', { className: wideContent ? 'bt-side' : 'bt-side bt-rail' },
+    props.renderSlot?.('bot.sidebar.directory', {
+      wide: wideContent, toggleSidebar: onToggle, didNavigate: () => { if (leftDrawer) actions.setLeftDrawer?.(false) },
+      renderDirectory: data => h(CloudTeamDirectory, { key: data.scope, ...data, wide: wideContent, toggle: onToggle }),
+    }, { fallback: localDirectory }) ?? localDirectory, foot)
   return h(Fragment, null,
     h(TitleToggle, { hidden: mode === 'hidden', onToggle }),
     shown === 'hidden' ? null : h(LeftColumn, { mode: shown, width: ourWidth, onGrip: startDrag, leaving }, content))

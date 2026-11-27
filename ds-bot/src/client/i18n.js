@@ -624,6 +624,10 @@ const ZH = {
   'Another provider': '其他服务商',
   // Models page
   'This DSH cannot set up model providers.': '这个 DSH 不能设置模型服务商。',
+  'Loading model providers…': '正在加载模型服务商…',
+  'Loading model providers timed out.': '加载模型服务商超时。',
+  'Could not read the model provider list.': '无法读取模型服务商列表。',
+  'No model providers are configured.': '尚未配置模型服务商。',
   'This DSH cannot set up model providers': '这个 DSH 不能设置模型服务商',
   'Model providers · {count}': '模型服务商 · {count}',
   'Add a provider': '添加服务商',

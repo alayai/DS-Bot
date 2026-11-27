@@ -38,7 +38,8 @@ const capitalize = word => word[0].toUpperCase() + word.slice(1)
 const SETTINGS_PAGES = [['general', 'General'], ['models', 'Models'], ['local-agents', 'Local agents'], ['bots', 'Bots'], ['groups', 'Group chats'], ['connectors', 'Connectors'], ['im', 'IM'], ['capabilities', 'Capabilities'], ['browser', 'Browser'], ['computer', 'Computer use'], ['schedules', 'Scheduled tasks'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
 const LAST_PAGES = new Set(['feedback', 'about'])
 // DSH sections DS Bot's own pages already hold.
-const MERGED_SECTIONS = new Set(['general', 'models'])
+const CLOUD_MODELS = 'dsh-cloud-models'
+const MERGED_SECTIONS = new Set(['general', 'models', CLOUD_MODELS])
 // DSH General rows that sit under Appearance; the rest go under More.
 const LOOK_ITEMS = ['appearance', 'font-size']
 const DSH_ICONS = { account: IconUserOutlineMedium, 'agent-presets': IconAgentPresetOutlineMedium, plugins: IconPersonalizationOutlineMedium, 'archived-sessions': IconArchiveOutlineMedium }
@@ -308,12 +309,14 @@ export function SettingsDialog({ page, id, roster, actions, useUpdate, leaving =
   // A Bot or group deleted while its form is open leaves its page on the list.
   const bot = page === 'bots' && id ? roster.byId[id] : undefined
   const room = page === 'groups' && id ? roster.roomsById[id] : undefined
-  const pages = SETTINGS_PAGES.filter(([key]) => key !== 'models' || actions.providers !== undefined)
+  const cloudModels = hasSection(dsh, CLOUD_MODELS)
+  const localModels = hasSection(dsh, 'models')
+  const pages = SETTINGS_PAGES.filter(([key]) => key !== 'models' || cloudModels || localModels || actions.providers !== undefined)
   const extra = dshPages(dsh)
   // A DSH page is `dsh` with its section id; one no longer registered falls back to General.
   const section = page === 'dsh' ? extra.find(row => row.id === id) : undefined
   // DSH's Models page, one level into Models.
-  const advanced = page === 'models' && id === 'advanced' && hasSection(dsh, 'models')
+  const advanced = page === 'models' && !cloudModels && id === 'advanced' && localModels
   const shown = section ? 'dsh' : pages.some(([key]) => key === page) ? page : 'general'
   const usageFocus = shown === 'usage' && id ? id : null
   const label = section ? section.label : advanced ? t('Advanced settings') : t(pages.find(([key]) => key === shown)[1])
@@ -356,13 +359,18 @@ export function SettingsDialog({ page, id, roster, actions, useUpdate, leaving =
         h('div', { className: 'bt-settings-head' },
           back ? h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': back, title: back, onClick: () => actions.openSettings(shown) }, h(ChevronLeftIcon)) : null,
           h('h2', { key: bot?.id ?? room?.id ?? section?.id ?? (advanced ? 'advanced' : shown) }, bot?.name ?? room?.name ?? label),
-          dsh ? h('div', { className: 'bt-settings-actions' }, dsh.renderSlot('settings.action', {})) : null),
+          dsh && !(shown === 'models' && cloudModels) ? h('div', { className: 'bt-settings-actions' }, dsh.renderSlot('settings.action', {})) : null),
         shown === 'usage' ? null : h('div', { key: pageKey, className: 'bt-settings-scroll bt-settings-page', 'data-move': last.current.move },
           errorLine,
           h(PageBoundary, null,
           shown === 'computer' ? h(ComputerPage, { roster, actions, run, Section: SetSection, Row: SetRow, Switch }) : null,
           shown === 'general' ? h(GeneralPage, { roster, actions, run, dsh }) : null,
-          shown === 'models' && !advanced ? h(ProvidersPage, { actions, run, Section: SetSection, advanced: hasSection(dsh, 'models') ? () => actions.openSettings('models', 'advanced') : null }) : null,
+          shown === 'models' && cloudModels ? dsh.renderSlot('settings.section', { close }, { only: CLOUD_MODELS }) : null,
+          shown === 'models' && !cloudModels && !advanced ? h(ProvidersPage, {
+            actions, run, Section: SetSection, models: roster.models,
+            advanced: localModels ? () => actions.openSettings('models', 'advanced') : null,
+            nativeModels: localModels ? () => dsh.renderSlot('settings.section', { close }, { only: 'models' }) : null,
+          }) : null,
           advanced ? h('div', { className: 'bt-dsh-section' }, dsh.renderSlot('settings.section', { close }, { only: 'models' })) : null,
           section ? h('div', { className: 'bt-dsh-section' }, dsh.renderSlot('settings.section', { close }, { only: section.id })) : null,
           shown === 'local-agents' ? h(LocalAgentsPage, { run, Section: SetSection, Row: SetRow }) : null,

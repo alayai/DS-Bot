@@ -20,13 +20,13 @@ const react = {
   useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
   createContext: value => ({ Provider: 'Provider', value }), useContext: context => context.value,
 }
-const load = (text) => {
+const load = (text, hooks = react) => {
   const module = { exports: {} }
   runInNewContext(text, {
     module, exports: module.exports,
     window: { innerWidth: 1280, matchMedia: () => ({ matches: false }) },
-    requestAnimationFrame: () => 0, cancelAnimationFrame() {}, setTimeout, clearTimeout, Promise,
-    require: name => (name === 'react' ? react : name === 'react-dom' ? { createPortal: node => node } : new Proxy({}, { get: (_, key) => key })),
+    requestAnimationFrame: () => 0, cancelAnimationFrame() {}, setTimeout, clearTimeout, Promise, AbortController,
+    require: name => (name === 'react' ? hooks : name === 'react-dom' ? { createPortal: node => node } : new Proxy({}, { get: (_, key) => key })),
   })
   return module.exports
 }
@@ -111,6 +111,7 @@ test('the coordinator runs first-run steps on a blank main view, and a requested
 
 test('a step\'s openSection lands on DS Bot\'s page for that section', () => {
   assert.deepEqual([...shell.settingsPlace('models')], ['models'])
+  assert.deepEqual([...shell.settingsPlace('dsh-cloud-models')], ['models'])
   assert.deepEqual([...shell.settingsPlace('general')], ['general'])
   assert.deepEqual([...shell.settingsPlace('plugins')], ['dsh', 'plugins'])
 })
@@ -209,6 +210,41 @@ test('DSH\'s General rows join General: the look under Appearance, the rest unde
 
 test('header actions from DSH and plugins sit beside the title', () => {
   assert.ok(dialog().drawn.some(([name]) => name === 'settings.action'))
+})
+
+test('a host without provider management still shows its native Models page or the known catalog', async () => {
+  const state = []
+  let cursor = 0, effect
+  const { ProvidersPage } = load(await bundle("export { ProvidersPage } from './src/client/providers-page.js'"), {
+    ...react, useEffect: fn => { effect = fn },
+    useState(initial) {
+      const i = cursor++
+      if (!(i in state)) state[i] = initial
+      return [state[i], value => { state[i] = value }]
+    },
+  })
+  const props = { actions: { providers: async () => ({ available: false }) }, Section: 'section',
+    models: [{ ref: 'demo/model-a', name: 'Model A' }] }
+  const render = (extra = {}) => { cursor = 0; return ProvidersPage({ ...props, ...extra }) }
+  assert.match(textOf(render()), /Loading model providers/)
+  const dispose = effect()
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.match(textOf(render({ nativeModels: () => 'Native model editor' })), /Native model editor/)
+    assert.match(textOf(render()), /demo\/model-a/)
+    assert.match(textOf(render({ models: [] })), /No models/)
+  } finally { dispose() }
+})
+
+test('cloud Models opens the workspace catalog even from a saved local Advanced page', () => {
+  const sections = [{ id: 'models', label: 'Models' }, { id: 'dsh-cloud-models', label: 'Workspace models' }]
+  for (const id of [null, 'advanced']) {
+    const { tree, drawn } = dialog({ page: 'models', id, sections })
+    assert.deepEqual(drawn.filter(([name]) => name === 'settings.section'), [['settings.section', 'dsh-cloud-models']])
+    assert.equal(walk(tree, node => node.type?.name === 'ProvidersPage').length, 0)
+    assert.ok(!drawn.some(([name]) => name === 'settings.action'))
+    assert.ok(!navLabels(tree).includes('Workspace models'))
+  }
 })
 
 test('General settings keeps the Classic Agent mode switch', () => {

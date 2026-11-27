@@ -94,11 +94,18 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
   const { text, attachments, rest } = contentParts(data.content)
   const referenceLabels = data.referenceLabels ?? []
   const references = openFile && openSkill ? { openFile, openSkill } : undefined
-  const steering = node.kind === 'steering'
-  const sentAt = Number.isFinite(data.time) ? messageClock(data.time) : undefined
   const via = viaOf(data.source) ?? roster.imVia?.[sessionId]?.[data.seq]
+  return h(UserBubble, {
+    text, time: data.time, via, attachments, renderMessageImages, rest, referenceLabels, steering: node.kind === 'steering',
+    renderText: shown => h(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions }),
+  })
+}
+
+// Shared message face. Only a local Session supplies file/skill/mention actions.
+export function UserBubble({ text, time, via, attachments = [], renderMessageImages, rest = [], referenceLabels = [], steering, renderText }) {
+  const sentAt = Number.isFinite(time) ? messageClock(time) : undefined
   const { shown, folded, control } = useFold(text, { markdown: false })
-  const body = h(UserText, { text: shown, bots: mentionableBots(roster, sessionId), referenceLabels, skillNames: data.skillNames ?? [], references, actions })
+  const body = renderText ? renderText(shown) : shown
   const row = useRef(null)
   // Touch has no hover: a tap on the bubble opens its copy tool, a tap elsewhere closes it.
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -116,12 +123,12 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
   return h('div', { ref: row, className: 'bt-umsg', 'data-steering': steering || undefined },
     h('div', { className: 'bt-ustack' },
       attachments.length > 0 ? h(Attachments, { attachments, renderMessageImages }) : null,
-      text !== '' || rest.length > 0 ? h('div', { className: 'bt-ubody', title: clock(data.time), 'data-folded': folded || undefined, onClick: tapTools },
+      text !== '' || rest.length > 0 ? h('div', { className: 'bt-ubody', title: clock(time), 'data-folded': folded || undefined, onClick: tapTools },
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control,
         rest.map((block, index) => (ui.JsonBlock ? h(ui.JsonBlock, { key: index, label: t('Content'), payload: block }) : null))) : null,
       referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null,
-      (sentAt || via) ? h('div', { className: 'bt-utime', title: clockLabel(data.time) }, ...(via ? [h(ViaTag, { key: 'via', via })] : []), sentAt) : null),
+      (sentAt || via) ? h('div', { className: 'bt-utime', title: clockLabel(time) }, ...(via ? [h(ViaTag, { key: 'via', via })] : []), sentAt) : null),
     text === '' ? null : h('div', { className: 'bt-utools', 'data-open': toolsOpen || undefined }, h(CopyButton, { text })))
 }
 

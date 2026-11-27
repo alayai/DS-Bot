@@ -110,7 +110,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     agentModels: route => after(call('local-agent-models', { route })).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
     // Model providers and their API keys; DSH keeps them, and a key only travels to the host.
-    providers: () => call('providers'),
+    providers: signal => call('providers', null, signal),
     setProviderKey: (provider, value) => after(call('provider-key', { provider, value })),
     addProvider: body => after(call('provider-add', body)),
     providerModels: body => call('provider-models', body),

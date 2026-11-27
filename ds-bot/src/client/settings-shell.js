@@ -292,7 +292,7 @@ export function SettingsShell(props) {
 // Where one of DSH's section ids opens in DS Bot's Settings.
 export function settingsPlace(id) {
   if (id === 'general') return ['general']
-  if (id === 'models') return ['models']
+  if (id === 'models' || id === 'dsh-cloud-models') return ['models']
   return ['dsh', id]
 }
 

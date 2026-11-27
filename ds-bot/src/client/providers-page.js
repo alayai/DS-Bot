@@ -15,17 +15,54 @@ const SHOWN_MODELS = 8
 // A failure in the interface language; the dialog's error line shows it.
 const translated = promise => Promise.resolve(promise).catch((failure) => { throw new Error(hostText(failure?.message ?? String(failure))) })
 
-export function ProvidersPage({ actions, run, Section, advanced = null }) {
+export function ProvidersPage({ actions, run, Section, advanced = null, nativeModels = null, models = [] }) {
   const [view, setView] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const [attempt, setAttempt] = useState(0)
   const [open, setOpen] = useState(null)
   const [adding, setAdding] = useState(false)
   // Resolves true when the host took it; the page then shows the host's new view.
   const apply = promise => run(translated(promise).then((next) => { if (next?.providers) setView(next) }))
-  useEffect(() => { void apply(actions.providers()) }, [])
-  if (view === null) return null
-  if (!view.available) return h('p', { className: 'bt-set-hint' }, t('This DSH cannot set up model providers.'))
+  const providers = actions.providers
+  useEffect(() => {
+    setLoadError('')
+    if (!providers) { setView({ available: false }); return }
+    setView(null)
+    const controller = new AbortController()
+    let active = true
+    const timer = setTimeout(() => {
+      active = false
+      controller.abort()
+      setLoadError(t('Loading model providers timed out.'))
+    }, 15000)
+    void Promise.resolve().then(() => providers(controller.signal)).then(next => {
+      if (!active) return
+      if (next?.available !== false && !(next?.available === true && Array.isArray(next.providers)
+        && Array.isArray(next.addable) && Array.isArray(next.protocols))) throw new Error(t('Could not read the model provider list.'))
+      setView(next)
+    }).catch(error => { if (active) setLoadError(hostText(error?.message || t('Could not read the model provider list.'))) })
+      .finally(() => clearTimeout(timer))
+    return () => { active = false; clearTimeout(timer); controller.abort() }
+  }, [providers, attempt])
+  const advancedButton = advanced ? h('div', { key: 'advanced', className: 'bt-set-card' },
+    h('button', { type: 'button', className: 'bt-set-row bt-bs-row bt-advanced', onClick: advanced },
+      h('span', { className: 'bt-set-copy' }, h('span', null, t('Advanced settings'))), h(ChevronRightIcon))) : null
+  if (view === null) return [
+    loadError ? h('div', { key: 'error', role: 'alert', className: 'bt-error' }, loadError, ' ',
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => { setLoadError(''); setAttempt(n => n + 1) } }, t('Retry')))
+      : h('p', { key: 'loading', role: 'status', className: 'bt-set-hint' }, t('Loading model providers…')),
+    advancedButton,
+  ]
+  if (!view.available) {
+    if (nativeModels) return h('div', { className: 'bt-dsh-section' }, nativeModels())
+    return h(Section, { title: t('Models') },
+      h('p', { className: 'bt-set-hint' }, t('This DSH cannot set up model providers.')),
+      models.length ? h('ul', null, models.map(model => h('li', { key: model.ref }, model.name ?? model.id, ' · ', model.ref)))
+        : h('p', { className: 'bt-set-hint' }, t('No models')))
+  }
   return [
     h(Section, { key: 'list', title: t('Model providers · {count}', { count: view.providers.length }) },
+      view.providers.length === 0 ? h('p', { className: 'bt-set-hint' }, t('No model providers are configured.')) : null,
       view.providers.map(provider => h(ProviderRow, {
         key: provider.id, provider, apply, actions,
         open: open === provider.id, onToggle: () => setOpen(open === provider.id ? null : provider.id),
@@ -33,9 +70,7 @@ export function ProvidersPage({ actions, run, Section, advanced = null }) {
       adding ? h(AddProvider, { key: 'add', view, apply, actions, onDone: () => setAdding(false) }) : null),
     adding ? null : h('div', { key: 'add', className: 'bt-actions' }, h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => setAdding(true) }, t('Add a provider'))),
     // DSH's own Models page: each model's context, output, inputs, thinking levels and order.
-    advanced ? h('div', { key: 'advanced', className: 'bt-set-card' },
-      h('button', { type: 'button', className: 'bt-set-row bt-bs-row bt-advanced', onClick: advanced },
-        h('span', { className: 'bt-set-copy' }, h('span', null, t('Advanced settings'))), h(ChevronRightIcon))) : null,
+    advancedButton,
   ]
 }
 

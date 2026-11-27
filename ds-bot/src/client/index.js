@@ -8,6 +8,7 @@ import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, botOwnCss, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
 import { TeamSidebar, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
+import { CloudChatHeader, CloudChatMessage, CLOUD_CHAT_CSS } from './cloud-chat.js'
 import { installSettingsShell, SETTINGS_SHELL_CSS } from './settings-shell.js'
 import { frameLayout, readSidebar, writeSidebar, toggledPref, DSH_NARROW } from './frame-layout.js'
 import { installFrameWatch } from './frame-watch.js'
@@ -1088,6 +1089,9 @@ export function apply(ctx) {
     return () => { for (const off of offs) off() }
   }
   const installShell = () => [
+    () => installCompiledStyles(CLOUD_CHAT_CSS, 'cloud-chat'),
+    () => shadow('dsh.cloud.bot.header', {}, CloudChatHeader),
+    () => shadow('dsh.cloud.bot.message', {}, CloudChatMessage),
     () => { shellSheets += 1; return () => { shellSheets -= 1 } },
     ...SHELL_SHEETS.map(([text, tag]) => () => installCompiledStyles(text, tag)),
     () => installFrameWatch(frame),
@@ -1095,7 +1099,10 @@ export function apply(ctx) {
     () => installTheme(),
     () => shadow('sidebar.workspaces', {
       priority: BOT_PRIORITY, inject: face,
-      children: { 'bot.sidebar.action': { kind: 'list', scope: 'root' } },
+      children: {
+        'bot.sidebar.action': { kind: 'list', scope: 'root' },
+        'bot.sidebar.directory': { kind: 'single', scope: 'root' },
+      },
     }, TeamSidebar),
     () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
