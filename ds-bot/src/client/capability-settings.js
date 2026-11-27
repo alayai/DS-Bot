@@ -1,5 +1,7 @@
-import { createElement as h, Fragment, useEffect, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
+import { PlusIcon } from './icons.js'
 import { t } from './i18n.js'
+import { Segmented } from './motion.js'
 
 const blank = () => ({ name: '', kind: 'mcp', description: '', transport: 'stdio', command: '', argsText: '', envText: '{}', url: '', headersText: '{}', content: '', items: [] })
 const parseMap = (text, label) => {
@@ -94,13 +96,16 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
   const detail = item.kind === 'pack' ? `${t('Pack')}: ${(item.items ?? []).join(', ') || t('No items')}`
     : item.kind === 'mcp' ? item.transport === 'stdio' ? t('Local command') : t('HTTP server')
       : t('Skill')
+  const badge = item.kind === 'mcp' ? 'MCP' : item.kind === 'skill' ? t('Skill') : t('Pack')
   const secondary = item.kind === 'pack'
     ? [item.description, (item.items ?? []).join(', ') || t('No items')].filter(Boolean).join(' · ')
     : item.description || detail
   return h('div', { className: 'bt-connector' },
     h('div', { className: 'bt-connector-head' },
       h('span', { className: 'bt-connector-text' },
-        h('span', { className: 'bt-connector-name' }, item.name),
+        h('span', { className: 'bt-connector-title' },
+          h('span', { className: 'bt-connector-name' }, item.name),
+          h('span', { className: 'bt-tag' }, badge)),
         h('span', { className: 'bt-connector-status' }, secondary)),
       h('span', { className: 'bt-connector-actions' },
         item.kind === 'mcp' && item.transport === 'stdio' && !item.approved
@@ -134,11 +139,10 @@ export function CapabilitiesPage({ roster, actions, run }) {
     void run(actions.deleteCapability(item.name))
   }
   return h('section', { className: 'bt-set-section' },
-    h('h3', null, t('Shared capabilities')),
-    draft
-      ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) })
-      : h('div', { className: 'bt-actions' },
-          h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: startNew }, t('Add capability'))),
+    h('div', { className: 'bt-la-sec-head' },
+      h('h3', null, t('Shared capabilities')),
+      draft ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm bt-with-icon', 'data-tour': 'cap-add', onClick: startNew }, h(PlusIcon), t('Add capability'))),
+    draft ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
     h('div', { className: 'bt-set-card bt-connectors-card' },
       items.length === 0 ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, t('No capabilities saved')))
         : items.map(item => h(CapabilityRow, {
@@ -151,17 +155,61 @@ export function CapabilitiesPage({ roster, actions, run }) {
         }))))
 }
 
-export function BotCapabilitiesCard({ bot, roster, actions, run, Card, SwitchRow }) {
+export function BotCapabilitiesCard({ bot, roster, actions, run, Card }) {
+  const pending = useRef(new Map())
+  const [, redraw] = useState(0)
+  const refresh = () => redraw(value => value + 1)
+  const choose = (name, mode, value) => {
+    let entry = pending.current.get(name)
+    if ((entry?.desired ?? mode) === value) return
+    if (entry) {
+      entry.desired = value
+      refresh()
+      return
+    }
+    entry = { desired: value, saved: mode }
+    pending.current.set(name, entry)
+    refresh()
+    const save = async () => {
+      try {
+        while (entry.desired !== entry.saved) {
+          const next = entry.desired
+          await actions.setBotCapability(bot.id, name, next !== 'off', next === 'catalog' ? 'catalog' : 'always')
+          entry.saved = next
+        }
+      } finally {
+        pending.current.delete(name)
+        refresh()
+      }
+    }
+    void run(save())
+  }
   const items = [...(roster.capabilities ?? [])].sort((a, b) => Number(b.kind === 'pack') - Number(a.kind === 'pack') || a.name.localeCompare(b.name))
   const attached = new Set(bot.capabilities ?? [])
+  const catalog = new Set(bot.packs ?? [])
+  const savedMode = name => attached.has(name) ? 'always' : catalog.has(name) ? 'catalog' : 'off'
+  const modeOf = name => pending.current.get(name)?.desired ?? savedMode(name)
   const statuses = roster.capabilityStatuses?.[bot.id] ?? {}
   if (items.length === 0) return null
   return h(Card, { title: t('Capabilities') },
-    items.map(item => h(SwitchRow, {
-      key: item.name,
-      label: item.name,
-      hint: attached.has(item.name) ? statusText(statuses[item.name]) : undefined,
-      on: attached.has(item.name),
-      onChange: enabled => void run(actions.setBotCapability(bot.id, item.name, enabled)),
-    })))
+    h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint bt-capability-hint' }, t('In catalog: the Bot loads this only when it needs it.'))),
+    items.map(item => {
+      const saved = savedMode(item.name)
+      const mode = modeOf(item.name)
+      const sources = mode !== 'always' ? items.filter(pack => pack.kind === 'pack' && pack.items?.includes(item.name)
+        && (modeOf(pack.name) === 'always' || (mode === 'off' && modeOf(pack.name) === 'catalog'))) : []
+      const needsApproval = (mode !== 'off' || sources.length > 0) && item.kind === 'mcp' && item.transport === 'stdio' && !item.approved
+      const hint = mode === 'always' && !needsApproval ? statusText(statuses[item.name]) : undefined
+      return h('div', { key: item.name, className: 'bt-set-row bt-bs-row bt-bs-stack' },
+        h('span', { className: 'bt-set-copy' },
+          h('span', { className: 'bt-bs-label' }, item.name),
+          sources.map(pack => h('span', { key: pack.name, className: 'bt-set-hint bt-capability-hint' }, mode === 'off' ? `${t('Off')} · ` : null,
+            modeOf(pack.name) === 'always' ? t('Always on via {name}', { name: pack.name }) : t('In catalog via {name}', { name: pack.name }))),
+          needsApproval ? h('span', { className: 'bt-set-hint bt-capability-hint' }, t('Needs approval'), ' · ', t('Allow it in Shared capabilities.')) : null,
+          hint ? h('span', { className: 'bt-set-hint' }, hint) : null),
+        h(Segmented, { label: item.name, value: mode }, [['always', 'Always on'], ['catalog', 'In catalog'], ['off', 'Off']].map(([value, label]) => h('button', {
+          key: value, type: 'button', 'aria-pressed': mode === value,
+          onClick: () => choose(item.name, saved, value),
+        }, t(label)))))
+    }))
 }

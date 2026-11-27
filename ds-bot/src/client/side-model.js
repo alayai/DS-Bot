@@ -138,21 +138,21 @@ export async function submitSide({ call, roster, sessionId, args, attachments, o
   return { kind: 'success' }
 }
 
-// The strip shows whenever there is at least one browser tab or side chat.
-export const panelHasStrip = (canBrowse, tabCount, sideCount, canComputer = false) =>
-  canComputer || (canBrowse === true && tabCount > 0) || sideCount > 0
+// The strip shows whenever there is at least one browser tab, side chat, desktop, or open task viewer.
+export const panelHasStrip = (canBrowse, tabCount, sideCount, extra = false) =>
+  extra === true || (canBrowse === true && tabCount > 0) || sideCount > 0
 
 // The strip `···` menu keys, in order. 'sep' joins the two groups only when
 // both have entries.
-export function stripMenuKeys({ canBrowse, canComputer, canTerminal, canFiles }) {
+export function stripMenuKeys({ canBrowse, canComputer, canSide = true, canTerminal, canFiles }) {
   const keys = []
   if (canBrowse === true) keys.push('new-tab')
   if (canComputer === true) keys.push('computer')
-  keys.push('side')
+  if (canSide === true) keys.push('side')
   const tail = []
   if (canTerminal === true) tail.push('terminal')
   if (canFiles === true) tail.push('files')
-  if (tail.length > 0) keys.push('sep')
+  if (keys.length > 0 && tail.length > 0) keys.push('sep')
   return [...keys, ...tail]
 }
 

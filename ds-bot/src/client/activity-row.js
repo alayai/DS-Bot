@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { BotMark, RoomAvatar } from './mark.js'
 import { Elapsed, Shimmer, PHRASES } from './cells.js'
 import { noteClientError } from './diagnostics.js'
-import { reducedMotion } from './motion.js'
+import { reducedEffects, reducedMotion } from './motion.js'
 import { t } from './i18n.js'
 
 // -------------------------------------------------------------------------
@@ -25,13 +25,17 @@ export const rowVisible = ({ running, streaming, tools, relaying, bot, room }) =
 export const freshInputAt = (submissions, steeredAt) => Math.max(0, steeredAt ?? 0,
   ...(submissions ?? []).filter(sub => sub.placement !== 'queued').map(sub => sub.time))
 
-// The shell's running slot can sit under wrappers it adds around the flow, so the
-// search is a descendant one; without the slot the row mounts at the flow's tail.
-// No flow at all is a mount failure, noted once per page — the observer keeps
-// retrying in case the transcript is only mid-mount.
+// The shell's running status renders inside the flow, before its pending steering
+// rows, so hosting the row there puts it above an interjection's echo and it jumps
+// below the message once the echo commits. The flow is the column around the shell's
+// slot: the row mounts at its end, after every row the shell draws, and stays there.
+// The slot can sit under wrappers the shell adds around the flow, so the search is a
+// descendant one; a flow without a slot falls back to the first flow. No flow at all
+// is a mount failure, noted once per page — the observer keeps retrying in case the
+// transcript is only mid-mount.
 let mountMissed = false
 export function findHost() {
-  const node = document.querySelector('[data-chat-flow] [data-chat-running]')
+  const node = document.querySelector('[data-chat-flow] [data-chat-running]')?.closest('[data-chat-flow]')
     ?? document.querySelector('[data-chat-flow]')
   if (node === null && !mountMissed) {
     mountMissed = true
@@ -70,8 +74,9 @@ function useRowEntrances(replacing) {
     const started = Date.now()
     let column = null
     let frame = 0
+    let waiting = false
     const settle = (event) => {
-      if (event.target !== event.currentTarget || !/^bt-row/.test(event.animationName)) return
+      if (event.target !== event.currentTarget || !event.animationName.startsWith('bt-row')) return
       delete event.currentTarget.dataset.btEnter
       event.currentTarget.removeEventListener('animationend', settle)
     }
@@ -81,12 +86,22 @@ function useRowEntrances(replacing) {
       if (next !== column) {
         observer.disconnect()
         column = next
-        if (column) observer.observe(column, { childList: true, subtree: true })
+        if (column) {
+          waiting = false
+          observer.observe(column, { childList: true })
+        }
       }
-      if (!column) return
+      if (!column) {
+        if (!waiting) {
+          waiting = true
+          observer.observe(document.querySelector('[data-conversation-scroll]') ?? document.body, { childList: true, subtree: true })
+        }
+        return
+      }
       const items = [...column.querySelectorAll(':scope > [data-chat-flow-key]')]
       let last = -1
       items.forEach((item, index) => { if (seen.has(item)) last = index })
+      if (reducedEffects()) return
       const fresh = items.filter(item => !seen.has(item) && item.offsetHeight > 0)
       for (const item of fresh) seen.add(item)
       if (last < 0 || Date.now() - started < 800 || fresh.length > 3) return
@@ -165,7 +180,7 @@ export function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useL
     const timer = setTimeout(() => {
       shift.current = document.querySelector('[data-conversation-scroll]')?.scrollTop ?? null
       setPhase(current => (current === 'out' ? null : current))
-    }, 140)
+    }, reducedMotion() ? 0 : 140)
     return () => clearTimeout(timer)
   }, [visible])
   // Removing the row at a pinned tail moves the transcript down; a tail

@@ -17,8 +17,10 @@ div[class*="_frame"]:has(> div[class*="_sidebarCol"])::before {
   background: transparent !important;
 }
 div[class*="_sidebarCol"] {
-  padding-top: var(--dsh-windows-titlebar-height) !important;
   background: transparent !important;
+}
+html:not([data-fullscreen]) div[class*="_sidebarCol"] {
+  padding-top: var(--dsh-windows-titlebar-height) !important;
 }
 /* The sidebar's own root paints the same fill again; only the frame's coat stays. */
 div[class*="_sidebarCol"] > div[class*="_root"],
@@ -26,11 +28,13 @@ div[class*="_sidebarCol"] > * > div[class*="_root"] {
   background: transparent !important;
 }
 /* The session tree fades out above the footer with a gradient to the opaque sidebar fill, a
-   dark bar on the material; the list fades itself out instead. */
-div[class*="_sidebarCol"] [class*="_treeBody"] > [class*="_fade"] {
+   dark bar on the material; the list fades itself out instead (0.2.2-rc.1 `_treeBody`, rc.2 `_scrollRegion`). */
+div[class*="_sidebarCol"] [class*="_treeBody"] > [class*="_fade"],
+div[class*="_sidebarCol"] [class*="_scrollRegion"] > [class*="_scrollFade"] {
   display: none !important;
 }
-div[class*="_sidebarCol"] [class*="_treeBody"]:has(> [class*="_fade"]) > [class*="_list"] {
+div[class*="_sidebarCol"] [class*="_treeBody"]:has(> [class*="_fade"]) > [class*="_list"],
+div[class*="_sidebarCol"] [class*="_scrollRegion"]:has(> [class*="_scrollFade"]) [class*="_listArea"] {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
 }
 /* ds-bot's own docked column (.bt-leftcol) reaches the window's top edge and shows the
@@ -38,13 +42,15 @@ div[class*="_sidebarCol"] [class*="_treeBody"]:has(> [class*="_fade"]) > [class*
 body {
   --bt-leftcol-fill: transparent;
 }
-div[class*="_centerCol"] {
+html:not([data-fullscreen]) div[class*="_centerCol"] {
   padding-top: var(--dsh-windows-titlebar-height) !important;
 }
 /* The caption buttons stand on the right sidebar while it is open. Its panel is placed
    absolutely, which padding does not move, but a border does. */
 div[class*="_rightbarCol"] {
   box-sizing: border-box !important;
-  border-top: var(--dsh-windows-titlebar-height) solid var(--dsw-alias-bg-base) !important;
   background: var(--dsw-alias-bg-base) !important;
+}
+html:not([data-fullscreen]) div[class*="_rightbarCol"] {
+  border-top: var(--dsh-windows-titlebar-height) solid var(--dsw-alias-bg-base) !important;
 }

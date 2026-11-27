@@ -7,10 +7,10 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshVersion } from '../diagnostics.js'
 import { LEGACY_EXECUTABLES, LEGACY_NAME } from '../legacy.mjs'
-import { classify, isComputerTool, levelAllows, LEVELS, DRIVER_GLOBAL, DRIVER_REFUSED } from './catalog.js'
+import { classify, isComputerTool, levelAllows, LEVELS, DRIVER_GLOBAL, DRIVER_LISTINGS, DRIVER_REFUSED } from './catalog.js'
 import { createLeases } from './leases.js'
 import { prepareComputerHelper } from './mac-helper.js'
-import { REPLY_KIND } from '../constants.js'
+import { REPLY_KIND, SOURCE_KIND } from '../constants.js'
 import { output } from '../tools.js'
 
 const REGISTRY_PACKAGE = '@deepseek-ai/dsh-computer-use'
@@ -47,12 +47,13 @@ const LEVEL_LABEL = { view: 'view only', background: 'background control', foreg
 const PROTECTED_IDS = new Set([
   'io.github.fei2411.dsbot',
   'com.deepseek.harness.computer-use',
+  'com.deepseek.harness.computer-use.dev',
   'com.apple.systempreferences',
   'com.apple.settings',
   'com.apple.keychainaccess',
   'com.apple.passwords',
 ])
-const PROTECTED_NAMES = new Set(['ds bot', 'deepseek harness', 'dsh', 'dsh desktop', 'dsh computer use', 'system settings', 'settings', 'keychain access', 'passwords', 'credential manager', 'control panel', LEGACY_NAME])
+const PROTECTED_NAMES = new Set(['ds bot', 'deepseek harness', 'dsh', 'dsh desktop', 'dsh computer use', 'dsh computer use dev', 'system settings', 'settings', 'keychain access', 'passwords', 'credential manager', 'control panel', LEGACY_NAME])
 const PROTECTED_EXES = new Set(['dsbot', 'dsh', 'dsh-desktop', 'dsh-cua-native', 'dsh computer use', 'systemsettings', 'keychain access', 'passwords', 'credentialmanager', 'credwiz', 'control', ...LEGACY_EXECUTABLES])
 
 export function isProtectedApp(app) {
@@ -87,8 +88,9 @@ export function install(rt) {
   const holds = new Map()
   /** @type {Map<string, {botId:string, sessionId:string, appKey?:string, abort:AbortController}>} callId -> in-flight call */
   const inFlight = new Map()
-  /** @type {Map<string, {agent:any, mode:string, lifts:Array<()=>void>, handoffLift?:()=>void}>} */
+  /** @type {Map<string, {agent:any, mode:string, lifts:Array<()=>void>, handoffLift?:()=>void, triedDeny:Set<string>}>} */
   const applied = new Map()
+  const disposedAgents = new WeakSet()
   let userActive
   let providerStatus = { state: 'off' }
   // The provider status is volatile, but it rides in the view payload: the poll
@@ -235,21 +237,38 @@ export function install(rt) {
   // Every agent gets one application record: 'allow' means the tools and the
   // provider guidance stay, 'deny' means both are masked and the section is
   // filtered out of the assembled prompt.
+  const liftHeld = (held) => {
+    for (const lift of held.lifts.splice(0)) { try { lift() } catch {} }
+    try { held.handoffLift?.() } catch {}
+    held.handoffLift = undefined
+    held.triedDeny.clear()
+  }
+  const restrictComputerTools = (agent, held) => {
+    for (const name of denyNames(agent)) {
+      if (held.triedDeny.has(name)) continue
+      held.triedDeny.add(name)
+      try {
+        const lift = agent.ctx.tools?.restrict?.({ deny: [name] })
+        if (typeof lift === 'function') held.lifts.push(lift)
+      } catch {}
+    }
+  }
   function applyComputer(agent) {
     const id = agent?.session?.id ?? agent?.id
-    if (typeof id !== 'string' || agent?.ctx === undefined) return
+    if (stopped || disposedAgents.has(agent) || typeof id !== 'string' || agent?.ctx === undefined) return
     // DS Bot governs Bots, and any Session on the provider it mounted itself. A plain DSH
     // Session on DSH's own Computer Use plugin is not DS Bot's to touch (#1101).
     const want = maskable(agent) ? 'allow' : isBotAt(id) || mountedByUs ? 'deny' : 'leave'
     let held = applied.get(id)
-    if (held !== undefined && held.agent === agent && held.mode === want) return
+    if (held !== undefined && held.agent === agent && held.mode === want) {
+      if (want === 'deny') restrictComputerTools(agent, held)
+      return
+    }
     if (held?.agent === agent) {
-      for (const lift of held.lifts.splice(0)) { try { lift() } catch {} }
-      held.handoffLift?.()
-      held.handoffLift = undefined
+      liftHeld(held)
     } else {
-      held?.lifts?.forEach((lift) => { try { lift() } catch {} })
-      held = { agent, mode: '', lifts: [] }
+      if (held !== undefined) liftHeld(held)
+      held = { agent, mode: '', lifts: [], triedDeny: new Set() }
       applied.set(id, held)
     }
     held.mode = want
@@ -264,12 +283,7 @@ export function install(rt) {
       // exists on the deny path.
       return
     }
-    for (const name of denyNames(agent)) {
-      try {
-        const lift = agent.ctx.tools?.restrict?.({ deny: [name] })
-        if (typeof lift === 'function') held.lifts.push(lift)
-      } catch {}
-    }
+    restrictComputerTools(agent, held)
     if (typeof agent.ctx.on === 'function') {
       try {
         const lift = agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
@@ -284,9 +298,36 @@ export function install(rt) {
       } catch {}
     }
   }
+  let refreshing = false
+  let refreshQueued = false
   function refreshComputer() {
-    for (const agent of service('agents')?.list?.() ?? []) {
-      try { applyComputer(agent) } catch (error) { rt.warn('ds-bot: computer-use masking on %s failed: %s', agent?.session?.id, error) }
+    if (refreshing) {
+      refreshQueued = true
+      return
+    }
+    refreshing = true
+    try {
+      do {
+        refreshQueued = false
+        const byId = new Map()
+        const extra = []
+        for (const agent of service('agents')?.list?.() ?? []) {
+          if (disposedAgents.has(agent)) continue
+          const id = agent?.session?.id ?? agent?.id
+          if (typeof id === 'string') byId.set(id, agent)
+          else extra.push(agent)
+        }
+        for (const [id, held] of applied) {
+          if (held?.agent !== undefined && !disposedAgents.has(held.agent) && !byId.has(id)) {
+            byId.set(id, held.agent)
+          }
+        }
+        for (const agent of [...byId.values(), ...extra]) {
+          try { applyComputer(agent) } catch (error) { rt.warn('ds-bot: computer-use masking on %s failed: %s', agent?.session?.id, error) }
+        }
+      } while (refreshQueued && !stopped)
+    } finally {
+      refreshing = false
     }
   }
   ctx.on('agent/created', async ({ agent }) => {
@@ -298,15 +339,21 @@ export function install(rt) {
     }
   })
   ctx.on('agent/disposed', ({ agent }) => {
+    if (agent !== undefined && agent !== null) disposedAgents.add(agent)
     const id = agent?.session?.id ?? agent?.id
     sessionApps.delete(id)
     const held = applied.get(id)
-    if (held?.agent === agent) applied.delete(id)
-    if (held) {
-      for (const lift of held.lifts) { try { lift() } catch {} }
-      held.handoffLift?.()
+    if (held?.agent === agent) {
+      applied.delete(id)
+      liftHeld(held)
     }
   })
+  ctx.on('tools/change', () => {
+    if (!stopped) refreshComputer()
+  })
+  const offSaved = typeof rt.onSaved === 'function'
+    ? rt.onSaved(() => { if (!stopped) refreshComputer() })
+    : undefined
   rt.closeComputerWaiters = () => {
     for (const waiter of [...cursorWaiters]) {
       cursorWaiters.delete(waiter)
@@ -501,7 +548,7 @@ export function install(rt) {
     for (const waiter of [...cursorWaiters]) waiter.wake()
   }
   // Click-type calls ripple; index and keyboard calls only name their window.
-  const RIPPLE_METHODS = new Set(['click', 'double_click', 'performSecondaryAction', 'drag'])
+  const RIPPLE_METHODS = new Set(['click', 'double_click', 'invoke', 'performAction', 'performSecondaryAction', 'drag'])
   const recordGeo = (sessionId, result) => {
     if (sessionId === undefined || result === null || typeof result !== 'object') return
     if (typeof result.appHandle === 'string') {
@@ -584,6 +631,32 @@ export function install(rt) {
     if (props === null || typeof props !== 'object' || !('session' in props)) return
     exec.arguments = { ...(exec.arguments ?? {}), session: driverSessionOf(botId) }
   }
+  // Driver sessions end after five idle minutes and ordinary calls never revive
+  // them (#1821): a Bot back after a pause starts the session its call will use,
+  // its own label or the shared implicit one, again first.
+  const DRIVER_SESSION_FRESH_MS = 4 * 60_000
+  const driverSessionSeen = new Map()
+  const driverSessionKey = (exec) => typeof exec.arguments?.session === 'string' ? exec.arguments.session : ''
+  const startDriverSession = async (exec, key) => {
+    driverSessionSeen.set(key, Date.now())
+    if (key !== '') driverCursorOff.delete(key)
+    try {
+      await ctx.tools?.get?.('cua_driver_native__start_session', exec.agent)?.execute(key === '' ? {} : { session: key }, exec)
+    } catch {}
+  }
+  const ensureDriverSession = async (exec, call) => {
+    if (call.method === 'start_session' || call.method === 'end_session') return
+    const key = driverSessionKey(exec)
+    const seen = driverSessionSeen.get(key)
+    if (seen !== undefined && Date.now() - seen < DRIVER_SESSION_FRESH_MS) {
+      driverSessionSeen.set(key, Date.now())
+      return
+    }
+    await startDriverSession(exec, key)
+  }
+  const SESSION_RESTARTED = 'The computer-use session had ended. DS Bot started it again; call the tool again.'
+  const isSessionEnded = (result) => result?.isError === true &&
+    /session has ended/i.test(String(result.error?.message ?? result.content?.map?.(part => part?.text).join(' ') ?? ''))
   const driverCursorOff = new Set()
   const ensureDriverCursorOff = async (exec, botId) => {
     const session = driverSessionOf(botId)
@@ -635,16 +708,23 @@ export function install(rt) {
     bot.computer.apps[app.key] = { name: app.name, ...(app.id !== undefined ? { id: app.id } : {}), grantedAt: Date.now() }
     await rt.save()
   }
-  // The card in the Bot's own chat. Resolves 'always' | 'once' | 'deny'.
+  // App-access prompt card. Group-session asks carry `roomId` so the group header
+  // island and details panel can answer them in place instead of sending the user to
+  // the Bot's own chat (#1623). Resolves 'always' | 'once' | 'deny'.
   const askAppAccess = ({ botId, sessionId, callId, app, signal }) => new Promise((resolve) => {
+    if (signal?.aborted) { resolve('deny'); return }
     const id = randomUUID()
+    const roomId = rt.groupOwners?.get(sessionId)?.roomId ?? rt.taskOwners?.get(sessionId)?.roomId
     const entry = {
-      id, botId, sessionId, appName: app.name, ...(app.icon !== undefined ? { icon: app.icon } : {}),
+      id, botId, sessionId, appName: app.name, at: Date.now(),
+      ...(roomId !== undefined ? { roomId } : {}),
+      ...(app.icon !== undefined ? { icon: app.icon } : {}),
       ...(callId !== undefined ? { callId } : {}),
       resolve: (answer) => {
-        pendingAsks.delete(id)
+        if (!pendingAsks.delete(id)) return
         const ctl = controlOf(botId)
-        if (ctl.waitingFor === 'app-access') ctl.waitingFor = undefined
+        const moreForBot = [...pendingAsks.values()].some(item => item.botId === botId)
+        if (ctl.waitingFor === 'app-access' && !moreForBot) ctl.waitingFor = undefined
         settleControl(botId)
         resolve(answer)
       },
@@ -655,7 +735,8 @@ export function install(rt) {
       ctl.state = 'waiting'
       ctl.waitingFor = 'app-access'
     }
-    signal?.addEventListener?.('abort', () => { if (pendingAsks.has(id)) entry.resolve('deny') }, { once: true })
+    if (roomId !== undefined) rt.yieldRoomTurn?.(sessionId)
+    signal?.addEventListener?.('abort', () => { entry.resolve('deny') }, { once: true })
   })
   const answerAppAccess = (id, answer) => {
     const entry = pendingAsks.get(String(id ?? ''))
@@ -663,18 +744,26 @@ export function install(rt) {
     entry.resolve(['always', 'once', 'deny'].includes(answer) ? answer : 'deny')
     return true
   }
-  // macOS: the provider's own getApp consent reaches us as a user-questions request.
-  // For Bot Sessions DS Bot answers it itself, by the card's rules; anything else
-  // passes to the next answerer. Prepend like approvals.js: DSH's own answerer is
-  // registered first and would hold the request on a card DS Bot never draws.
+  // macOS: the provider's own getApp and system-pointer consent questions reach us as
+  // user-questions requests. For Bot Sessions DS Bot answers them itself, by the Bot's
+  // level and card rules; anything else passes to the next answerer. Prepend like
+  // approvals.js: DSH's own answerer is registered first and would hold the request on
+  // a card DS Bot never draws.
   ctx.on('user-questions/request', async function computerConsent(request, next) {
-    const question = request?.questions?.find(item => item?.id === 'cua-app-access')
+    const pointerQuestion = request?.questions?.find(item => item?.id === 'cua-mouse-control')
+    const question = pointerQuestion ?? request?.questions?.find(item => item?.id === 'cua-app-access')
     const agent = request?.agent
     if (question === undefined || agent === undefined) return next()
     const sessionId = agent.session?.id ?? agent.id
     await rt.load()
     const bot = rt.botOf(rt.selfOf(sessionId))
-    if (bot === undefined || !rt.isBotSession(sessionId) || !enabled()) return next()
+    if (bot === undefined || !rt.isBotSession(sessionId)) return next()
+    if (pointerQuestion !== undefined) {
+      const allowed = enabled() && levelAllows(levelOf(bot), 'foreground')
+      const choice = allowed ? (pointerQuestion.intent?.approve ?? ALLOW_LABEL) : (pointerQuestion.intent?.reject ?? DENY_LABEL)
+      return { answers: [{ id: 'cua-mouse-control', selected: [choice] }] }
+    }
+    if (!enabled()) return next()
     const app = { name: String(question.intent?.subject?.name ?? ''), icon: question.intent?.subject?.icon }
     app.key = appKeyOf(app)
     const deny = () => ({ answers: [{ id: 'cua-app-access', selected: [DENY_LABEL] }] })
@@ -759,18 +848,24 @@ export function install(rt) {
       if (DRIVER_REFUSED.has(call.method)) {
         return { kind: 'deny', reason: `Bots may not use ${call.method}.` }
       }
-      injectDriverSession(exec, call, bot.id)
-      await ensureDriverCursorOff(exec, bot.id)
       if (app === undefined) {
+        if (call.method === 'get_desktop_state') {
+          return { kind: 'deny', reason: 'Bots cannot capture the whole desktop. Call get_window_state for a window from list_windows.' }
+        }
         if (!DRIVER_GLOBAL.has(call.method)) {
           return { kind: 'deny', reason: 'Name the window from list_windows first.' }
         }
+      } else if (app.unknown === true && DRIVER_LISTINGS.has(call.method)) {
+        // A listing filtered by a pid not seen yet is window metadata; its result records the app.
       } else if (app.unknown === true) {
         return { kind: 'deny', reason: `${bot.name} does not know ${app.name}. List the windows or apps first.` }
       } else {
         const verdict = await driverConsent(exec, bot, sessionId, app)
         if (verdict !== 'allow') return { kind: 'deny', reason: verdict }
       }
+      injectDriverSession(exec, call, bot.id)
+      await ensureDriverSession(exec, call)
+      await ensureDriverCursorOff(exec, bot.id)
     }
     if (call.kind !== 'observe' && app !== undefined) {
       const held = leases.holderOfApp(app.key)
@@ -824,6 +919,12 @@ export function install(rt) {
     const started = Date.now()
     try {
       const result = await next()
+      // DSH hands a failed tool body back as an error envelope, not an exception.
+      if (call.provider === 'cua-driver' && isSessionEnded(result)) {
+        await startDriverSession(exec, driverSessionKey(exec))
+        noteStep(botId, { time: started, callId: exec.callId, app: app?.name, action: call.method ?? exec.name, kind: call.kind, ok: false, error: SESSION_RESTARTED })
+        return { ...result, content: [{ type: 'text', text: `Error: ${SESSION_RESTARTED}` }], error: { message: SESSION_RESTARTED } }
+      }
       // Tool results arrive as an envelope { isError, content, value } — the
       // recorded app identity and screenshot attachment live in `value`.
       const payload = result !== null && typeof result === 'object' && result.isError !== true
@@ -929,7 +1030,13 @@ export function install(rt) {
     const sessionId = rt.chatOf(botId)
     await rt.ensureCapabilities?.(sessionId)
     const agent = await rt.resolveAgent(sessionId)
-    agent.followup(createUserMessage({ content: [{ type: 'text', text: HANDBACK_TEXT }] }))
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: HANDBACK_TEXT }],
+      // Dedicated non-relay role: DSH v4 requires a producer-owned source kind,
+      // while `handoff` would mark the turn as a hidden exchange and `reply`
+      // would render as a clickable Bot-to-Bot relay event.
+      source: { kind: SOURCE_KIND, role: 'handback' },
+    }))
     await ctx.sessions.flush(agent.session)
     return true
   }
@@ -951,6 +1058,7 @@ export function install(rt) {
       const bot = rt.botOf(rt.selfOf(sessionId))
       if (bot === undefined || !rt.isBotSession(sessionId)) return 'Only Bots on the team can hand the computer to the user.'
       if (!enabled() || levelOf(bot) === 'off') return 'Computer use is off for you.'
+      if (rt.taskOwners?.has(sessionId)) return 'Background tasks cannot hand the computer to the user. Report back to your own chat so it can ask the user to take over.'
       const callId = rt.chatOwners.get(sessionId) === bot.id && typeof exec.callId === 'string' ? exec.callId : undefined
       holds.set(bot.id, {
         id: randomUUID(),
@@ -1026,7 +1134,7 @@ export function install(rt) {
       leases.releaseBot(bot.id)
       settleControl(bot.id)
     }
-    for (const agent of service('agents')?.list?.() ?? []) applyComputer(agent)
+    refreshComputer()
     return true
   }
   const revokeApp = async (botId, appKey) => {
@@ -1236,24 +1344,31 @@ export function install(rt) {
     cursors: [...cursors.values()],
     asks: Object.fromEntries([...pendingAsks.values()].map(ask => [ask.id, {
       id: ask.id,
-      botId: ask.botId, sessionId: ask.sessionId, appName: ask.appName,
+      botId: ask.botId, sessionId: ask.sessionId, appName: ask.appName, at: ask.at,
+      ...(ask.roomId !== undefined ? { roomId: ask.roomId } : {}),
       ...(ask.icon !== undefined ? { icon: ask.icon } : {}),
       ...(ask.callId !== undefined ? { callId: ask.callId } : {}),
     }])),
     holds: Object.fromEntries(holds),
   })
   rt.computerEndpoint = computerEndpoint
-  rt.computerLevelOf = levelOf
-  rt.computerEnabled = enabled
-  rt.isProtectedApp = isProtectedApp
   // A member whose turn waits on the app-access card shows 'waiting for approval'
-  // in its group, the same as a DSH approval does.
+  // in its group, the same as a DSH approval does; cancelling that Session denies
+  // its pending asks so removed members or retired group Sessions never leave stale cards.
   const baseWaits = rt.waitsForApproval
   rt.waitsForApproval = (sessionId) => baseWaits?.(sessionId) === true
     || [...pendingAsks.values()].some(ask => ask.sessionId === sessionId)
+  const baseCancel = rt.cancelApprovals
+  rt.cancelApprovals = (sessionId) => {
+    baseCancel?.(sessionId)
+    for (const ask of [...pendingAsks.values()]) {
+      if (ask.sessionId === sessionId) ask.resolve('deny')
+    }
+  }
 
   ctx.effect(() => () => {
     stopped = true
+    offSaved?.()
     leases.dispose()
     rt.closeComputerWaiters()
     for (const { resolve } of pendingAsks.values()) resolve('deny')

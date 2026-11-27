@@ -2,6 +2,8 @@
 // Session it speaks from, so a fresh part or a new group Session keeps it. A group may
 // set one preset for all its members there, in place of each member's own, as it may
 // set one working folder.
+import { activeTasksOf } from './threads.js'
+
 // DSH offers Auto review for the current Session only, so neither a Bot nor a group keeps it.
 const SESSION_ONLY = 'auto'
 
@@ -18,7 +20,7 @@ export function install(rt) {
     return { options: options.filter(option => option.value !== SESSION_ONLY), defaultPreset }
   }
 
-  const roomOfSession = sessionId => rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+  const roomOfSession = sessionId => rt.roomOf(rt.groupOwners.get(sessionId)?.roomId ?? rt.taskOwners?.get(sessionId)?.roomId)
 
   // `name` may be a function: it is read once the agent resolves, so a change asked
   // for while the resolve ran wins over the one still being applied.
@@ -65,25 +67,50 @@ export function install(rt) {
     // Session the Bot has ends at the value the newest request actually applied.
     const applyTo = (sessionId, room = roomOfSession(sessionId)) =>
       setPreset(sessionId, () => (request.seq === mine ? room?.permission ?? bot.permission : undefined))
+    // The Bot's own chat may have background parts or active own-chat tasks: a stricter
+    // preset must reach those live Sessions too, or the user would think it applied.
+    // Group tasks follow their group's permission below (inheriting bot.permission if unset).
+    const own = () => [rt.chatOf(bot.id), ...activeTasksOf(bot).filter(task => task.roomId === undefined).map(task => task.sessionId)]
+      .filter((sessionId, index, list) => sessionId !== undefined && list.indexOf(sessionId) === index)
+    const groupSessions = () => [
+      ...rt.groupSessionsOf(bot.id),
+      ...activeTasksOf(bot).filter(task => task.roomId !== undefined).map(task => task.sessionId),
+    ].filter((sessionId, index, list) => sessionId !== undefined && list.indexOf(sessionId) === index)
     const groups = async (warnFail) => {
-      for (const sessionId of rt.groupSessionsOf(bot.id)) {
+      for (const sessionId of groupSessions()) {
         if (request.seq !== mine) break
         if (roomOfSession(sessionId)?.permission) continue
         await applyTo(sessionId).catch(warnFail)
       }
     }
     try {
-      const applied = await applyTo(rt.chatOf(bot.id))
+      let applied
+      for (const sessionId of own()) {
+        if (request.seq !== mine) break
+        applied = await applyTo(sessionId)
+      }
       if (applied !== undefined) request.applied = applied
     } catch (error) {
       if (request.seq === mine) {
+        // A change that fails halfway leaves Sessions on the preset it asked for: the
+        // preset goes back on every one of them, including when the Bot had none before,
+        // where it is the default that Bot ran on. Rolling only the field back would tell
+        // the user the Bot is strict again while a part still runs wider.
         if (request.applied === undefined) delete bot.permission
-        else {
-          bot.permission = request.applied
-          // The restored preset goes back on every Session the change left behind.
-          const warnFail = error => rt.warn('ds-bot: permission for %s not restored: %s', bot.name, error)
-          await applyTo(rt.chatOf(bot.id)).catch(warnFail)
-          await groups(warnFail)
+        else bot.permission = request.applied
+        const fallback = request.applied ?? presets().catalog().defaultPreset
+        const warnFail = error => rt.warn('ds-bot: permission for %s not restored: %s', bot.name, error)
+        // Read through the staleness check, like applyTo: a newer request that applies to
+        // a Session while this rollback waits on it must not be written over afterwards.
+        const restoreTo = (sessionId) => setPreset(sessionId, () => (request.seq === mine ? roomOfSession(sessionId)?.permission ?? fallback : undefined))
+        for (const sessionId of own()) {
+          if (request.seq !== mine) break
+          await restoreTo(sessionId).catch(warnFail)
+        }
+        for (const sessionId of groupSessions()) {
+          if (request.seq !== mine) break
+          if (roomOfSession(sessionId)?.permission) continue
+          await restoreTo(sessionId).catch(warnFail)
         }
       }
       throw error
@@ -109,6 +136,15 @@ export function install(rt) {
       // A member without a preset of its own goes back to the default its Session started on.
       await setPreset(sessionId, () => room.permission ?? bot.permission ?? service.catalog().defaultPreset)
         .catch(error => rt.warn('ds-bot: permission for %s in %s not applied: %s', bot.name, room.name, error))
+    }
+    for (const botId of room.members ?? []) {
+      const bot = rt.botOf(botId)
+      if (bot === undefined) continue
+      for (const task of activeTasksOf(bot)) {
+        if (task.roomId !== room.id) continue
+        await setPreset(task.sessionId, () => room.permission ?? bot.permission ?? service.catalog().defaultPreset)
+          .catch(error => rt.warn('ds-bot: permission for task %s of %s in %s not applied: %s', task.id, bot.name, room.name, error))
+      }
     }
     return true
   }

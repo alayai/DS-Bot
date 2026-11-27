@@ -3,7 +3,9 @@ import { homedir, hostname } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { parseSessionFormatLogFilename } from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import { parse, stringify } from 'yaml'
+import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
+import { dump, load } from 'js-yaml'
+import { parse } from 'yaml'
 import { copyTree, disk, within } from './copy-tree.mjs'
 
 export { within }
@@ -64,7 +66,7 @@ function modelProfiles(from) {
     if (!existsSync(file)) return []
     let patch
     try {
-      patch = parse(readFileSync(file, 'utf8'))
+      patch = load(readFileSync(file, 'utf8'), { schema: entryListSchema })
     } catch (error) {
       // An unreadable profile has no model settings to copy; the team is still there.
       console.warn(`DS Bot: skipped the model settings in ${file}: ${error instanceof Error ? error.message : String(error)}`)
@@ -169,15 +171,28 @@ const OVER = Symbol('over budget')
 // The bytes under `path` into `tally`, links counted as themselves and what cannot be read as
 // nothing; `tally.regen` takes the bytes inside the folders that REGENERABLE names.
 async function measure(path, clock, tally, regen = false) {
-  if (clock.now() > clock.until) throw OVER
-  const entry = await lstat(path).catch(() => undefined)
-  if (entry === undefined) return
-  if (!entry.isDirectory()) {
-    tally.bytes += entry.size
-    if (regen) tally.regen += entry.size
-    return
+  const pending = [{ path, regen }]
+  while (pending.length) {
+    const batch = pending.splice(-16)
+    // Settle the whole batch before propagating expiry; siblings may still be using the disk.
+    const results = await Promise.allSettled(batch.map(async ({ path, regen }) => {
+      if (clock.now() > clock.until) throw OVER
+      const entry = await lstat(path).catch(() => undefined)
+      if (entry === undefined) return
+      if (!entry.isDirectory()) {
+        tally.bytes += entry.size
+        if (regen) tally.regen += entry.size
+        return
+      }
+      if (clock.now() > clock.until) throw OVER
+      for (const name of await readdir(path).catch(() => [])) {
+        pending.push({ path: join(path, name), regen: regen || REGENERABLE.has(name) })
+      }
+    }))
+    const failed = results.find(result => result.status === 'rejected')
+    if (failed) throw failed.reason
+    if (clock.now() > clock.until) throw OVER
   }
-  for (const name of await readdir(path).catch(() => [])) await measure(join(path, name), clock, tally, regen || REGENERABLE.has(name))
 }
 
 /**
@@ -189,8 +204,9 @@ async function measure(path, clock, tally, regen = false) {
  * @returns {Promise<{ sessions: number, chats?: number, work?: number, regen?: number }>}
  */
 export async function teamSizes(from, team, { budget = 2000, now = Date.now } = {}) {
-  const { found } = sessionDirs(from, sessionIdsOf(team))
   const clock = { until: now() + budget, now }
+  const { found } = sessionDirs(from, sessionIdsOf(team))
+  if (clock.now() > clock.until) return { sessions: found.length }
   const chats = { bytes: 0, regen: 0 }
   const work = { bytes: 0, regen: 0 }
   try {
@@ -211,12 +227,6 @@ export async function teamSizes(from, team, { budget = 2000, now = Date.now } = 
 const logVersion = name => parseSessionFormatLogFilename(name.replace(/\.(zstd|zst|gz|br)$/u, ''))
 const isNewer = (from, { id, group }) => readdirSync(join(from, 'sessions', group, id))
   .some(name => (logVersion(name) ?? 0) > sessionFormatCatalog.currentVersion)
-
-/** The Sessions whose log is in a newer format than the pinned DSH reads. */
-export function newerSessions(from, team) {
-  const { found } = sessionDirs(from, sessionIdsOf(team))
-  return found.filter(session => isNewer(from, session)).map(({ id }) => id)
-}
 
 /**
  * Copy into the data location `to` the Sessions its team names that are not there, from the DSH
@@ -287,11 +297,11 @@ async function copyKey(from, to, name) {
 
 async function writeModelRows(to, rows) {
   const file = join(to, 'profiles', 'ds-bot', 'cordis.patch.yml')
-  const current = existsSync(file) ? parse(await readFile(file, 'utf8')) : undefined
+  const current = existsSync(file) ? load(await readFile(file, 'utf8'), { schema: entryListSchema }) : undefined
   const ids = new Set(rows.map(row => row.id))
   const kept = Array.isArray(current) ? current.filter(row => !ids.has(row?.id)) : []
   await mkdir(join(to, 'profiles', 'ds-bot'), { recursive: true })
-  await writeFile(file, stringify([...kept, ...rows]))
+  await writeFile(file, dump([...kept, ...rows], { schema: entryListSchema }))
 }
 
 /**
