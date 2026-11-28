@@ -2,12 +2,46 @@
 // reaches a model that cannot read them, each image becomes text from a vision model.
 // Texts are kept per attachment, so later requests repeat the same words and the
 // prompt cache still hits.
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BlockAssembler } from '@deepseek-ai/dsh-llm'
 import { OCR_CACHE_MAX, OCR_PROMPT, OCR_RETRY_MS, OCR_TIMEOUT_MS } from './constants.js'
 import { replaceFile } from './files.js'
 import { splitRef } from './text.js'
+
+const IMAGE_MODEL = /^gpt-image(?:-|$)/i
+
+/** Prompt text for an image model. Chat history stays text; image bytes are not replayed. */
+export function imageModelPrompt(options) {
+  const parts = []
+  if (typeof options?.system === 'string' && options.system.trim() !== '') parts.push(options.system.trim())
+  for (const message of options?.messages ?? []) {
+    if (message?.role === 'tool') continue
+    const content = message?.content
+    const texts = []
+    if (typeof content === 'string') texts.push(content)
+    else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') texts.push(block.text)
+      }
+    }
+    const text = texts.join('\n').trim()
+    if (text === '') continue
+    const speaker = message.role === 'assistant' ? '助手' : message.role === 'user' ? '用户' : message.role
+    parts.push(`${speaker}：${text}`)
+  }
+  return parts.join('\n\n').trim()
+}
+
+/** Assistant text that the chat can render as a local image. */
+export function imageReplyText(caption, filePath) {
+  const shown = String(filePath).replaceAll('\\', '/').replace(/[%#?<>\r\n]/g, encodeURIComponent)
+  const lines = []
+  if (typeof caption === 'string' && caption.trim() !== '') lines.push(caption.trim())
+  lines.push(`![Image](<${shown}>)`)
+  return lines.join('\n\n')
+}
 
 export function offloadTargets(session, beforeSeq) {
   const targets = []
@@ -190,6 +224,95 @@ export function install(rt) {
         }
       : message))
   }
+
+  const providerProfile = (provider) => {
+    const settings = ctx.get?.('settings')
+    const entry = ctx.llm.listConfigurableProviders?.().find(item => item.provider === provider)
+    if (settings === undefined || entry === undefined) return undefined
+    const section = settings.describe({ redactSecrets: true }).find(row => row.ns === entry.settingsNs)
+    const profile = entry.settingsPath.reduce((value, key) => value?.[key], section?.value)
+    return { baseURL: profile?.baseURL || entry.defaultBaseURL, keyRef: profile?.apiKeyEnv }
+  }
+
+  // Direct GPT Image models use the Images API, not a chat model with an image tool.
+  ctx.on('llm/stream', (options, next) => {
+    if (!IMAGE_MODEL.test(options.model ?? '') || options.sessionId === undefined || options.purpose !== undefined || rt.ownRequest(options)) return next()
+    return (async function* imageModelTurn() {
+      const empty = { inputTokens: 0, outputTokens: 0 }
+      const timeout = AbortSignal.timeout(120000)
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
+      try {
+        signal.throwIfAborted()
+        const profile = providerProfile(options.provider)
+        const baseURL = typeof profile?.baseURL === 'string' ? profile.baseURL.replace(/\/+$/, '') : ''
+        const keyRef = typeof profile?.keyRef === 'string' ? profile.keyRef : ''
+        if (baseURL === '' || keyRef === '') {
+          throw new Error(`Missing image endpoint or API key for ${options.provider}`)
+        }
+        const key = (await ctx.get('credentials').resolve(keyRef))?.value
+        if (typeof key !== 'string' || key === '') throw new Error(`Image API key unavailable for ${options.provider}`)
+        const prompt = imageModelPrompt(options)
+        if (prompt === '') throw new Error('An image prompt is required')
+        const response = await fetch(`${baseURL}/images/generations`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: options.model, prompt, output_format: 'png' }),
+          signal,
+        })
+        const raw = await response.text()
+        let payload
+        try { payload = JSON.parse(raw) } catch { payload = undefined }
+        if (!response.ok) {
+          const message = payload?.error?.message ?? payload?.message ?? raw.slice(0, 300)
+          throw Object.assign(new Error(String(message).replaceAll(key, '<redacted>')), { status: response.status })
+        }
+        const image = payload?.data?.[0]
+        const encoded = image?.b64_json
+        if (typeof encoded !== 'string' || !encoded.length) throw new Error('Image API returned no image')
+        signal.throwIfAborted()
+        const session = ctx.sessions?.get?.(options.sessionId)
+        const cwd = session?.header?.cwd
+        const dir = typeof cwd === 'string' && cwd !== '' ? join(cwd, 'generated-images') : join(home, 'generated-images')
+        const file = join(dir, `${randomUUID()}.png`)
+        await mkdir(dir, { recursive: true })
+        await writeFile(file, Buffer.from(encoded, 'base64'), { signal })
+        const text = imageReplyText(image.revised_prompt, file)
+        const usage = payload?.usage ?? {}
+        const cached = usage.input_tokens_details?.cached_tokens ?? 0
+        const inputTokens = Math.max(0, (usage.input_tokens ?? 0) - cached)
+        const outputTokens = usage.output_tokens ?? 0
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+        yield {
+          type: 'usage',
+          usage: {
+            inputTokens,
+            outputTokens,
+            totalTokens: usage.total_tokens ?? inputTokens + outputTokens + cached,
+            ...(cached > 0 ? { cacheReadTokens: cached } : {}),
+          },
+        }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      } catch (error) {
+        const cancelled = options.signal?.aborted && signal.reason === options.signal.reason
+        const timedOut = timeout.aborted && signal.reason === timeout.reason
+        const message = cancelled ? 'Image generation cancelled' : timedOut ? 'Image generation timed out' : (error?.message ?? 'Image generation failed')
+        yield { type: 'usage', usage: empty }
+        yield {
+          type: 'finish',
+          reason: {
+            kind: cancelled ? 'aborted' : 'error',
+            failure: {
+              message,
+              code: cancelled ? 'ABORTED' : timedOut ? 'TIMEOUT' : 'IMAGE_GENERATION_FAILED',
+              ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+            },
+          },
+        }
+      }
+    })()
+  })
 
   ctx.on('llm/stream', (options, next) => {
     if (options.sessionId === undefined || rt.ownRequest(options) || !(options.messages ?? []).some(liveImages)) return next()

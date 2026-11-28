@@ -88,6 +88,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'on agent/status',
     'on llm/stream',
     'on llm/stream',
+    'on llm/stream',
     'on agent/status',
     'on tools/execute',
     'on llm/stream',
@@ -132,6 +133,7 @@ test('apply registers listeners and effects in a fixed order', (t) => {
     'on user-questions/request (prepend)',
     'effect ds-bot: monitor bridge',
     'effect ds-bot: loaded read-only settings',
+    'effect ds-bot: public cloud export',
   ])
 })
 

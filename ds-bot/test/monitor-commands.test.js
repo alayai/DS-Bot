@@ -172,3 +172,22 @@ test('corrupt and full stores refuse new commands without overwriting or discard
   await assert.rejects(restarted.send({ ...full.request, commandId: randomUUID() }), failure('command-capacity'))
   assert.equal(full.calls.length, 1)
 })
+
+test('a read-only host that takes over sees intervening receipts and does not dispatch again', async t => {
+  const f = await fixture(t)
+  let takeover = false
+  f.rt.readOnly = () => takeover ? 'other writer' : undefined
+  const successor = createMonitorCommands({ ...f.rt, readOnly: () => takeover ? undefined : 'reader' }, f.lifetime.signal)
+  const first = await f.service.send(f.request)
+  assert.deepEqual(await successor.receipt(first.commandId), first)
+  const next = { ...f.request, commandId: randomUUID() }
+  const second = await f.service.send(next)
+  assert.deepEqual(await successor.receipt(second.commandId), second)
+  takeover = true
+  assert.deepEqual(await successor.send(next), second)
+  await assert.rejects(successor.send({ ...next, text: 'changed' }), failure('command-conflict'))
+  await successor.send({ ...next, commandId: randomUUID() })
+  assert.equal(f.calls.length, 3)
+  assert.deepEqual(await f.service.receipt(second.commandId), second)
+  assert.equal(JSON.parse(await readFile(f.path, 'utf8')).commands.length, 3)
+})

@@ -16,7 +16,7 @@ const recognized = error => typeof error?.code === 'string' && error.code.starts
 
 export function createMonitorCommands(rt, lifetime) {
   const path = typeof rt.home === 'string' ? join(rt.home, 'bothub-commands.json') : null
-  let ledger, loading, writing = Promise.resolve()
+  let writing = Promise.resolve()
   const active = new Map()
   const controller = () => rt.ctx.get('sessionController')
   const check = (request, writable = false) => {
@@ -32,7 +32,8 @@ export function createMonitorCommands(rt, lifetime) {
     }
     return rt.chatOf(bot.id)
   }
-  const load = () => loading ??= (async () => {
+  // Another host can write between calls, including before a read-only host takes over.
+  const load = async () => {
     if (!path) fail('command-store')
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8'))
@@ -42,12 +43,12 @@ export function createMonitorCommands(rt, lifetime) {
           || !/^[0-9a-f]{64}$/.test(r.hash) || !Number.isFinite(r.createdAt)
           || !['pending', 'accepted', 'rejected', 'unknown'].includes(r.status))
         || new Set(parsed.commands.map(r => r.commandId)).size !== parsed.commands.length) fail('command-store')
-      ledger = new Map(parsed.commands.map(r => [r.commandId, r]))
+      return new Map(parsed.commands.map(r => [r.commandId, r]))
     } catch (error) {
       if (error?.code !== 'ENOENT') fail('command-store')
-      ledger = new Map()
+      return new Map()
     }
-  })()
+  }
   const save = async next => {
     if (lifetime.aborted || rt.readOnly() !== undefined) fail('read-only')
     await mkdir(rt.home, { recursive: true })
@@ -61,7 +62,6 @@ export function createMonitorCommands(rt, lifetime) {
       const writable = () => { if (lifetime.aborted || rt.readOnly() !== undefined) fail('read-only') }
       writable()
       await replaceFile(temp, path, writable)
-      ledger = next
     } finally { await unlink(temp).catch(() => {}) }
   }
   const serial = operation => {
@@ -70,8 +70,7 @@ export function createMonitorCommands(rt, lifetime) {
     return result
   }
   const persist = record => serial(async () => {
-    await load()
-    const next = new Map(ledger)
+    const next = await load()
     next.set(record.commandId, record)
     await save(next)
   })
@@ -95,8 +94,7 @@ export function createMonitorCommands(rt, lifetime) {
   const receipt = async commandId => {
     if (!uuid(commandId)) fail('invalid')
     await rt.refresh()
-    await load()
-    const record = ledger.get(commandId)
+    const record = (await load()).get(commandId)
     if (!record) fail('not-found')
     check(record)
     if (active.has(commandId)) return { ...statusOf(record), status: 'submitting' }
@@ -134,7 +132,7 @@ export function createMonitorCommands(rt, lifetime) {
     if (active.size >= 32) fail('command-busy')
     const execute = async () => {
       const reserved = await serial(async () => {
-        await load()
+        const ledger = await load()
         const existing = ledger.get(request.commandId)
         if (existing) {
           if (existing.hash !== hash) fail('command-conflict')
@@ -146,9 +144,8 @@ export function createMonitorCommands(rt, lifetime) {
           entityId: request.entityId, groupId: request.groupId, hash,
           sessionId: check(request, true), status: 'pending', createdAt: Date.now(),
         }
-        const next = new Map(ledger)
-        next.set(record.commandId, record)
-        await save(next)
+        ledger.set(record.commandId, record)
+        await save(ledger)
         return { record, fresh: true }
       })
       const { record } = reserved
