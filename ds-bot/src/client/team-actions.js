@@ -8,6 +8,9 @@ import { noteClientError } from './diagnostics.js'
 export function teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock, panelFolded }) {
   // A memory is a Bot's or a group chat's; both are opened by id.
   const memoryOf = id => (roster.getSnapshot().roomsById[id] ? { roomId: id } : { botId: id })
+  // Cards of long pastes, numbered as they come; each waits for the shell's attachment.
+  let pastes = 0
+  const pasteState = (state, sessionId, blocks) => ({ ...state, paste: { ...state.paste, [sessionId]: blocks } })
   // An action that shows the panel lands the yield with it: when a folded
   // panel's explicit opener fires, the column gives way in the same set.
   // `view` is the next view, since its minimum decides what fits; a yield already
@@ -25,6 +28,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
     // The token keeps a late exit timer from closing a palette opened again since.
     closePalette: (token) => { ui.set(state => (state.palette && (token === undefined || state.palette.token === token) ? { ...state, palette: null } : state)) },
+    // Searching one group's own history, from its header.
+    openGroupSearch: (roomId) => { if (roomId) ui.set(state => ({ ...state, groupSearch: { roomId, token: Date.now() }, palette: null, newChat: null, menu: null })) },
+    closeGroupSearch: (token) => { ui.set(state => (state.groupSearch && (token === undefined || state.groupSearch.token === token) ? { ...state, groupSearch: null } : state)) },
     openExchange: (a, b) => { if (a && b) ui.set(state => ({ ...state, exchange: [a, b] })) },
     openVoice: (id) => { if (id) ui.set(state => ({ ...state, voice: id, menu: null })) },
     closeVoice: () => { ui.set(state => (state.voice ? { ...state, voice: null } : state)) },
@@ -46,8 +52,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
         const snap = roster.getSnapshot()
         const view = ['browser', 'computer'].includes(state.view) && snap.byId[id] === undefined ? 'details'
           : state.view === 'side' && !(snap.sideChats?.[snap.byId[id]?.id] ?? []).some(chat => chat?.id === state.side) ? 'details'
-            : state.view
-        return { ...state, details: id, view, renaming: false, tab: null }
+            : state.view === 'task' ? 'details'
+              : state.view
+        return { ...state, details: id, view, task: null, renaming: false, tab: null }
       })
     },
     showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab, panelYield: yieldTo(state, 'details') })) },
@@ -61,9 +68,30 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     closeMemory: () => { ui.set(state => (state.memory ? { ...state, memory: null } : state)) },
     openConnectors: () => { ui.set(state => ({ ...state, settings: { page: 'connectors', id: null }, menu: null, palette: null, newChat: null })) },
     setPanelView: (view) => {
-      if (!['details', 'browser', 'side', 'computer'].includes(view)) return
-      ui.set(state => (state.details && state.view !== view ? { ...state, view, panelYield: yieldTo(state, view) } : state))
+      if (!['details', 'browser', 'side', 'computer', 'task'].includes(view)) return
+      ui.set(state => (state.details && state.view !== view ? { ...state, view, ...(view === 'details' ? { tab: null } : {}), panelYield: yieldTo(state, view) } : state))
     },
+    openTaskDeck: (targetId, taskId = null) => {
+      if (!targetId) return
+      ui.set(state => ({ ...state, taskDeck: { targetId, taskId, token: Date.now() }, approvalOpen: null, goalOpen: null, goalCompose: null, menu: null, palette: null }))
+    },
+    toggleTaskDeck: (targetId) => {
+      if (!targetId) return
+      ui.set(state => (state.taskDeck?.targetId === targetId
+        ? { ...state, taskDeck: null }
+        : { ...state, taskDeck: { targetId, taskId: null, token: Date.now() }, approvalOpen: null, goalOpen: null, goalCompose: null, menu: null, palette: null }))
+    },
+    closeTaskDeck: () => { ui.set(state => (state.taskDeck ? { ...state, taskDeck: null } : state)) },
+    openTask: (sessionId, botId, taskId) => {
+      if (!sessionId || !botId || !taskId) return
+      ui.set(state => ({ ...state, details: sessionId, view: 'task', task: { botId, taskId }, renaming: false, tab: null, panelYield: yieldTo(state, 'details') }))
+    },
+    closeTask: () => {
+      ui.set(state => (state.details && state.view === 'task' ? { ...state, view: 'details', task: null, tab: 'tasks' } : { ...state, task: null }))
+    },
+    stopTask: (botId, taskId) => after(call('bot-stop-task', { botId, taskId })),
+    sendTask: (botId, taskId, text) => after(call('bot-task-send', { botId, taskId, text })),
+    readTask: (botId, taskId, cursor, steps = false) => call('bot-task-read', { botId, taskId, ...(cursor ? { cursor } : {}), ...(steps ? { steps: true } : {}) }),
     // A side chat on the panel's own view, opened from the strip, the `···`
     // menus or `/side`. Closing the panel keeps the chats; only a tab's × deletes.
     openSideChat,
@@ -83,8 +111,47 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
       ui.set(state => (state.details && state.view === 'side' && state.side === chatId ? { ...state, view: 'details', side: null } : state))
       return after(call('side-close', { chatId }))
     },
-    closePanel: () => { ui.set(state => (state.details ? { ...state, details: null, view: 'details', renaming: false, tab: null, side: null } : state)) },
+    closePanel: () => { ui.set(state => (state.details ? { ...state, details: null, view: 'details', renaming: false, tab: null, side: null, task: null } : state)) },
     quote: (sessionId, text) => ui.set(state => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
+    // A long paste becomes a card; its text stays here until it goes back into the box.
+    addPaste: (sessionId, text, name) => {
+      pastes += 1
+      const block = { id: `paste-${pastes}`, text, name, attachmentId: null }
+      ui.set(state => pasteState(state, sessionId, [...(state.paste?.[sessionId] ?? []), block]))
+      return block.id
+    },
+    // The shell attachment whose label is that waiting card's own file name.
+    linkPastes: (sessionId, links) => ui.set((state) => {
+      const blocks = state.paste?.[sessionId] ?? []
+      const byBlock = new Map()
+      for (const link of links) byBlock.set(link.blockId, link.attachmentId)
+      const linked = blocks.map((block) => {
+        if (block.attachmentId !== null) return block
+        const id = byBlock.get(block.id)
+        return id === undefined ? block : { ...block, attachmentId: id }
+      })
+      return linked.every((block, index) => block === blocks[index]) ? state : pasteState(state, sessionId, linked)
+    }),
+    // Files put back into a draft get new attachment ids: the cards of `from` wait for
+    // their files again in `to`, and bind by name as on a paste.
+    reopenPastes: (from, to) => ui.set((state) => {
+      const blocks = state.paste?.[from] ?? []
+      if (blocks.length === 0) return state
+      const waiting = blocks.map(block => ({ ...block, attachmentId: null }))
+      if (from === to) return pasteState(state, to, waiting)
+      const { [from]: _left, ...rest } = state.paste
+      return { ...state, paste: { ...rest, [to]: [...(rest[to] ?? []), ...waiting] } }
+    }),
+    unlinkPastes: (sessionId, blockIds) => ui.set((state) => {
+      const blocks = state.paste?.[sessionId] ?? []
+      const waiting = blocks.map(block => (blockIds.includes(block.id) && block.attachmentId !== null ? { ...block, attachmentId: null } : block))
+      return waiting.every((block, index) => block === blocks[index]) ? state : pasteState(state, sessionId, waiting)
+    }),
+    removePaste: (sessionId, blockIds) => ui.set((state) => {
+      const blocks = state.paste?.[sessionId] ?? []
+      const kept = blocks.filter(block => !blockIds.includes(block.id))
+      return kept.length === blocks.length ? state : pasteState(state, sessionId, kept)
+    }),
     clearQuote: token => ui.set(state => (state.quote?.token === token ? { ...state, quote: null } : state)),
     setFlags: (id, flags) => after(call('set-flags', { id, ...flags })),
     saveSection: payload => after(call('section-save', payload)),
@@ -95,6 +162,8 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     deleteRoom: id => after(call('delete-room', { id })),
     openMenu: (menu) => { ui.set(state => ({ ...state, menu, palette: null })) },
     closeMenu: () => { ui.set(state => (state.menu ? { ...state, menu: null } : state)) },
+    closeNewChat: () => { ui.set(state => (state.newChat || state.newChatSection ? { ...state, newChat: null, newChatSection: null } : state)) },
+    closeExchange: () => { ui.set(state => (state.exchange ? { ...state, exchange: null } : state)) },
     closeOverlay: () => { ui.set(state => ({ ...state, newChat: null, newChatSection: null, exchange: null, details: state.newChat || state.exchange ? state.details : null })) },
     createBot: payload => after(call('create-bot', payload)),
     // The avatar library: photos the user imported once, kept by the host.
@@ -110,10 +179,11 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     agentModels: route => after(call('local-agent-models', { route })).catch(() => {}),
     efforts: ref => call('efforts', { ref }),
     // Model providers and their API keys; DSH keeps them, and a key only travels to the host.
-    providers: () => call('providers'),
+    providers: signal => call('providers', null, signal),
     setProviderKey: (provider, value) => after(call('provider-key', { provider, value })),
     addProvider: body => after(call('provider-add', body)),
     providerModels: body => call('provider-models', body),
+    saveProviderModels: body => call('provider-models-save', body),
     removeProvider: provider => after(call('provider-remove', { provider })),
     // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
     resume: botId => after(call('resume', { botId })),
@@ -127,6 +197,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     setPrefs: prefs => after(call('set-prefs', prefs)),
     setMain: (id, main = true, options = {}) => after(call('set-main', { id, main, ...options })),
     updateRoom: (id, patch) => after(call('update-room', { id, ...patch })),
+    roomTodoCheck: (roomId, id, done) => after(call('room-todo', { roomId, id, done })),
+    roomTodoRemove: (roomId, id) => after(call('room-todo', { roomId, id, action: 'remove' })),
+    roomTodoClear: roomId => after(call('room-todo', { roomId, action: 'clear' })),
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
@@ -144,7 +217,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     computerTakeover: botId => after(call('computer-takeover', { botId })),
     computerHandback: botId => after(call('computer-handback', { botId })),
     computerAllowForeground: botId => call('computer-allow-foreground', { botId }),
-    computerAppAnswer: (id, answer) => call('computer-app-answer', { id, answer }),
+    computerAppAnswer: (id, answer) => after(call('computer-app-answer', { id, answer })),
     computerHoldAnswer: (botId, { callId, outcome } = {}) => after(call('computer-hold-answer', { botId, ...(callId !== undefined ? { callId } : {}), outcome })),
     computerShot: attachmentId => call('computer-shot', { attachmentId }),
     computerUserActive: idleSeconds => call('computer-user-active', { idleSeconds }),
@@ -152,18 +225,52 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     stopRoomWork: roomId => after(call('stop-room-work', { roomId })),
     goalDraft: (roomId, text) => after(call('goal-draft', { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call('goal-control', { roomId, goalId, action, ...(stopWork ? { stopWork: true } : {}) })),
-    // The goal island: `goalCompose` holds the room whose draft form is open,
-    // `goalOpen` the room whose panel is open.
-    composeGoal: roomId => ui.set(state => ({ ...state, goalCompose: roomId, goalOpen: roomId })),
+    // The group task board: the user's note is kept on the task and posted to the
+    // group as a user message that calls its owner; cancelling is the panel's own.
+    taskNote: (roomId, id, text) => after(call('task-note', { roomId, id, text })),
+    taskCancel: (roomId, id) => after(call('task-cancel', { roomId, id })),
+    // The goal / approval island: `goalCompose` holds the room whose draft form is
+    // open, `goalOpen` the room whose goal panel is open, `approvalOpen` the room
+    // whose approval panel is open. Goal and approval panels stay mutually exclusive.
+    composeGoal: roomId => ui.set(state => ({ ...state, goalCompose: roomId, goalOpen: roomId, approvalOpen: null, taskDeck: null })),
     closeGoalCompose: () => ui.set(state => (state.goalCompose ? { ...state, goalCompose: null } : state)),
-    toggleGoal: roomId => ui.set(state => ({ ...state, goalOpen: state.goalOpen === roomId ? null : roomId })),
+    toggleGoal: roomId => ui.set(state => ({
+      ...state,
+      goalOpen: state.goalOpen === roomId ? null : roomId,
+      approvalOpen: state.goalOpen === roomId ? state.approvalOpen : null,
+      taskDeck: state.goalOpen === roomId ? state.taskDeck : null,
+    })),
     closeGoal: () => ui.set(state => (state.goalOpen ? { ...state, goalOpen: null } : state)),
+    toggleApproval: roomId => ui.set(state => ({
+      ...state,
+      approvalOpen: state.approvalOpen === roomId ? null : roomId,
+      goalOpen: state.approvalOpen === roomId ? state.goalOpen : null,
+      goalCompose: state.approvalOpen === roomId ? state.goalCompose : null,
+      taskDeck: state.approvalOpen === roomId ? state.taskDeck : null,
+    })),
+    openApproval: roomId => ui.set((state) => {
+      const snap = roster.getSnapshot()
+      const activeSet = new Set(['running', 'waiting_work', 'waiting_approval'])
+      const room = snap.roomsById?.[roomId]
+      const bot = snap.byId?.[roomId]
+      const hasTasks = room
+        ? (room.members ?? []).some(id => (snap.byId?.[id]?.tasks ?? []).some(item => item?.roomId === room.id && activeSet.has(item.status)))
+        : (bot?.tasks ?? []).some(item => !item?.roomId && activeSet.has(item.status))
+      if (hasTasks) {
+        return { ...state, taskDeck: { targetId: roomId, taskId: null, token: Date.now() }, approvalOpen: null, goalOpen: null, goalCompose: null }
+      }
+      return { ...state, approvalOpen: roomId, goalOpen: null, goalCompose: null, taskDeck: null }
+    }),
+    closeApproval: () => ui.set(state => (state.approvalOpen ? { ...state, approvalOpen: null } : state)),
     // Values go out in these requests and never come back in a response.
     secretSet: payload => after(call('secret-set', payload)),
     secretAllow: requestId => after(call('secret-allow', { requestId })),
     secretCancel: requestId => after(call('secret-cancel', { requestId })),
     secretUpdate: (name, { scope, purpose } = {}) => after(call('secret-update', { name, scope, purpose })),
     secretDelete: name => after(call('secret-delete', { name })),
+    secretUnlock: passphrase => after(call('secret-unlock', { passphrase })),
+    secretEncrypt: passphrase => after(call('secret-encrypt', { passphrase })),
+    secretDecrypt: passphrase => after(call('secret-decrypt', { passphrase })),
     connectorConnect: (id, payload = {}) => after(call('connector-connect', { id, ...payload })),
     connectorDisconnect: id => after(call('connector-disconnect', { id })),
     connectorRetry: id => after(call('connector-retry', { id })),
@@ -181,6 +288,22 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     mailRuleSet: payload => after(call('mail-rule-set', payload)),
     mailSendAnswer: (requestId, choice, extra = {}) => after(call('mail-send-answer', { requestId, choice, ...extra })),
     mailSignInCode: payload => after(call('mail-sign-in-code', payload)),
+    // DeepSeek's own document and speech services (api.deepseek.com/v1/tools/*), each
+    // off until enabled. The status answer names the credential ref, never its value.
+    deepseekServices: () => call('deepseek-services'),
+    // absent keeps a field, null resets it; the full status comes back with the roster.
+    setDeepseekServices: patch => after(call('deepseek-services-config', patch)),
+    // One short piece of speech; the caller queues and plays the WAV it gets back.
+    synthesizeSpeech: (body, signal) => call('deepseek-synthesize', body, signal),
+    phoneSet: settings => after(call('phone-set', settings)),
+    phonePair: () => after(call('phone-pair')),
+    phonePairCancel: () => after(call('phone-pair-cancel')),
+    phoneRemove: id => after(call('phone-remove', { id })),
+    // The answer to mcp-client-add carries the new token once; nothing else does.
+    mcpSet: settings => after(call('mcp-set', settings)),
+    mcpClientAdd: client => after(call('mcp-client-add', client)),
+    mcpClientUpdate: (id, patch) => after(call('mcp-client-update', { id, ...patch })),
+    mcpClientRemove: id => after(call('mcp-client-remove', { id })),
     imAdd: payload => after(call('im-add', payload)),
     imUpdate: (id, patch) => after(call('im-update', { id, ...patch })),
     imRemove: id => after(call('im-remove', { id })),
@@ -193,17 +316,22 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     saveCapability: capability => after(call('capability-save', capability)),
     deleteCapability: name => after(call('capability-delete', { name })),
     approveCapability: name => after(call('capability-approve', { name })),
-    setBotCapability: (botId, name, attached) => after(call('bot-capability', { botId, name, attached })),
+    setBotCapability: (botId, name, attached, mode = 'always') => after(call('bot-capability', { botId, name, attached, mode })),
     schedules: () => call('schedules'),
     scheduleCreate: task => call('schedule-create', task),
     scheduleDelete: (sessionId, id) => call('schedule-delete', { sessionId, id }),
+    schedulePause: (sessionId, id, active) => call('schedule-pause', { sessionId, id, active }),
     exchange: (a, b) => call('exchange', { a, b }).catch(() => []),
-    exchangeText: id => call('exchange-text', { id }).catch(() => undefined),
+    exchangeText: (id, a, b) => call('exchange-text', { id, ...(a !== undefined && b !== undefined ? { a, b } : {}) }).catch(() => undefined),
     fileText: file => call('file-text', { file }).catch(() => undefined),
     roomProgress: roomId => call('room-progress', { roomId }).catch(() => []),
+    groupRows: (roomId, from, to, anchor) => call('group-rows', { roomId, from, ...(to === undefined ? {} : { to }), ...(anchor === undefined ? {} : { anchor }) }).catch(() => null),
+    groupRelayReplies: (sessionId, preview) => call('group-relay-replies', { sessionId, preview }).catch(() => null),
     earlier: (sessionId, cursor) => call('earlier', { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
     usage: () => call('usage', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    // The details panel's status line: turns, speed, cache hits and context for one Bot.
+    runStats: botId => call('run-stats', { botId }),
     // `summarize` starts a summary when the entries changed; `regenerate` always does.
     memoryView: (id, flags = {}) => call('memory-view', { ...memoryOf(id), ...flags }),
     memoryAsk: (id, text) => call('memory-ask', { ...memoryOf(id), text }),
@@ -223,6 +351,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
       noteClientError(where, error)
       ui.set(state => ({ ...state, toast: { text: error?.message ?? String(error), token: Date.now() } }))
     },
+    // A message with no failure behind it (a review that expired, a window without the
+    // column): a toast, but not in the client-error log.
+    notice: text => ui.set(state => ({ ...state, toast: { text, token: Date.now() } })),
     dismissToast: token => ui.set(state => (state.toast && (token === undefined || state.toast.token === token) ? { ...state, toast: null } : state)),
     noteTurnTime: (sessionId, turn, key, time) => {
       if (sessionId === undefined || !Number.isFinite(turn) || !Number.isFinite(time)) return

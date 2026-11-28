@@ -21,12 +21,16 @@ import * as timeContext from './src/host/time-context.js'
 import * as tools from './src/host/tools.js'
 import * as chatIndex from './src/host/chat-index.js'
 import * as groups from './src/host/groups.js'
-import * as groupLog from './src/host/group-log.js'
+import * as ledger from './src/host/ledger.js'
 import * as goals from './src/host/goals.js'
+import * as agentCommands from './src/host/agent-commands.js'
+import * as tasks from './src/host/tasks.js'
 import * as approvals from './src/host/approvals.js'
 import * as resume from './src/host/resume.js'
 import * as memory from './src/host/memory.js'
 import * as parts from './src/host/parts.js'
+import * as botTasks from './src/host/bot-tasks.js'
+import * as changes from './src/host/changes.js'
 import * as images from './src/host/images.js'
 import * as avatarLibrary from './src/host/avatar-library.js'
 import * as browser from './src/host/browser.js'
@@ -43,27 +47,33 @@ import * as usage from './src/host/usage.js'
 import * as update from './src/host/update.js'
 import * as dshUpdate from './src/host/dsh-update.js'
 import * as thinking from './src/host/thinking.js'
+import * as phone from './src/host/phone.js'
+import * as mcpServer from './src/host/mcp-server.js'
 import * as channel from './src/host/channel.js'
 import * as monitor from './src/host/monitor.js'
 import * as readOnly from './src/host/read-only.js'
 import * as cloudExport from './src/host/cloud-export.js'
+import * as remote from './src/host/remote.js'
+import * as mobile from './src/host/mobile.js'
 import * as feed from './src/host/feed.js'
 import * as im from './src/host/im/index.js'
 import * as officeSkills from './src/host/office-skills.js'
 import * as goalSkills from './src/host/goal-skills.js'
+import * as issueReport from './src/host/issue-report.js'
+import * as manualSkills from './src/host/manual-skills.js'
 import * as localAgents from './src/host/local-agents/index.js'
+import * as deepseekServices from './src/host/deepseek-services.js'
 
 export { COLORS } from './src/host/constants.js'
 
-export const name = 'ds-bot'
-export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'sessions', 'sessionTitle', 'workspaceRegistry', 'connection']
+export { name, inject } from './src/host/entry.js'
 
 // Each module's install(rt) registers its listeners, tools, and effects, and puts on `rt`
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, groupLog, goals, approvals, resume, memory, parts, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, desktop, toolCalls, usage, update, dshUpdate, thinking, feed, im, channel, officeSkills, goalSkills, localAgents, monitor, readOnly, cloudExport]
+const MODULES = [diagnostics, store, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, botTasks, changes, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, desktop, toolCalls, usage, update, dshUpdate, thinking, mobile, feed, phone, mcpServer, im, channel, remote, officeSkills, goalSkills, manualSkills, localAgents, monitor, readOnly, cloudExport]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)
@@ -81,12 +91,16 @@ export function createRuntime(ctx, config = {}) {
     // The Bot-only tools each module defines; tools.js registers them in each
     // Bot Session's own scope, never globally (see shareBotTools).
     teamTools: [],
+    // False while MODULES are still installing so per-agent `tools/execute` hooks
+    // (steer.js) defer until host-level privacy/secrets wrappers have registered.
+    installed: false,
     defaults: {
       mainName: config.mainName ?? 'Chief',
       mainRole: config.mainRole ?? 'Chief of Staff',
     },
   }
   for (const module of MODULES) module.install(rt)
+  rt.installed = true
   // A live Agent can be scoped before the last module has added its tools (the memory
   // module starts a load during install): complete the scope now that every tool is in.
   rt.syncScopedTools?.()

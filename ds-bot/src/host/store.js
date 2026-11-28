@@ -8,6 +8,7 @@ import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, SECTION_COLORS, SECTION_NAME_
 import { replaceFile } from './files.js'
 import { homeLock } from './home-lock.js'
 import { currentColor, headOf, normalize, unquote } from './text.js'
+import { isActiveTask } from './threads.js'
 import { AMBIGUOUS_OLD_ROUTES, legacyRoute } from './local-agents/engines.js'
 
 // A table read that sees only the keys the table holds itself. Ids that come from
@@ -20,11 +21,12 @@ export function install(rt) {
   const { ctx, home, statePath } = rt
 
   /** @type {{version:1, workspaceId?:string, mainBotIds:string[], bots:Record<string,any>, privateArchives:any[], rooms:Record<string,any>, agents:Record<string,any>, sections:any[], capabilities:{items:Record<string,any>}, exchanges:any[], exchangeTurns:Record<string,number[]>, revision:number}} */
-  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, sections: [], capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, closedCards: {}, closedViews: {}, prefs: {}, switching: {}, revision: 0 }
+  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, sections: [], capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, closedCards: {}, prefs: {}, switching: {}, revision: 0 }
   let loaded = null
-  let snapshotReady = false
+  let storeReady = false
   let writing = Promise.resolve()
   const { warn } = rt
+  const sessionIdOf = id => (typeof id === 'string' && id !== '' ? id : undefined)
 
   const EMPTY = JSON.stringify(state)
   // The other dsh host that holds state.lock while this one only reads (see home-lock.js);
@@ -128,9 +130,23 @@ export function install(rt) {
       state.capabilities.items = {}
       migrated = true
     }
-    for (const bot of Object.values(state.bots)) {
+    if (state.bots === null || typeof state.bots !== 'object' || Array.isArray(state.bots)) state.bots = {}
+    if (state.rooms === null || typeof state.rooms !== 'object' || Array.isArray(state.rooms)) state.rooms = {}
+    for (const [id, bot] of Object.entries(state.bots)) {
+      if (!bot || typeof bot !== 'object' || Array.isArray(bot)) {
+        delete state.bots[id]
+        migrated = true
+        continue
+      }
+      if (sessionIdOf(bot.id) === undefined) bot.id = id
       if (!Array.isArray(bot.capabilities)) {
         bot.capabilities = []
+        migrated = true
+      }
+      const packs = Array.isArray(bot.packs) ? [...new Set(bot.packs.filter(name => typeof name === 'string' && !bot.capabilities.includes(name)))] : []
+      if (bot.packs === undefined) bot.packs = packs
+      else if (JSON.stringify(bot.packs) !== JSON.stringify(packs)) {
+        bot.packs = packs
         migrated = true
       }
       if (bot.color !== currentColor(bot.color)) {
@@ -147,6 +163,82 @@ export function install(rt) {
         delete bot.lab
         migrated = true
       }
+    }
+    for (const [id, room] of Object.entries(state.rooms)) {
+      if (!room || typeof room !== 'object' || Array.isArray(room)) {
+        delete state.rooms[id]
+        migrated = true
+        continue
+      }
+      if (sessionIdOf(room.id) === undefined) room.id = id
+      if (!Array.isArray(room.members)) room.members = []
+    }
+    // A Bot has one conversation at a time again: a team saved with parts opened while
+    // the Bot was busy (#1548, withdrawn) keeps them as earlier parts of its chat, still
+    // readable. Each live one is listed in `retiredParts` until its tasks have moved to
+    // the Bot's chat and its Session is archived, which stops what still runs there; the
+    // list is saved, so a host that cannot finish now finishes at a later start.
+    if (!Array.isArray(state.retiredParts)) delete state.retiredParts
+    const liveTeamSessions = new Set()
+    for (const [id, entry] of Object.entries(state.bots)) {
+      if (entry === null || typeof entry !== 'object') continue
+      const currentSid = sessionIdOf(entry.sessionId) ?? sessionIdOf(entry.id) ?? id
+      if (currentSid !== undefined) liveTeamSessions.add(currentSid)
+      for (const task of Array.isArray(entry.tasks) ? entry.tasks : []) {
+        const taskSid = sessionIdOf(task?.sessionId)
+        if (taskSid !== undefined) liveTeamSessions.add(taskSid)
+        for (const seg of Array.isArray(task?.segments) ? task.segments : []) {
+          const segSid = sessionIdOf(seg?.sessionId)
+          if (segSid !== undefined) liveTeamSessions.add(segSid)
+        }
+      }
+    }
+    for (const [id, room] of Object.entries(state.rooms)) {
+      if (room === null || typeof room !== 'object') continue
+      const roomSid = sessionIdOf(room.sessionId) ?? sessionIdOf(room.id) ?? id
+      if (roomSid !== undefined) liveTeamSessions.add(roomSid)
+      for (const sid of Object.values(room.sessions ?? {})) {
+        const memberSid = sessionIdOf(sid)
+        if (memberSid !== undefined) liveTeamSessions.add(memberSid)
+      }
+    }
+    let foldedOpenParts = false
+    for (const [id, bot] of Object.entries(state.bots)) {
+      if (bot === null || typeof bot !== 'object' || !Object.hasOwn(bot, 'openParts')) continue
+      const botId = sessionIdOf(bot.id) ?? id
+      const existingSegments = Array.isArray(bot.segments) ? bot.segments : []
+      const seen = new Set([...liveTeamSessions, ...existingSegments.map(segment => sessionIdOf(segment?.sessionId)).filter(Boolean)])
+      const now = Date.now()
+      const segments = Array.isArray(bot.segments) ? [...bot.segments] : []
+      // Earlier parts are kept in time order: each one starts where the one before ended.
+      const fold = (segment) => {
+        const at = segments.findIndex(other => Number(other?.endedAt) > segment.endedAt)
+        segments.splice(at === -1 ? segments.length : at, 0, segment)
+      }
+      for (const part of Array.isArray(bot.openParts) ? bot.openParts : []) {
+        const sid = sessionIdOf(part?.sessionId)
+        const earlier = Array.isArray(part?.segments) ? part.segments.filter(segment => sessionIdOf(segment?.sessionId) !== undefined) : []
+        if (sid === undefined && earlier.length === 0) continue
+        for (const segment of earlier) {
+          const segId = sessionIdOf(segment.sessionId)
+          if (seen.has(segId)) continue
+          seen.add(segId)
+          fold({ ...segment, endedAt: Number.isFinite(segment.endedAt) ? segment.endedAt : now })
+        }
+        // A live part has no end of its own: it is placed where its last Session began.
+        const began = Math.max(Number.isFinite(part.startedAt) ? part.startedAt : 0, ...earlier.map(segment => Number.isFinite(segment.endedAt) ? segment.endedAt : 0))
+        if (sid !== undefined && !seen.has(sid)) {
+          seen.add(sid)
+          fold({ sessionId: sid, endedAt: began > 0 ? began : now })
+          if (!(state.retiredParts ?? []).some(item => sessionIdOf(item?.sessionId) === sid)) {
+            (state.retiredParts ??= []).push({ sessionId: sid, botId })
+          }
+        }
+      }
+      if (segments.length > 0 || Array.isArray(bot.segments)) bot.segments = segments
+      delete bot.openParts
+      migrated = true
+      foldedOpenParts = true
     }
     if (migrateLocalRoutes(state)) migrated = true
     // A team from before several Main Bots were allowed names a single one.
@@ -194,9 +286,18 @@ export function install(rt) {
     }
     if (state.works === null || typeof state.works !== 'object' || Array.isArray(state.works)) state.works = {}
     if (state.requests === null || typeof state.requests !== 'object' || Array.isArray(state.requests)) state.requests = {}
+    // Group call batches (groups.js); a batch that is not whole is dropped.
+    if (state.roomBatches === null || typeof state.roomBatches !== 'object' || Array.isArray(state.roomBatches)) state.roomBatches = {}
+    for (const [key, batch] of Object.entries(state.roomBatches)) {
+      if (!Array.isArray(batch?.pending) || !Array.isArray(batch.done) || !Array.isArray(batch.results) || batch.key !== key) delete state.roomBatches[key]
+    }
     if (state.views === null || typeof state.views !== 'object' || Array.isArray(state.views)) state.views = {}
     if (state.closedCards === null || typeof state.closedCards !== 'object' || Array.isArray(state.closedCards)) state.closedCards = {}
-    if (state.closedViews === null || typeof state.closedViews !== 'object' || Array.isArray(state.closedViews)) state.closedViews = {}
+    // LEGACY: v0.3.2 kept closed dock views here, pinning them above the composer.
+    if ('closedViews' in state) {
+      delete state.closedViews
+      migrated = true
+    }
     // LEGACY: aside cards lived in this file only before the feature shipped;
     // they are kept under btw/ per part now. A saved copy is dropped, not moved.
     if ('btwCards' in state) {
@@ -260,15 +361,101 @@ export function install(rt) {
     const stale = Object.values(state.rooms).filter(room => !room.named && room.name !== rt.autoRoomName(room.members))
     for (const room of stale) room.name = rt.autoRoomName(room.members)
     indexSessions()
-    return { migrated: migrated || stale.length > 0, stale }
+    return { migrated: migrated || stale.length > 0, stale, foldedOpenParts }
+  }
+
+  const hasLoaded = () => storeReady
+  const notifyStoreSync = () => {
+    rt.onStoreSync?.()
+    rt.syncDeepseekTools?.()
+  }
+  const syncReadOnly = () => {
+    if (storeReady && adopting === undefined && (stuck !== undefined || holder !== undefined) && stamp() !== seen) {
+      adopt(readFileState())
+      notifyStoreSync()
+    }
+  }
+
+  // Finishes what the fold of withdrawn parallel parts left (see adopt): only the host
+  // that saves the team does it, and an entry stays listed until both steps succeed.
+  let retiring
+  let waitingForSchedules
+  // A part waiting to be retired may still run a turn, so it is not complete yet.
+  const isRetiring = sessionId => Array.isArray(state.retiredParts) && state.retiredParts.some(entry => entry?.sessionId === sessionId)
+  // How long retirement waits for DSH's schedule service, so no part is archived with
+  // its reminders still on it.
+  const scheduleDeadline = Date.now() + 10_000
+  const retireParts = () => {
+    if (retiring !== undefined || stopped || readOnly() !== undefined || !Array.isArray(state.retiredParts) || state.retiredParts.length === 0) return retiring
+    const epoch = lockEpoch
+    const run = (async () => {
+      // The schedule service attaches after the store loads.
+      await new Promise(resolve => setImmediate(resolve))
+      if (stopped || readOnly() !== undefined || lockEpoch !== epoch || !Array.isArray(state.retiredParts) || state.retiredParts.length === 0) return
+      if (rt.schedulesPending?.() === true && Date.now() < scheduleDeadline) {
+        waitingForSchedules ??= setTimeout(() => { waitingForSchedules = undefined; void retireParts() }, scheduleDeadline - Date.now())
+        waitingForSchedules.unref?.()
+        return
+      }
+      const snapshot = state.retiredParts.slice()
+      let changed = false
+      const dropEntry = (entry, sessionId) => {
+        if (!Array.isArray(state.retiredParts)) return
+        const before = state.retiredParts.length
+        state.retiredParts = state.retiredParts.filter(item => (sessionId !== undefined ? sessionIdOf(item?.sessionId) !== sessionId : item !== entry))
+        if (state.retiredParts.length !== before) changed = true
+      }
+      for (const entry of snapshot) {
+        if (stopped || readOnly() !== undefined || lockEpoch !== epoch || !Array.isArray(state.retiredParts)) return
+        const sessionId = sessionIdOf(entry?.sessionId)
+        try {
+          if (sessionId !== undefined) {
+            // Never archive or move schedules off any live team session (foreground chat,
+            // active #783 background task, group member session, or group's own session).
+            if (chatOwners.has(sessionId) || groupOwners.has(sessionId) || roomOwners.has(sessionId)) {
+              dropEntry(entry, sessionId)
+              continue
+            }
+            const target = botOf(entry.botId) === undefined ? undefined : chatOf(entry.botId)
+            const registry = ctx.workspaceRegistry
+            if (typeof rt.moveSchedules !== 'function' || typeof registry?.archiveSession !== 'function') continue
+            if (target !== undefined && target !== sessionId) await rt.moveSchedules(sessionId, target)
+            if (stopped || readOnly() !== undefined || lockEpoch !== epoch) return
+            try {
+              await registry.archiveSession(sessionId, { stopActivity: true })
+            } catch (archiveError) {
+              // Session already gone from DSH live registry and persistence: treat as retired.
+              if (archiveError?.name !== 'WorkspaceUnknownSessionError') throw archiveError
+            }
+          }
+          dropEntry(entry, sessionId)
+        } catch (error) {
+          warn('ds-bot: withdrawn parallel part %s not retired yet: %s', sessionId, error)
+        }
+      }
+      if (stopped || readOnly() !== undefined || lockEpoch !== epoch) return
+      if (Array.isArray(state.retiredParts) && state.retiredParts.length === 0) {
+        delete state.retiredParts
+        changed = true
+      }
+      if (changed) {
+        await save().catch(error => warn('ds-bot: saving the retired parallel parts failed: %s', error))
+      }
+    })()
+    const tracked = run.catch(error => warn('ds-bot: retiring withdrawn parallel parts failed: %s', error))
+      .finally(() => { if (retiring === tracked) retiring = undefined })
+    retiring = tracked
+    return tracked
   }
 
   const load = () => loaded ??= (async () => {
     claimLock()
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
     const { migrated, stale } = adopt(readFileState())
-    snapshotReady = true
+    storeReady = true
+    notifyStoreSync()
     if (holder !== undefined) return
+    void retireParts()
     if (migrated && stuck === undefined) {
       // A failed write must not poison `loaded`: the migrated state stays in
       // memory and the next save() writes it.
@@ -299,10 +486,21 @@ export function install(rt) {
           warn('ds-bot: %s changed while no host held the team; it is adopted, and this host\'s state is lost because it could not be kept aside: %s', statePath, error)
         }
       }
-      adopt(readFileState())
+      const { foldedOpenParts } = adopt(readFileState())
+      notifyStoreSync()
+      return foldedOpenParts
     })
     writing = run.catch(() => {})
-    const tracked = run.finally(() => { if (adopting === tracked) adopting = undefined })
+    const tracked = run.then((foldedOpenParts) => {
+      if (adopting === tracked) adopting = undefined
+      void retireParts()
+      if (foldedOpenParts && !(state.retiredParts?.length > 0) && stuck === undefined && !stopped && readOnly() === undefined) {
+        void save().catch(error => warn('ds-bot: saving the folded parallel parts failed: %s', error))
+      }
+    }, (error) => {
+      if (adopting === tracked) adopting = undefined
+      throw error
+    })
     adopting = tracked
     return tracked
   }
@@ -326,7 +524,12 @@ export function install(rt) {
       if (holder === undefined) {
         warn('ds-bot: the other dsh has closed; this one now saves the Bot team')
         warnedReadOnly = false
-        adopt(readFileState())
+        const { foldedOpenParts } = adopt(readFileState())
+        notifyStoreSync()
+        void retireParts()
+        if (foldedOpenParts && !(state.retiredParts?.length > 0) && stuck === undefined && !stopped) {
+          void save().catch(error => warn('ds-bot: saving the folded parallel parts failed: %s', error))
+        }
         return
       }
     } else if (!lockBroken && !lock.owns()) {
@@ -337,12 +540,18 @@ export function install(rt) {
       if (lockBroken) return
       if (holder === undefined) {
         await reclaimHeld()
+        notifyStoreSync()
         return
       }
       warn('ds-bot: %s', readOnly())
     }
-    if (adopting !== undefined) return adopting
+    if (adopting !== undefined) {
+      await adopting
+      notifyStoreSync()
+      return
+    }
     if ((stuck !== undefined || holder !== undefined) && stamp() !== seen) adopt(readFileState())
+    notifyStoreSync()
   }
 
   const warnReadOnly = () => {
@@ -430,7 +639,8 @@ export function install(rt) {
 
   ctx.effect(() => () => {
     stopped = true
-    return writing.finally(() => lock.release())
+    clearTimeout(waitingForSchedules)
+    return Promise.allSettled([writing, retiring]).finally(() => lock.release())
   }, 'ds-bot: state lock')
 
   const botOf = id => (id === undefined ? undefined : own(state.bots, id))
@@ -455,14 +665,16 @@ export function install(rt) {
   // archived and stay readable.
   /** @type {Map<string, string>} */
   const chatOwners = new Map()
+  /** @type {Map<string, {botId:string, taskId:string}>} */
+  const taskOwners = new Map()
   /** @type {Map<string, {botId:string, roomId:string}>} */
   const groupOwners = new Map()
   /** @type {Map<string, string>} */
   const roomOwners = new Map()
   /** @type {Map<string, {botId?:string, roomId?:string}>} */
   const pastOwners = new Map()
-  const chatOf = botId => botOf(botId)?.sessionId ?? botId
-  const sessionOfRoom = room => (room === undefined ? undefined : room.sessionId ?? room.id)
+  const chatOf = botId => sessionIdOf(botOf(botId)?.sessionId) ?? botId
+  const sessionOfRoom = room => (room === undefined ? undefined : sessionIdOf(room.sessionId) ?? room.id)
   // DSH turns away every step of an archived Session and every task aimed at it, so a
   // Session the team speaks from now leaves the archive: an earlier open of an old part
   // could leave one there, and DSH's own Session list can archive one. Earlier parts
@@ -489,21 +701,51 @@ export function install(rt) {
   }
   const indexSessions = () => {
     chatOwners.clear()
+    taskOwners.clear()
     groupOwners.clear()
     roomOwners.clear()
     pastOwners.clear()
-    for (const bot of Object.values(state.bots)) {
-      for (const segment of bot.segments ?? []) pastOwners.set(segment.sessionId, { botId: bot.id })
-      chatOwners.set(chatOf(bot.id), bot.id)
-    }
-    for (const room of Object.values(state.rooms)) {
-      const sessionId = sessionOfRoom(room)
-      if (sessionId !== undefined) roomOwners.set(sessionId, room.id)
-      for (const segment of room.parts ?? []) pastOwners.set(segment.sessionId, { roomId: room.id })
-      for (const [botId, segments] of Object.entries(room.segments ?? {})) {
-        for (const segment of segments) pastOwners.set(segment.sessionId, { botId, roomId: room.id })
+    const indexPast = (segments, owner) => {
+      if (!Array.isArray(segments)) return
+      for (const segment of segments) {
+        const sid = sessionIdOf(segment?.sessionId)
+        if (sid !== undefined) pastOwners.set(sid, owner)
       }
-      for (const [botId, sessionId] of Object.entries(room.sessions ?? {})) groupOwners.set(sessionId, { botId, roomId: room.id })
+    }
+    for (const [id, bot] of Object.entries(state.bots)) {
+      const botId = sessionIdOf(bot?.id) ?? sessionIdOf(id)
+      if (botId === undefined) continue
+      indexPast(bot.segments, { botId })
+      const currentSid = chatOf(botId)
+      if (sessionIdOf(currentSid) !== undefined) chatOwners.set(currentSid, botId)
+      // Background tasks keep their own stable records. Only
+      // active tasks stay in chatOwners/taskOwners; settled tasks move to pastOwners
+      // so folder/engine/model sweeps do not wake them again.
+      for (const task of bot.tasks ?? []) {
+        const taskSid = sessionIdOf(task?.sessionId)
+        const roomMeta = typeof task?.roomId === 'string' && task.roomId !== '' ? { roomId: task.roomId } : {}
+        if (taskSid !== undefined) {
+          if (isActiveTask(task)) {
+            chatOwners.set(taskSid, botId)
+            taskOwners.set(taskSid, { botId, taskId: task.id, ...roomMeta })
+          } else {
+            pastOwners.set(taskSid, { botId, ...roomMeta })
+          }
+        }
+        indexPast(task?.segments, { botId, ...roomMeta })
+      }
+    }
+    for (const [id, room] of Object.entries(state.rooms)) {
+      const roomId = sessionIdOf(room?.id) ?? sessionIdOf(id)
+      if (roomId === undefined) continue
+      const sessionId = sessionOfRoom(room)
+      if (sessionId !== undefined) roomOwners.set(sessionId, roomId)
+      indexPast(room.parts, { roomId })
+      for (const [botId, segments] of Object.entries(room.segments ?? {})) indexPast(segments, { botId, roomId })
+      for (const [botId, sessionId] of Object.entries(room.sessions ?? {})) {
+        const sid = sessionIdOf(sessionId)
+        if (sid !== undefined) groupOwners.set(sid, { botId, roomId })
+      }
     }
     // The agents module owns the DSH Agent session index, and tools.js re-syncs
     // the scoped tools with this ownership (drops Sessions that left, scopes
@@ -566,25 +808,20 @@ export function install(rt) {
   }
 
   // A question or view card closed without an answer on the card (dismissed, or
-  // answered by a message) stays in the chat, read-only: by Session, its call id
-  // and how it closed. A card answered on the card shows on its reply message.
+  // answered by a message) stays in the chat, read-only: by the Session where it
+  // was asked, its call id and how it closed. A card answered on the card shows
+  // on its reply message.
   const closeCard = (sessionId, card, outcome) => {
-    if (card === null || typeof card !== 'object') return
-    if (typeof card.callId === 'string') {
-      state.closedCards[sessionId] = { ...own(state.closedCards, sessionId), [card.callId]: outcome }
-      return
-    }
-    // A view card with no call row (a hidden Bot-to-Bot turn) has no place in the
-    // transcript: keep it above the composer instead of losing it. A question
-    // card without a call row has no dock form, and keeps its old behaviour.
-    if (card.view !== undefined && typeof card.id === 'string') state.closedViews[sessionId] = { id: card.id, title: typeof card.title === 'string' ? card.title : '', closed: outcome }
+    if (typeof card?.callId !== 'string') return
+    const target = typeof card.callSessionId === 'string' ? card.callSessionId : sessionId
+    state.closedCards[target] = { ...own(state.closedCards, target), [card.callId]: outcome }
   }
 
   Object.assign(rt, {
-    state, load, save, refresh, readOnly, own, onSaved, closeCard,
-    snapshotReady: () => snapshotReady,
+    state, load, save, refresh, readOnly, hasLoaded, retireParts, isRetiring, syncReadOnly, own, onSaved, closeCard,
+    snapshotReady: () => storeReady,
     botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
-    chatOwners, groupOwners, roomOwners, pastOwners,
+    chatOwners, taskOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
 }

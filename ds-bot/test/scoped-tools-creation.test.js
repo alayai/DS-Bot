@@ -1,3 +1,7 @@
+import { Context } from '@deepseek-ai/cordis'
+import { LlmAdapter, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,6 +10,7 @@ import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { TEAM_TOOLS } from '../src/host/constants.js'
 import { fakeContext } from './fake-ctx.js'
+import { BUILTIN_PACKS } from '../src/host/builtin-packs.js'
 
 // tools.js keeps the DSH names a Bot Session never serves in one place; the
 // assemble must add none of them.
@@ -179,12 +184,193 @@ const hasShowView = (host, id) => host.scoped.some(entry => entry.sessionId === 
 const denied = (host, id) => host.restricted.some(entry => entry.sessionId === id && entry.deny.includes('ask_user_question'))
 const scopedNames = (host, id) => host.scoped.filter(entry => entry.sessionId === id).map(entry => entry.name)
 
+test('a Bot assembly can omit sections and tools', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  const agent = host.agentOf('a')
+  let filter
+  agent.ctx.on = (name, listener) => { if (name === 'system-prompt/assemble' && String(listener).includes('HIDDEN_SECTIONS')) filter = listener; return () => {} }
+  await host.agentCreated('a')
+  assert.deepEqual(await filter({}, {}, async () => ({})), {})
+  const result = await filter({}, {}, async () => ({ sections: [{ name: 'team:policy' }, { name: 'keep' }], tools: [{ name: 'subagent' }, { name: 'list_bots' }] }))
+  assert.deepEqual(result, { sections: [{ name: 'keep' }], tools: [{ name: 'list_bots' }] })
+})
+
+test('team-admin filtering preserves other tools and sessions, including empty requests', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  const names = BUILTIN_PACKS['team-admin'].tools
+  assert.deepEqual(names, ['create_bot', 'stop_bot', 'create_group', 'delete_group'])
+  for (const id of ['a', 'b', 'plain']) {
+    const agent = host.agentOf(id)
+    let filter
+    agent.ctx.on = (name, listener) => { if (name === 'llm/stream') filter = listener; return () => {} }
+    await host.agentCreated(id)
+    if (id === 'plain') { assert.equal(filter, undefined); continue }
+    agent.ctx.llm = { stream: options => filter(options, () => options) }
+    const available = ['update_bot', 'update_group', 'list_bot_models', 'list_bots', 'save_capability', 'schedule_create', 'group_goal']
+    const options = { tools: [...names, ...available].map(name => ({ name })) }
+    const result = filter(options, () => options)
+    assert.deepEqual(result.tools.map(tool => tool.name), id === 'a' ? options.tools.map(tool => tool.name) : available)
+    for (const empty of [{}, { tools: [] }]) assert.equal(filter(empty, () => empty), empty)
+  }
+})
+
+for (const main of [false, true]) {
+  for (const group of [false, true]) {
+    test(`real DSH ${group ? 'group' : 'own-chat'} turn freezes team-admin during ${main ? 'demotion' : 'promotion'}`, async (t) => {
+      const team = structuredClone(TEAM)
+      team.rooms.r1.sessions = { a: 'ga', b: 'gb' }
+      const host = start(team)
+      t.after(host.stop)
+      await host.call('state', {})
+      const botId = main ? 'a' : 'b'
+      const id = group ? `g${botId}` : botId
+      const root = new Context()
+      t.after(() => root.fiber.dispose())
+      await mountAgentLoopTestDependencies(root)
+      const seen = []
+      class Adapter extends LlmAdapter {
+        async resolveModel(provider, id) { return { provider, id, name: id, inputModalities: ['text'], context: { contextWindow: 100000 } } }
+        async *stream(options) {
+          seen.push(options.tools.map(tool => tool.name))
+          if (seen.length === 1) {
+            yield { type: 'tool-call-delta', index: 0, id: 'flip', name: 'flip_role', argumentsDelta: '{}' }
+            yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'flip', name: 'flip_role', arguments: '{}' } }
+            yield { type: 'finish', reason: { kind: 'tool-calls' } }
+          } else yield { type: 'finish', reason: { kind: 'stop' } }
+        }
+      }
+      root.llm.registerAdapter(['role-test'], new Adapter())
+      await mountAgentLoopTestHarness(root)
+      root.on('session/event', host.ctx.listeners.get('session/event').find(listener => listener.name === 'freezeBuiltinPacks'))
+      const agent = await root.agentLoop.create(SessionId(id), { provider: 'role-test', model: 'test' })
+      await host.ctx.listeners.get('agent/created').find(listener => String(listener).includes('hideBotUnusedTools(agent)'))({ agent })
+      const message = text => createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] })
+      agent.ctx.tools.register({ name: 'flip_role', description: 'Change role', parameters: { type: 'object', properties: {} },
+        output: { schema: { type: 'string' }, render: () => [] },
+        execute() {
+          rt.state.mainBotIds = main ? ['b'] : ['a', 'b']
+          agent.followup(message('queued next turn'))
+          return 'changed'
+        },
+      })
+      agent.followup(message('first turn'))
+      await agent.whenIdle()
+      assert.equal(seen.length, 3)
+      for (const [index, tools] of seen.entries()) {
+        for (const name of BUILTIN_PACKS['team-admin'].tools) assert.equal(tools.includes(name), index < 2 ? main : !main, `${name} at request ${index}`)
+        for (const name of ['update_bot', 'update_group', 'list_bot_models']) assert.ok(tools.includes(name), `${name} stays available at request ${index}`)
+        assert.ok(tools.includes('list_bots'))
+        assert.ok(tools.includes('save_capability'))
+      }
+    })
+  }
+}
+
+test('team tools retry without a step, without registering successful tools twice', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  const agent = host.agentOf('a')
+  const register = agent.ctx.tools.register
+  agent.ctx.tools.register = undefined
+  await host.agentCreated('a')
+  let refused = false
+  agent.ctx.tools.register = tool => {
+    if (tool.name === 'list_bots' && !refused) { refused = true; throw new Error('not ready') }
+    return register(tool)
+  }
+  await until(() => scopedNames(host, 'a').includes('list_bots'), 5000)
+  for (const name of TEAM_TOOLS.filter(name => name !== 'read_browser' && name !== 'read_document')) assert.equal(scopedNames(host, 'a').filter(n => n === name).length, 1)
+})
+
+test('team tool retries stop at a bound and are cleaned up with their scope', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const agent = host.agentOf('a')
+  let attempts = 0
+  agent.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
+  const agentDisposers = []
+  agent.ctx.effect = execute => { agentDisposers.push(execute()) }
+  await host.agentCreated('a')
+  const initial = attempts
+  for (let i = 0; i < 10; i++) t.mock.timers.tick(1000)
+  assert.ok(attempts > initial)
+  const exhausted = attempts
+  assert.equal(exhausted, initial * 6)
+  t.mock.timers.tick(60_000)
+  assert.equal(attempts, exhausted)
+  for (const dispose of agentDisposers) dispose?.()
+  const other = host.agentOf('b')
+  const otherDisposers = []
+  other.ctx.effect = execute => { otherDisposers.push(execute()) }
+  other.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
+  await host.agentCreated('b')
+  for (const dispose of otherDisposers) dispose?.()
+  const disposed = attempts
+  t.mock.timers.tick(1000)
+  assert.equal(attempts, disposed)
+  const room = host.agentOf('r1')
+  room.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
+  await host.agentCreated('r1')
+  await host.unload()
+  const unloaded = attempts
+  t.mock.timers.tick(60_000)
+  assert.equal(attempts, unloaded)
+})
+
 test('a Bot Session gets every team tool in its own scope', async (t) => {
   const host = start()
   t.after(host.stop)
   await host.call('state', {})
   await host.agentCreated('a')
-  assert.deepEqual(scopedNames(host, 'a').sort(), [...TEAM_TOOLS].filter(name => name !== 'read_browser').sort())
+  assert.deepEqual(scopedNames(host, 'a').sort(), [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'read_document').sort())
+})
+
+test('a Bot with no connector off never reads the served schemas for the mask', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  rt.connectorOffFor = () => []
+  const before = host.restricted.length
+  let reads = 0
+  const served = host.ctx.tools.schemas
+  host.ctx.tools.schemas = (agent) => { reads += 1; return served(agent) }
+  rt.reapplyToolMasks()
+  assert.equal(reads, 0)
+  assert.equal(host.restricted.length, before)
+})
+
+test('an off connector masks all its tools in one scope', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  host.ctx.tools.schemas = () => [{ name: 'ask_user_question' }, { name: 'mcp__notion__search' }, { name: 'mcp__notion__fetch' }]
+  rt.connectorOffFor = () => ['mcp__notion__']
+  rt.reapplyToolMasks()
+  const masks = host.restricted.filter(entry => entry.sessionId === 'a' && entry.deny.some(name => name.startsWith('mcp__notion__')))
+  assert.equal(masks.length, 1)
+  assert.deepEqual(masks[0].deny, ['mcp__notion__search', 'mcp__notion__fetch'])
+})
+
+test('two prefixes matching the same tool deny it once', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  host.ctx.tools.schemas = () => [{ name: 'mcp__notion__search' }, { name: 'mcp__notion__fetch' }, { name: 'mcp__other__read' }]
+  rt.connectorOffFor = () => ['mcp__notion__', 'mcp__notion__search']
+  rt.reapplyToolMasks()
+  const masks = host.restricted.filter(entry => entry.sessionId === 'a' && entry.deny.some(name => name.startsWith('mcp__notion__')))
+  assert.equal(masks.length, 1, 'one restrict for the overlapping prefixes')
+  assert.deepEqual(masks[0].deny, ['mcp__notion__search', 'mcp__notion__fetch'])
 })
 
 test('a Bot moved onto a local agent route gets the approval bridge, and loses it moving off', async (t) => {
@@ -226,15 +412,15 @@ test("a group's own Session is scoped to group_relay alone", async (t) => {
   assert.deepEqual(scopedNames(host, 'r1'), ['group_relay'])
 })
 
-test("another plugin's global recall cannot stop ds-bot or shadow its own", async (t) => {
+test("a Bot Session receives bot_recall alongside another plugin's global recall", async (t) => {
   // #703: a same-named global tool from another plugin must not fail apply(),
-  // and inside a Bot Session ds-bot's recall still wins.
+  // and inside a Bot Session ds-bot's bot_recall is served separately.
   const host = start(TEAM, {}, [{ name: 'recall', description: 'foreign recall', execute: async () => 'foreign' }])
   t.after(host.stop)
   assert.equal(host.ctx.registeredTools.get('recall').description, 'foreign recall')
   await host.call('state', {})
   await host.agentCreated('a')
-  const recall = host.scoped.find(entry => entry.sessionId === 'a' && entry.name === 'recall')
+  const recall = host.scoped.find(entry => entry.sessionId === 'a' && entry.name === 'bot_recall')
   assert.match(String(recall?.tool?.description), /^Search your memory/)
 })
 
@@ -360,6 +546,47 @@ test('a Session that becomes a Bot\'s again gets the scope back', async (t) => {
   assert.ok(hasShowView(host, 'b'))
 })
 
+// public#1508: a connector MCP tool whose property is a union with no type of its own
+// made Moonshot/KIMI refuse every turn, while other providers accepted it. The step's
+// assemble hands connector schemas on plain; other tools keep the schema they had.
+test('a connector tool schema reaches the model without unions, and other tools are left alone', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  const listener = host.ctx.listeners.get('llm/stream')
+    .find(listener => /plainConnectorSchemas/.test(String(listener)))
+  assert.ok(listener, 'the connector schema listener is registered')
+  const parameters = {
+    type: 'object',
+    properties: {
+      sort_order: { oneOf: [{ type: 'string' }, { type: 'null' }], enum: ['ASC', 'DESC', null], description: 'Sort Order', title: 'Sort Order' },
+    },
+  }
+  const read = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+  const assembly = {
+    tools: [
+      { name: 'mcp__drupal__entity_list', description: 'List entities', parameters },
+      { name: 'read', description: 'Read a file', parameters: read },
+    ],
+    sections: [],
+  }
+  host.ctx.llm.stream = options => listener(options, () => options)
+  const assembled = listener(assembly, () => assembly)
+  const connector = assembled.tools.find(tool => tool.name === 'mcp__drupal__entity_list')
+  assert.deepEqual(connector.parameters.properties.sort_order, {
+    type: 'string',
+    enum: ['ASC', 'DESC'],
+    description: 'Sort Order',
+    title: 'Sort Order',
+  })
+  assert.equal(connector.parameters.type, 'object')
+  // Another tool's schema is the same object: it was already plain.
+  assert.equal(assembled.tools.find(tool => tool.name === 'read').parameters, read)
+  // The same schema next step is served from the cache, unchanged.
+  const again = listener(assembly, () => assembly)
+  assert.equal(again.tools[0].parameters, connector.parameters)
+})
+
 // #826: after a DSH restart the creation path can miss a live Agent and nothing
 // scoped it again, so the Session ran its requests without the team tools. The
 // step's assemble scopes an owned Session the creation path missed and adds the
@@ -388,7 +615,7 @@ test("a Bot's own Session the creation path missed gets the whole scope at the a
   await host.call('state', {})
   const agent = host.agentOf('a')
   const assembled = await assemble(host, agent, { tools: [{ name: 'read' }], sections: [] })
-  const expected = [...TEAM_TOOLS].filter(name => name !== 'read_browser').sort()
+  const expected = [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'read_document').sort()
   assert.deepEqual(scopedNames(host, 'a').sort(), expected)
   assert.deepEqual(assembled.tools.map(tool => tool.name).sort(), ['read', ...expected].sort())
   // The hidden DSH tools are masked and filtered as on the creation path: none
@@ -461,6 +688,44 @@ test('the assemble adds the recovered names once, not on every step', async (t) 
   assert.equal(await assemble(host, agent, second), second)
 })
 
+test('enabling OCR after a Bot is scoped, then disabling it, removes the scoped schema', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
+  const on = await host.call('deepseek-services-config', { ocr: true })
+  assert.equal(on.ok, true)
+  assert.equal(on.value.ocr.enabled, true)
+  assert.equal(scopedNames(host, 'a').includes('read_document'), true)
+  const off = await host.call('deepseek-services-config', { ocr: false })
+  assert.equal(off.ok, true)
+  assert.equal(off.value.ocr.enabled, false)
+  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
+})
+
+test('removeTeamTool still unloads other live Bots when one disposer throws', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  await host.agentCreated('b')
+  const agentA = host.agentOf('a')
+  const origRegister = agentA.ctx.tools.register
+  agentA.ctx.tools.register = (tool) => {
+    const dispose = origRegister(tool)
+    if (tool.name !== 'read_document') return dispose
+    return () => { dispose(); throw new Error('already disposed') }
+  }
+  await host.call('deepseek-services-config', { ocr: true })
+  assert.equal(scopedNames(host, 'a').includes('read_document'), true)
+  assert.equal(scopedNames(host, 'b').includes('read_document'), true)
+  const off = await host.call('deepseek-services-config', { ocr: false })
+  assert.equal(off.ok, true)
+  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
+  assert.equal(scopedNames(host, 'b').includes('read_document'), false)
+})
+
 test('a live Bot Session gets its team tools back after a disable and re-enable', async (t) => {
   // A hot reload lifts the scope of Agents that are still live, and
   // agent/created does not fire again: the sync at the next load must scope
@@ -481,4 +746,49 @@ test('a live Bot Session gets its team tools back after a disable and re-enable'
   await second.call('state', {})
   assert.ok(hasShowView(second, 'a'), 'the scoped team tools are back')
   assert.ok(denied(second, 'a'), 'the blocking question tool is denied again')
+})
+
+
+test('the real DSH loop normalizes connector parameters after tool assembly', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  const root = new Context()
+  t.after(() => root.fiber.dispose())
+  await mountAgentLoopTestDependencies(root)
+  let seen
+  class Adapter extends LlmAdapter {
+    async resolveModel(provider, id) { return { provider, id, name: id, inputModalities: ['text'], context: { contextWindow: 100000 } } }
+    async *stream(options) { seen = options; yield { type: 'finish', reason: { kind: 'stop' } } }
+  }
+  root.llm.registerAdapter(['schema-test'], new Adapter())
+  root.on('llm/stream', host.ctx.listeners.get('llm/stream').find(listener => /plainConnectorSchemas/.test(String(listener))))
+  host.ctx.llm.stream = options => root.llm.stream(options)
+  root.tools.register({ name: 'mcp__drupal__entity_list', description: 'List entities',
+    parameters: { type: 'object', properties: { sort_order: { oneOf: [{ type: 'string' }, { type: 'null' }], enum: ['ASC', 'DESC', null] } } },
+    output: { schema: { type: 'string' }, render: () => [] }, execute: async () => '',
+  })
+  await mountAgentLoopTestHarness(root)
+  const agent = await root.agentLoop.create(SessionId('schema-session'), { provider: 'schema-test', model: 'test' })
+  const idle = new Promise(resolve => {
+    const off = root.on('agent/status', ({ agent: subject, status }) => { if (subject === agent && status === 'idle') { off(); resolve() } })
+  })
+  agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] }))
+  await idle
+  assert.deepEqual(seen.tools.find(tool => tool.name === 'mcp__drupal__entity_list').parameters.properties.sort_order, { type: 'string', enum: ['ASC', 'DESC'] })
+})
+
+test('reapplying a connector mask keeps tools that the current scope already hides', async (t) => {
+  const host = start()
+  t.after(host.stop)
+  await host.call('state', {})
+  await host.agentCreated('a')
+  const name = 'mcp__notion__search'
+  host.ctx.tools.schemas = agent => host.restricted.some(entry => entry.sessionId === agent.id && entry.deny.includes(name)) ? [] : [{ name }]
+  rt.connectorOffFor = () => ['mcp__notion__']
+  rt.reapplyToolMasks()
+  rt.reapplyToolMasks()
+  assert.ok(host.restricted.some(entry => entry.sessionId === 'a' && entry.deny.includes(name)))
+  rt.connectorOffFor = () => []
+  rt.reapplyToolMasks()
+  assert.equal(host.restricted.some(entry => entry.sessionId === 'a' && entry.deny.includes(name)), false)
 })

@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.3.5",
+  "version": "0.3.11",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -22,20 +22,23 @@
   },
   "license": "Apache-2.0",
   "type": "module",
-  "main": "index.js",
+  "main": "plugin.js",
   "exports": {
-    ".": "./index.js",
+    ".": "./plugin.js",
     "./client": "./client.js",
     "./web-search": "./web-search.js",
     "./package.json": "./package.json"
   },
   "files": [
+    "bin/",
+    "plugin.js",
     "index.js",
     "src/host/",
     "src/shared/",
     "src/office/",
     "client.js",
     "computer-runtime/",
+    "link.js",
     "office.js",
     "web-search.js",
     "cordis.patch.yml",
@@ -45,9 +48,10 @@
     "licenses/"
   ],
   "scripts": {
-    "build": "node scripts/build-client.mjs && node scripts/build-computer-runtime.mjs",
-    "prepack": "node scripts/build-computer-runtime.mjs",
+    "build": "node scripts/build-client.mjs && node scripts/build-link.mjs && node scripts/build-computer-runtime.mjs",
+    "prepack": "node scripts/build-link.mjs && node scripts/build-computer-runtime.mjs",
     "test": "node --import ./test/harness-resolve.mjs --test --test-timeout=120000 --test-force-exit \"test/*.test.js\"",
+    "test:browser": "node --import ./test/harness-resolve.mjs --test --test-concurrency=1 --test-timeout=120000 --test-force-exit \"test/browser/*.test.js\"",
     "lint": "node scripts/lint.mjs",
     "harness": "node scripts/install-harness.mjs",
     "check": "sh dev/check.sh"
@@ -57,6 +61,7 @@
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-scope": "*",
     "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-typert-protocol": "*",
     "@deepseek-ai/dsh-web": "*"
   },
   "dsh": {
@@ -70,7 +75,9 @@
   "devDependencies": {
     "@xmldom/xmldom": "0.9.12",
     "esbuild": "0.28.2",
-    "qrcode-generator": "2.0.4"
+    "qrcode-generator": "2.0.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
@@ -78,9 +85,17 @@
     "@novnc/novnc": "1.5.0",
     "deep-view": "0.1.2",
     "imapflow": "2.9.1",
+    "jpeg-js": "0.4.4",
     "mailparser": "3.12.4",
     "nodemailer": "10.2.1",
     "playwright-core": "1.64.1",
-    "ws": "8.22.0"
+    "pngjs": "7.0.0",
+    "semver": "^7.8.6",
+    "undici": "8.11.2",
+    "ws": "8.18.3"
+  },
+  "bin": {
+    "ds-bot": "./bin/ds-bot-doctor.mjs",
+    "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
   }
 }

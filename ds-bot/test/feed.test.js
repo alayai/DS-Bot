@@ -73,6 +73,30 @@ function reader(response) {
   }
 }
 
+test('state and live feed keep question and view routing metadata private', async (t) => {
+  const imOrigin = { connId: 'private-connection', chatKey: 'private-chat', binding: 'room:r1' }
+  const question = { id: 'q1', question: 'Which?', options: [{ label: 'A' }] }
+  const view = { id: 'v1', title: 'Proceed?', view: { type: 'confirm', id: 'go' } }
+  const { call, stop, routes } = start({ team: { ...TEAM, questions: { m1c: { ...question, imOrigin } }, views: { b2: { ...view, imOrigin } } } })
+  t.after(stop)
+  const state = await call('state')
+  assert.deepEqual(state.value.questions.m1c, question)
+  assert.deepEqual(state.value.views.b2, view)
+  assert.ok(!JSON.stringify(state).includes('imOrigin'))
+  const abort = new AbortController()
+  t.after(() => abort.abort())
+  const response = await routes['/api/bot/feed'].fetch(new Request('http://localhost/api/bot/feed', { signal: abort.signal }))
+  const next = reader(response)
+  const hello = await next()
+  assert.equal(hello.event, 'hello')
+  assert.ok(!JSON.stringify(hello).includes('imOrigin'))
+  const changed = await call('set-prefs', { motion: 'lively' })
+  assert.ok(!JSON.stringify(changed).includes('imOrigin'))
+  const revision = await next()
+  assert.equal(revision.event, 'revision')
+  assert.ok(!JSON.stringify(revision).includes('imOrigin'))
+})
+
 test('the live feed tells a window about saves, new chat entries and the reply being written', async (t) => {
   const { ctx, call, stop, routes } = start()
   t.after(stop)
@@ -120,6 +144,20 @@ test('the live feed tells a window about saves, new chat entries and the reply b
 
   abort.abort()
   assert.equal(await next(), undefined)
+})
+
+test('a DSH Agent Session changing status tells a window to read the live state', async (t) => {
+  const agent = { id: 'a1', name: 'DSH Agent', sessions: ['s-agent'], createdAt: 4 }
+  const { ctx, call, stop, routes } = start({ team: { ...TEAM, agents: { a1: agent } } })
+  t.after(stop)
+  await call('state')
+  const abort = new AbortController()
+  const response = await routes['/api/bot/feed'].fetch(new Request('http://localhost/api/bot/feed', { signal: abort.signal }))
+  const next = reader(response)
+  assert.equal((await next()).event, 'hello')
+  ctx.listeners.get('agent/status').at(-1)({ agent: { id: agent.sessions[0] }, status: 'running' })
+  assert.deepEqual(await next(), { event: 'live', data: {} })
+  abort.abort()
 })
 
 test('a window that stops reading the feed is dropped', { timeout: 10_000 }, async (t) => {
@@ -233,15 +271,22 @@ test('a display view is retained when its part becomes earlier history', async (
   assert.deepEqual(page.items, [{ kind: 'view', title: 'Earlier card', view, callId: 'old-view', time: 20 }])
 })
 
-test('a question or view card closed without an answer reads back in earlier history; an answered one does not', async (t) => {
+test('a question or view card closed without an answer reads back in earlier history, including hidden turns; an answered one does not', async (t) => {
   const options = [{ label: 'Short' }, { label: 'Long' }]
   const pick = { type: 'options', id: 'lane', options: [{ label: 'Ship now' }] }
+  const meter = { type: 'metric', label: 'Done', value: '3' }
   const events = [
     { type: 'tool/call', time: 20, seq: 3, data: { turn: 1, callId: 'q-closed', name: 'ask_user', arguments: JSON.stringify({ question: 'Which draft?', options }) } },
     { type: 'tool/call', time: 21, seq: 4, data: { turn: 1, callId: 'q-answered', name: 'ask_user', arguments: JSON.stringify({ question: 'Answered', options }) } },
     { type: 'tool/call', time: 22, seq: 5, data: { turn: 1, callId: 'v-closed', name: 'show_view', arguments: JSON.stringify({ title: 'Pick a lane', view: pick }) } },
+    { type: 'tool/call', time: 23, seq: 6, data: { turn: 2, callId: 'v-hidden-meter', name: 'show_view', arguments: JSON.stringify({ title: 'Hidden meter', view: meter }) } },
+    { type: 'tool/call', time: 24, seq: 7, data: { turn: 2, callId: 'v-hidden-closed', name: 'show_view', arguments: JSON.stringify({ title: 'Browser default?', view: pick }) } },
   ]
-  const team = { ...TEAM, closedCards: { m1: { 'q-closed': 'replied', 'v-closed': 'dismissed' } } }
+  const team = {
+    ...TEAM,
+    exchangeTurns: { ...TEAM.exchangeTurns, m1: [2] },
+    closedCards: { m1: { 'q-closed': 'replied', 'v-closed': 'dismissed', 'v-hidden-closed': 'replied' } },
+  }
   const { call, stop } = start({ team, pages: { 'm1:end': { records: events.map(event => ({ event })), hasMore: false } } })
   t.after(stop)
   await call('state')
@@ -249,6 +294,7 @@ test('a question or view card closed without an answer reads back in earlier his
   assert.deepEqual(page.items, [
     { kind: 'closed', closed: 'replied', question: { question: 'Which draft?', options, multiSelect: false }, callId: 'q-closed', time: 20 },
     { kind: 'closed', closed: 'dismissed', title: 'Pick a lane', view: pick, callId: 'v-closed', time: 22 },
+    { kind: 'closed', closed: 'replied', title: 'Browser default?', view: pick, callId: 'v-hidden-closed', time: 24 },
   ])
 })
 

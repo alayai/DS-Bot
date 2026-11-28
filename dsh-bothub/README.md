@@ -335,7 +335,7 @@ for replay limits, reconnect behavior, verification and current coverage.
 DSH Web `0.2.2-rc.1`. Install the
 companion DS Bot archive from the **same candidate directory** first, then the
 BotHub archive, through the host plugin manager's local bundle installation.
-The DS Bot archive identifies as `0.3.5`; its version alone cannot prove
+The DS Bot archive identifies as `0.3.11`; its version alone cannot prove
 bridge compatibility. Verify the candidate's SHA-256 manifest and restart the
 host after updating both bundles. Keep exactly one enabled copy of each bundle.
 An old published DS Bot is insufficient.

@@ -3,7 +3,7 @@
 // lists the saved keys and who may use them. Values only ever travel from these
 // inputs to the host; nothing here reads one back.
 import { createElement as h, useEffect, useId, useRef, useState } from 'react'
-import { CheckIcon, CloseIcon, TrashIcon } from './icons.js'
+import { CheckIcon, CloseIcon, PlusIcon, TrashIcon } from './icons.js'
 import { BotAvatar, BotMark } from './mark.js'
 import { contentText, currentPart } from './text.js'
 import { dateLocale, t } from './i18n.js'
@@ -16,7 +16,7 @@ const MIN_VALUE = 4
 const NONE = {}
 
 export const KeyIcon = () => h('svg', { width: 15, height: 15, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
-  h('path', { d: 'M7 9.5a3.5 3.5 0 1 1 0 .01z' }), h('path', { d: 'M10.4 10.6L17 10.6M14.5 10.6v2.4M16.6 10.6v1.8' }))
+  h('circle', { cx: 6.75, cy: 10, r: 3.25 }), h('path', { d: 'M10 10h7M14.25 10v2.5M16.75 10v1.8' }))
 const LockIcon = () => h('svg', { width: 14, height: 14, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
   h('path', { d: 'M6.5 9V7a3.5 3.5 0 0 1 7 0v2' }), h('rect', { x: 4.5, y: 9, width: 11, height: 8, rx: 2 }))
 const WarnIcon = () => h('svg', { width: 14, height: 14, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
@@ -56,7 +56,7 @@ export function MaskedInput({ value, onChange, onEnter, label, autoFocus = false
     placeholder: label ?? t('Paste or type the key'),
     onChange: event => onChange(event.target.value),
     onKeyDown: (event) => {
-      if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+      if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return
       event.preventDefault()
       onEnter?.()
     },
@@ -279,29 +279,103 @@ function AddSecret({ actions, run, onDone }) {
     h('div', { className: 'bt-secret-row-actions' },
       h('span', { className: 'bt-set-hint' }, t('New keys are for all Bots; narrow it down afterwards.')),
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: onDone }, t('Cancel')),
-      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: !ready, onClick: save }, t('Save key'))))
+      h('button', { type: 'button', className: 'bt-send bt-soft-sm', disabled: !ready, onClick: save }, t('Save key'))))
+}
+
+// The optional encryption card at the top of Settings → Secrets. Off is the default
+// and keeps today's file; on rewrites the same secrets.json as a passphrase-locked
+// envelope. A start without a passphrase shows the locked state here, with the way to
+// unlock it and the environment source for unattended runs.
+function SecretStoreCard({ store, actions, run, Section }) {
+  const mode = store?.mode ?? 'plaintext'
+  const locked = store?.locked === true
+  const [passphrase, setPassphrase] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [form, setForm] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const reset = () => { setPassphrase(''); setConfirm(''); setForm(null) }
+  const submit = action => {
+    if (busy || passphrase.length < 8) return
+    setBusy(true)
+    void run(action(passphrase)).then(ok => { if (ok) reset() }).finally(() => setBusy(false))
+  }
+  const field = (label, value, onChange, autoFocus) => h('label', { className: 'bt-q-field bt-secret-field' },
+    h(MaskedInput, { value, onChange, label, autoFocus }))
+  const row = children => h('div', { className: 'bt-secret-row-actions' }, children)
+  if (locked) {
+    const reason = store?.reason
+    const why = reason === 'passphrase-source'
+      ? t('The passphrase file named by DS_BOT_SECRETS_PASSPHRASE_FILE could not be read.')
+      : reason === 'wrong-passphrase'
+        ? t('The passphrase in the environment or the passphrase file did not unlock the secrets.')
+        : t('No passphrase was found at startup. Enter it here, or set DS_BOT_SECRETS_PASSPHRASE_FILE for unattended starts.')
+    return h(Section, { title: t('Encryption at rest'), tour: 'secret-encrypt' },
+      h('div', { className: 'bt-set-row bt-bs-stack' },
+        h('span', { className: 'bt-set-copy' },
+          h('span', { className: 'bt-bs-label' }, t('Secrets are locked')),
+          h('span', { className: 'bt-set-hint' }, why)),
+        field(t('Passphrase'), passphrase, setPassphrase, true),
+        row(h('button', { type: 'button', className: 'bt-send bt-soft-sm', disabled: busy || passphrase.length < 8, onClick: () => submit(actions.secretUnlock) }, t('Unlock')))))
+  }
+  if (mode === 'encrypted') {
+    const desc = t('Keys are stored encrypted. They stay decrypted in memory while DS Bot runs.')
+    return h(Section, { title: t('Encryption at rest'), tour: 'secret-encrypt' },
+      form === 'decrypt'
+        ? [
+            h('div', { key: 'hint', className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, desc)),
+            h('div', { key: 'form', className: 'bt-set-row bt-bs-stack' },
+              field(t('Passphrase'), passphrase, setPassphrase, true),
+              row([
+                h('button', { key: 'cancel', type: 'button', className: 'bt-soft bt-soft-sm', onClick: reset }, t('Cancel')),
+                h('button', { key: 'off', type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || passphrase.length < 8, onClick: () => submit(actions.secretDecrypt) }, t('Turn off encryption')),
+              ])),
+          ]
+        : h('div', { className: 'bt-set-row' },
+          h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-set-hint' }, desc)),
+          h('span', { className: 'bt-set-control' },
+            h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => { setForm('decrypt'); setPassphrase('') } }, t('Turn off encryption')))))
+  }
+  const desc = t('Keys are stored in a file only this user can read, but the values are not encrypted.')
+  return h(Section, { title: t('Encryption at rest'), tour: 'secret-encrypt' },
+    form === 'encrypt'
+      ? [
+          h('div', { key: 'hint', className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, desc)),
+          h('div', { key: 'form', className: 'bt-set-row bt-bs-stack' },
+            field(t('Passphrase (at least 8 characters)'), passphrase, setPassphrase, true),
+            field(t('Repeat the passphrase'), confirm, setConfirm),
+            confirm !== '' && confirm !== passphrase ? h('div', { className: 'bt-set-hint' }, t('The passphrases do not match.')) : null,
+            row([
+              h('button', { key: 'cancel', type: 'button', className: 'bt-soft bt-soft-sm', onClick: reset }, t('Cancel')),
+              h('button', { key: 'on', type: 'button', className: 'bt-send bt-soft-sm', disabled: busy || passphrase.length < 8 || passphrase !== confirm, onClick: () => submit(actions.secretEncrypt) }, t('Turn on encryption')),
+            ])),
+        ]
+      : h('div', { className: 'bt-set-row' },
+        h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-set-hint' }, desc)),
+        h('span', { className: 'bt-set-control' },
+          h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => setForm('encrypt') }, t('Encrypt keys at rest')))))
 }
 
 export function SecretsPage({ roster, actions, run, Section }) {
   const [open, setOpen] = useState(null)
   const [adding, setAdding] = useState(false)
   const secrets = roster.secrets ?? []
+  const addBtn = adding ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm bt-with-icon', 'data-tour': 'secret-add', onClick: () => setAdding(true) }, h(PlusIcon), t('Add a key'))
   return [
+    h(SecretStoreCard, { key: 'store', store: roster.secretStore, actions, run, Section }),
     h('p', { key: 'about', className: 'bt-secret-about' },
       t('Keys your Bots asked for. Bots never see the values: they use them as '), h('code', null, '$DSH_SECRET_NAME'),
       t(' in their shell, and every value is replaced by '), h('code', null, '[secret:NAME]'), t(' before anything goes to a model.')),
-    h(Section, { key: 'list', title: t('Secrets · {count}', { count: secrets.length }) },
+    h(Section, { key: 'list', title: t('Secrets · {count}', { count: secrets.length }), action: addBtn },
       secrets.length === 0 && !adding ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, t('No keys yet. When a Bot needs one, it shows a card in its chat.'))) : null,
       secrets.map(secret => h(SecretRow, { key: secret.name, secret, roster, actions, run, open: open === secret.name, onToggle: () => setOpen(open === secret.name ? null : secret.name) })),
       adding ? h(AddSecret, { actions, run, onDone: () => setAdding(false) }) : null),
-    adding ? null : h('div', { key: 'add', className: 'bt-actions' }, h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => setAdding(true) }, t('Add a key'))),
   ]
 }
 
 export const SECRET_CSS = `
 .bt-secret-head{align-items:center;gap:10px}
 .bt-secret-who{position:relative;flex:none;display:inline-flex}
-.bt-secret-lock{position:absolute;right:-5px;bottom:-4px;width:16px;height:16px;border-radius:50%;background:var(--bt-main);color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-bubble)}
+.bt-secret-lock{position:absolute;right:-5px;bottom:-4px;width:16px;height:16px;border-radius:50%;corner-shape:round;background:var(--bt-main);color:var(--bt-ink-2);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-bubble)}
 .bt-secret-lock svg{width:11px;height:11px}
 .bt-secret-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:16px;padding:1px 6px;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink)}
 .bt-secret-body{display:flex;flex-direction:column;gap:8px}
@@ -320,31 +394,31 @@ export const SECRET_CSS = `
 [data-step-process]:has(.bt-secret)>div:first-child{display:none!important}
 [data-step-process]:has(.bt-secret)>[data-step-process-body]{display:block!important;content-visibility:visible!important;max-height:none!important;overflow:visible!important;mask-image:none!important;scrollbar-gutter:auto!important}
 .bt-secret-ok{display:flex;align-items:center;gap:4px;margin-top:6px;animation:bt-secret-in .22s cubic-bezier(.22,1,.36,1)}
-.bt-secret-ok svg{width:13px;height:13px;color:#16a34a}
+.bt-secret-ok svg{width:13px;height:13px;color:var(--bt-green)}
 @keyframes bt-secret-in{from{opacity:0;transform:translateY(-2px)}}
 .bt-secret-saved{display:flex;align-items:center;gap:6px;font-size:13px;line-height:18px;color:var(--bt-ink-2)}
 .bt-secret-note{font-size:12px;line-height:17px;color:var(--bt-ink-3)}
 .bt-secret-note code,.bt-secret-about code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
-.bt-secret-warn{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;font-size:12px;line-height:16px;color:#b25e09;background:color-mix(in srgb,#f59e0b 12%,transparent)}
+.bt-secret-warn{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;font-size:12px;line-height:16px;color:var(--bt-warn);background:color-mix(in srgb,var(--bt-warn) 14%,transparent)}
 .bt-secret-error{font-size:12px;line-height:16px;color:var(--bt-danger)}
 .bt-secret .bt-q-btn:disabled{opacity:.5;cursor:default}
 .bt-secret-done .bt-q-head{align-items:center}
 .bt-secret-done .bt-q-title{font-size:13px;line-height:18px;color:var(--bt-ink-2);font-weight:500}
 .bt-secret-scope-tag{font-weight:400;color:var(--bt-ink-3)}
-.bt-secret-check{color:var(--bt-green,#22a06b);animation:bt-secret-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} backwards}
+.bt-secret-check{color:var(--bt-green);animation:bt-secret-pop ${SPRING_POP.duration}ms ${SPRING_POP.easing} backwards}
 .bt-secret-done{animation:bt-secret-settle .32s cubic-bezier(.22,1,.36,1) backwards}
 @keyframes bt-secret-pop{from{opacity:0;transform:scale(.4)}}
 @keyframes bt-secret-settle{from{opacity:.4;transform:scale(.985)}}
 .bt-secret-event{display:inline-flex;align-items:center;gap:5px}
 .bt-secret-dock{flex-direction:column;align-items:center}
 .bt-secret-dock .bt-q{max-width:min(550px,calc(100% - 32px))}
-.bt-secret-about{margin:0 0 12px;padding:0 4px;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-secret-about{margin:0 0 -4px;padding:0 4px;font-size:12px;line-height:18px;color:var(--bt-ink-2)}
 .bt-secret-title{display:flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink)}
 .bt-secret-title svg{flex:none;color:var(--bt-ink-2)}
 .bt-secret-purpose{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink-2)}
 .bt-secret-faces{display:inline-flex}
 .bt-secret-faces>*+*{margin-left:-6px}
-.bt-secret-edit{display:flex;flex-direction:column;gap:14px;padding:4px 12px 14px;animation:bt-q-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .2s ease-out backwards}
+.bt-secret-edit{display:flex;flex-direction:column;gap:14px;padding:14px 16px 16px;border-top:.5px solid var(--bt-line);background:color-mix(in srgb,var(--bt-hover) 45%,transparent);animation:bt-q-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing} backwards,bt-veil-in .2s ease-out backwards}
 .bt-secret-edit-block{display:flex;flex-direction:column;gap:8px}
 .bt-secret-edit-label{font-size:12px;line-height:16px;font-weight:600;color:var(--bt-ink-2)}
 .bt-secret-radios{display:flex;gap:16px;font-size:13px}

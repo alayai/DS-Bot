@@ -69,7 +69,7 @@ remaining limitations.
 ## Components
 
 - **host** — plugin server side: `ds-bot/index.js`, `ds-bot/src/host/` (roster, tools, turns/delivery, groups, goals, parts, memory, schedules, permissions, privacy, folders, connectors, providers).
-- **secrets** — `ds-bot/src/host/secrets.js` (secrets.json mode 600, `$DSH_SECRET_<NAME>`, redactor) and API keys/providers (`providers.js`, `models.js`).
+- **secrets** — `ds-bot/src/host/secrets.js` (`bot/secrets.json` mode 600, optional passphrase encryption at rest in `secrets-crypto.js`, `$DSH_SECRET_<NAME>`, redactor) and API keys/providers (`providers.js`, `models.js`).
 - **client** — browser UI: `ds-bot/src/client/` (incl. widget-html, read-page, connectors UI) and generated `ds-bot/client.js`.
 - **browser** — Bot browser bridge and browser plugins: `ds-bot/src/host/browser.js`, `browser-plugins.js`, `src/host/browser/`, `browser-plugins/`.
 - **desktop-app** — Electron app: `app/src/` (main, start-window, preload, IPC, cookie import, updates, import from `~/.dsh`, move-data), `app/engine/`.
@@ -82,6 +82,7 @@ remaining limitations.
 - Content the Bot reads: web pages (Bot browser, `read_browser`, web search), files in the work folder, connector/MCP tool results, messages from other Bots and group chats, scheduled-task prompts. **Attacker-controlled.**
 - `/api/bot` HTTP endpoints and DSH Web UI: the local user; in Docker, anyone who can reach port 13080 (DSH trusted-host list + launch token).
 - Electron IPC from the app window.
+- MCP access (`ds-bot/src/host/mcp-server.js`), off by default: local programs holding a per-client token, on 127.0.0.1 only; requests with an `Origin` header or a non-local `Host` are refused. A client sends messages as a marked user channel to the Bots and groups in its scope (never private Bots) and cannot answer approvals or questions, or reach settings, secrets or tools itself. Each message still runs a normal turn of the target Bot under that Bot's permission preset, so a token can direct its Bots to do anything they may do without an approval; with the default scope that is the Main Bots, which have the most rights. The source marker is information only. Its messages are untrusted input like any channel message.
 
 ## Assets (maintainer-ranked)
 
@@ -101,12 +102,15 @@ remaining limitations.
 - Private Bots (`privacy.js`): user-only switch; other Bots cannot read a private Bot's working folder, memory or Sessions, and a private Bot's outbound sharing (`message_bot`, shared capabilities, writes outside its folder) requires user approval; protection stays after deletion until the user releases it in Settings.
 - Per-Bot permission presets (`permissions.js`), set on every Session.
 - Secrets: scoped per Bot (`canUse`), redacted from tool results and outbound model requests (`redactor`, JSON/URL-encoded forms).
+- Optional encryption at rest: the secrets file can be a scrypt + AES-256-GCM envelope. A passphrase unlocks it in Settings or, for unattended starts, from `DS_BOT_SECRETS_PASSPHRASE` or `DS_BOT_SECRETS_PASSPHRASE_FILE`; a locked store has no values, refuses secret writes, and shows why in Settings.
 - Connectors refuse non-HTTPS addresses (`connectors.js`).
 - HTML widgets in `sandbox="allow-scripts"` iframes; Electron webviews sandboxed with contextIsolation and own partitions; IPC handlers call `assertWindow(event)`.
 - Cookie values stay in the Electron main process (`cookie-import.mjs`).
 - Launch token redacted from host logs (`host-process.mjs`).
 
 ## Out of scope / accepted risk (maintainer)
+
+- **Encryption at rest does not protect a running host**: the process needs the decrypted values and, for encrypted stores, the passphrase (in memory or in the environment/passphrase file). A compromised process, a same-user process that can read the environment, or an administrator can get the keys. The benefit is disk copies and backups not carrying plaintext; keep the passphrase out of those copies.
 
 - **Docker edition: Bots have full access inside the container by design** (`danger-full-access`, approval `never`). A Bot changing or reading files inside the container is not a finding; escaping the container or leaking keys/secrets still is.
 - DSH itself is upstream; not explicitly ruled out, but fixes belong upstream (hard rule: never patch DSH).
